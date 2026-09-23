@@ -255,6 +255,15 @@ struct SettingsPanel: View {
                 .pickerStyle(.menu)
                 .fixedSize()
             }
+            if prefs.sidebar {
+                Rule()
+                Line("New tab at the foot of the sidebar", "A + in the bottom right corner, instead of the row under the last tab") {
+                    Switch(on: Binding(
+                        get: { prefs.newTabInFoot },
+                        set: { on in withAnimation(Motion.glide) { prefs.newTabInFoot = on } }
+                    ))
+                }
+            }
         }
     }
 

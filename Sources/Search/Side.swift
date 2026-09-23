@@ -241,7 +241,7 @@ struct SideBar: View {
                     SideRow(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active, pill: pill, close: {})
                 }
             }
-            newTab
+            if !prefs.newTabInFoot { newTab }
         }
         .allowsHitTesting(false)
     }
@@ -256,7 +256,8 @@ struct SideBar: View {
         let pinBlock = pinRows == 0 ? 0
             : CGFloat(pinRows) * pinHeight + CGFloat(pinRows - 1) * SideBar.pinGap + 10
         let loose = CGFloat(browser.tabs.count - pins) * (row + SideBar.gap)
-        return Metrics.strip + pinBlock + loose + row + 8
+        let newTab = prefs.newTabInFoot ? 0 : row
+        return Metrics.strip + pinBlock + loose + newTab + 8
     }
 
     // MARK: - the pinned squares
@@ -447,11 +448,12 @@ struct SideBar: View {
             }
     }
 
-    /// The loose tabs and the row that makes another, which scroll as one.
+    /// The loose tabs and the row that makes another, which scroll as one —
+    /// unless the way to another is down in the foot.
     private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             loose
-            newTab
+            if !prefs.newTabInFoot { newTab }
         }
     }
 
@@ -463,7 +465,9 @@ struct SideBar: View {
             .padding(.top, SideBar.gap)
     }
 
-    /// One small door at the bottom: the settings.
+    /// The doors at the bottom: the spaces, the extensions and the
+    /// bookmarks, and a new tab, when it was asked to live here, alone in
+    /// the far corner where it never moves.
     private var foot: some View {
         HStack(spacing: 2) {
             if browser.prefs.usesSpaces { SpaceDot(browser: browser) }
@@ -473,6 +477,9 @@ struct SideBar: View {
                     BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
                 }
             Spacer(minLength: 0)
+            if prefs.newTabInFoot {
+                Door(icon: "plus", help: "New tab   ⌘T") { browser.newTab() }
+            }
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 10)

@@ -111,6 +111,11 @@ final class Preferences: ObservableObject {
     @Published var sideHides: Bool {
         didSet { store.set(sideHides, forKey: "sidebar.hides") }
     }
+    /// New tab as a button at the foot of the column, in a place that stays
+    /// put, rather than as the row under the last tab. Off unless asked for.
+    @Published var newTabInFoot: Bool {
+        didSet { store.set(newTabInFoot, forKey: "sidebar.newtab.foot") }
+    }
     /// How wide the column is. Pulled by its edge, and remembered.
     @Published var sideWidth: CGFloat {
         didSet { store.set(Double(sideWidth), forKey: "sidebar.width") }
@@ -229,6 +234,7 @@ final class Preferences: ObservableObject {
         sidebar = store.object(forKey: "sidebar") as? Bool
             ?? (store.string(forKey: "manner") == "side")
         sideHides = store.bool(forKey: "sidebar.hides")
+        newTabInFoot = store.bool(forKey: "sidebar.newtab.foot")
         let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)
         sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
