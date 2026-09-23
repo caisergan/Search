@@ -191,7 +191,7 @@ struct SideBar: View {
                     ViewThatFits(in: .vertical) {
                         rows
                         ScrollViewReader { proxy in
-                            ScrollView(.vertical) { rows }
+                            ThinScroll { rows }
                                 // The tab you go to is the tab you see — ⌘1–⌘9,
                                 // ⇧⌘], a link opening beside the one on screen.
                                 .onChange(of: browser.activeID) { _, id in
@@ -563,6 +563,64 @@ private struct PinSquare: View {
         .help(tab.label)
         .animation(Motion.quick, value: hovering)
         .transition(.scale(scale: 0.8).combined(with: .opacity))
+    }
+}
+
+/// The rows, scrolling, with a thin bar drawn in place of the system's.
+///
+/// The system's bar lies over the rows' right edge, on top of the close
+/// button of the tab under the pointer, so it was easy to hit one when
+/// aiming for the other. This bar sits in the margin to the right of the
+/// rows instead, and shows while the pointer is over them. It takes no
+/// clicks, because that margin is also where the column is resized.
+private struct ThinScroll<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    /// The height of the area on screen.
+    @State private var visible: CGFloat = 0
+    /// The height of all the rows.
+    @State private var total: CGFloat = 0
+    /// How far the rows are scrolled down.
+    @State private var scrolled: CGFloat = 0
+    @State private var hovering = false
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            content
+                .background {
+                    GeometryReader { box in
+                        Color.clear
+                            .onChange(of: box.frame(in: .named("scroll")), initial: true) { _, frame in
+                                total = frame.height
+                                scrolled = -frame.minY
+                            }
+                    }
+                }
+        }
+        .coordinateSpace(name: "scroll")
+        .background {
+            GeometryReader { box in
+                Color.clear
+                    .onChange(of: box.size.height, initial: true) { _, height in visible = height }
+            }
+        }
+        .overlay(alignment: .topTrailing) { bar }
+        .onHover { hovering = $0 }
+        .animation(Motion.quick, value: hovering)
+    }
+
+    @ViewBuilder
+    private var bar: some View {
+        if total > visible, visible > 0 {
+            let length = max(24, visible * visible / total)
+            let progress = min(max(scrolled / (total - visible), 0), 1)
+            Capsule()
+                .fill(Palette.ink.opacity(0.22))
+                .frame(width: 3, height: length)
+                .offset(x: 6, y: progress * (visible - length))
+                .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(false)
+        }
     }
 }
 

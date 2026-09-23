@@ -32,6 +32,7 @@ in [ROADMAP.md](ROADMAP.md).
 - Passkeys work: a site's "Sign in with a passkey" or "Create a passkey" brings up your Mac's own passkey sheet — Touch ID with your passkeys from iCloud Keychain or a password app, your iPhone over the QR code, or a security key — where it could end in "authentication failed" on every site. Left to WebKit, a sign-in page that offers your passkey under its name field kept a request open with macOS, and if Search quit or crashed while such a page was open, macOS went on refusing all of Search's passkeys until the Mac restarted. Search now carries passkeys out itself, as Chrome does, and never leaves one open; the first time, macOS asks whether Search may use them. **Passkeys still failing after the update? Restart your Mac once.** Not yet: the passkey offered under a sign-in field as the page loads — the site's passkey button is the way in for now. ([#17](https://github.com/driceroland/Search/issues/17))
 - ⌘⇧N no longer piles up empty private tabs: one already open comes to the end of the row, as with ⌘T.
 - A new space's choice of sign-ins reads in full in the column ("Signed in" / "Signed out"), where it was cut short.
+- A column of tabs long enough to scroll no longer draws its scroll bar over the cross on the tab under the pointer, where one was taken for the other: a thin bar of its own sits in the margin beside the tabs instead, there while the pointer is over them. ([#83](https://github.com/driceroland/Search/issues/83))
 
 ## 1.0.1 — 23 September 2026
 
