@@ -648,6 +648,18 @@ final class Browser: NSObject, ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.7, execute: work)
     }
 
+    /// The zoom level, when it shows somewhere other than the bottom, on the
+    /// same clock as the line there.
+    @Published private(set) var zoomNote: String?
+
+    private func showZoom(_ text: String) {
+        zoomNote = text
+        zoomHush?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.zoomNote = nil }
+        zoomHush = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.7, execute: work)
+    }
+
     /// The names extensions asked their downloads to be saved under.
     var namedDownloads: [URL: String] = [:]
 
@@ -674,6 +686,7 @@ final class Browser: NSObject, ObservableObject {
     /// The Chrome Web Store's pages, told when installs come and go. See StoreRelay.swift.
     var storeWatch: AnyCancellable?
     private var hush: DispatchWorkItem?
+    private var zoomHush: DispatchWorkItem?
     private var zoomShown = 100
     private var remembering = false
     /// Spaces (see Spaces.swift): every one, the one on screen, and the
@@ -1485,13 +1498,19 @@ final class Browser: NSObject, ObservableObject {
         }
 
         // The line at the bottom doubles as the zoom read-out: it keeps being
-        // rewritten while you pinch and fades a moment after you stop.
+        // rewritten while you pinch and fades a moment after you stop. Put
+        // somewhere else in Settings › Customization, it is a line of its own
+        // there, and whatever else was being said at the bottom stays said.
         tab.onZoom = { [weak self] _, value in
             guard let self else { return }
             let percent = Int((value * 100).rounded())
             guard percent != zoomShown else { return }
             zoomShown = percent
-            announce("\(percent)%")
+            if prefs.zoomSpot == .bottom {
+                announce("\(percent)%")
+            } else {
+                showZoom("\(percent)%")
+            }
         }
 
         // A page's title lands a beat after the page itself, and a history

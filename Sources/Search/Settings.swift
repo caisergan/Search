@@ -244,6 +244,17 @@ struct SettingsPanel: View {
                     )
                 )
             }
+            Rule()
+            Line("Show zoom at", "Where the page's size shows while ⌘+, ⌘− or a pinch changes it") {
+                Picker("", selection: $prefs.zoomSpot) {
+                    ForEach(ZoomSpot.allCases) { spot in
+                        Text(spot.title).tag(spot)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
         }
     }
 

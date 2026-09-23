@@ -58,6 +58,34 @@ enum TabSize: String, CaseIterable, Identifiable {
     var pinWidth: CGFloat { self == .large ? 34 : Metrics.pinWidth }
 }
 
+/// Where the zoom level shows while it changes: at the bottom with everything
+/// else that says one thing, unless asked for somewhere nearer where the eye
+/// goes. Most browsers put it at the top right.
+enum ZoomSpot: String, CaseIterable, Identifiable {
+    case bottom, top, topLeft, topRight
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .bottom: return "Bottom middle"
+        case .top: return "Top middle"
+        case .topLeft: return "Top left"
+        case .topRight: return "Top right"
+        }
+    }
+
+    /// Its corner of the page.
+    var alignment: Alignment {
+        switch self {
+        case .bottom: return .bottom
+        case .top: return .top
+        case .topLeft: return .topLeading
+        case .topRight: return .topTrailing
+        }
+    }
+}
+
 @MainActor
 final class Preferences: ObservableObject {
     private let store = Store.settings
@@ -93,6 +121,11 @@ final class Preferences: ObservableObject {
     /// Regular unless asked for bigger.
     @Published var tabSize: TabSize {
         didSet { store.set(tabSize.rawValue, forKey: "tabs.size") }
+    }
+    /// The bottom unless asked otherwise. Not under "zoom.", where each
+    /// site's own zoom is kept by its host.
+    @Published var zoomSpot: ZoomSpot {
+        didSet { store.set(zoomSpot.rawValue, forKey: "zoomspot") }
     }
     @Published var engine: Engine {
         didSet { store.set(engine.rawValue, forKey: "search.engine") }
@@ -200,6 +233,7 @@ final class Preferences: ObservableObject {
         sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
         tabSize = store.string(forKey: "tabs.size").flatMap(TabSize.init) ?? .regular
+        zoomSpot = store.string(forKey: "zoomspot").flatMap(ZoomSpot.init) ?? .bottom
         engine = store.string(forKey: "search.engine").flatMap(Engine.init) ?? .standard
         customEngine = store.string(forKey: "search.custom") ?? ""
         sleepsTabs = store.object(forKey: "tabs.sleep") as? Bool ?? true
