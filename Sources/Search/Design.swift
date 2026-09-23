@@ -7,9 +7,9 @@ import AppKit
 //
 // Every colour is a pair — one for a light window, one for a dark — and
 // resolves itself against whatever appearance the window has. The window
-// takes its appearance from the app, and the app from Settings › Appearance:
-// light, dark, or whatever the Mac is doing. Nothing else in the code knows
-// which it is.
+// takes its appearance from the app, and the app from Settings ›
+// Customization › Appearance: light, dark, or whatever the Mac is doing.
+// Nothing else in the code knows which it is.
 enum Palette {
     static let ground = Color(nsColor: NS.ground)
     static let ink = Color(nsColor: NS.ink)             // neutral-900 · neutral-100
