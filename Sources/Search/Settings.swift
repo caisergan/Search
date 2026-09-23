@@ -234,6 +234,16 @@ struct SettingsPanel: View {
             Line("Appearance", "Light, dark, or whatever the Mac is doing — pages follow it too") {
                 Segmented(options: Look.allCases.map { ($0, $0.title) }, selection: $prefs.look)
             }
+            Rule()
+            Line("Tab size", "Large makes titles easier to read, in the sidebar and across the top") {
+                Segmented(
+                    options: TabSize.allCases.map { ($0, $0.title) },
+                    selection: Binding(
+                        get: { prefs.tabSize },
+                        set: { size in withAnimation(Motion.glide) { prefs.tabSize = size } }
+                    )
+                )
+            }
         }
     }
 

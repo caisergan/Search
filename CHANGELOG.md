@@ -14,6 +14,7 @@ in [ROADMAP.md](ROADMAP.md).
 ### Added
 
 - Settings › Customization, a page for how Search looks. Light, dark or the Mac's own moved there from General; the options that change how things look, each off until picked, go there too. ([#101](https://github.com/driceroland/Search/issues/101))
+- Bigger tabs, if you want them: Settings › Customization › Tab size › Large. Titles, site icons, rows and pinned squares grow a step, in the sidebar and across the top; Regular is the size they always were. ([#102](https://github.com/driceroland/Search/issues/102))
 - Spaces with the tabs across the top: two fingers up or down over the bar, or a notch of a mouse wheel, bring the next space's tabs in as these go; past the last, a new space is made right in the bar. "New Space…" makes it in place in the column too.
 - Reopen Closed Tab is in the right-click menu of every tab, in the row and in the column, beside Close Other Tabs; it was only on ⌘⇧T and in the History menu. Thanks [@andupoto](https://x.com/andupoto) for asking
 - Extensions on private tabs, if you allow them: Settings › Extensions › Allow on private tabs, off by default. It applies to private tabs opened after it is turned on. Thanks [@merttopuz](https://github.com/merttopuz) ([#55](https://github.com/driceroland/Search/pull/55))

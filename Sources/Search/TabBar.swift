@@ -63,7 +63,7 @@ struct TabBar: View {
                                         ForEach(Array(browser.tabs.enumerated()), id: \.element.id) { index, tab in
                                             // A pinned square moves among pinned squares, a title
                                             // among titles: each has its own stride.
-                                            let step = (tab.pin != nil ? Metrics.pinWidth : width(in: geo.size.width)) + Metrics.tabGap
+                                            let step = (tab.pin != nil ? size.pinWidth : width(in: geo.size.width)) + Metrics.tabGap
                                             let held = dragging == tab.id
                                             TabPill(
                                                 browser: browser,
@@ -282,10 +282,10 @@ struct TabBar: View {
         let each = width(in: strip)
         let pinned = CGFloat(browser.pinnedCount)
         let loose = CGFloat(browser.tabs.count) - pinned
-        var total = pinned * Metrics.pinWidth + loose * each
+        var total = pinned * size.pinWidth + loose * each
             + CGFloat(max(0, browser.tabs.count - 1)) * Metrics.tabGap
         if let id = browser.editingTab, let tab = browser.tabs.first(where: { $0.id == id }) {
-            total += min(340, strip - Metrics.lights - 12) - (tab.pin != nil ? Metrics.pinWidth : each)
+            total += min(340, strip - Metrics.lights - 12) - (tab.pin != nil ? size.pinWidth : each)
         }
         return total
     }
@@ -313,11 +313,14 @@ struct TabBar: View {
     private func width(in strip: CGFloat, pinned pins: Int, count: Int) -> CGFloat {
         let pinned = CGFloat(pins)
         let loose = CGFloat(count) - pinned
-        guard loose > 0 else { return Metrics.tabWidth }
-        let spent = pinned * Metrics.pinWidth
+        guard loose > 0 else { return size.width }
+        let spent = pinned * size.pinWidth
             + CGFloat(max(0, count - 1)) * Metrics.tabGap
-        return max(Metrics.tabMinWidth, min(Metrics.tabWidth, (room(in: strip) - spent) / loose))
+        return max(Metrics.tabMinWidth, min(size.width, (room(in: strip) - spent) / loose))
     }
+
+    /// The size picked in Settings › Customization.
+    private var size: TabSize { browser.prefs.tabSize }
 }
 
 /// Back, forward, reload. They watch the live tab, not the window: whether
@@ -399,7 +402,7 @@ private struct TabPill: View {
     /// its share of what is left.
     private var span: CGFloat {
         if editing { return min(340, room) }
-        return pinned ? Metrics.pinWidth : width
+        return pinned ? prefs.tabSize.pinWidth : width
     }
 
     var body: some View {
@@ -409,18 +412,17 @@ private struct TabPill: View {
                     if browser.editingPin == tab.id {
                         PinField(browser: browser, tab: tab)
                     } else if prefs.glyph == .icons, let icon = tab.icon {
-                        Mark(icon: icon, letter: tab.pin ?? "", size: 16, dim: tab.asleep)
+                        Mark(icon: icon, letter: tab.pin ?? "", size: prefs.tabSize.mark + 1, dim: tab.asleep)
                     } else {
                         Text(tab.pin ?? "")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: prefs.tabSize.text - 0.5, weight: .medium))
                             // A pin holding no page is still there and still
                             // yours; it just isn't costing anything.
                             .foregroundStyle(colour.opacity(tab.asleep ? 0.45 : 1))
                     }
                 }
-                .frame(width: 16, height: 16)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 6)
+                .frame(width: prefs.tabSize.mark + 1, height: prefs.tabSize.mark + 1)
+                .padding(.vertical, prefs.tabSize.inset)
                 .frame(width: span)
             } else {
                 loose
@@ -472,11 +474,11 @@ private struct TabPill: View {
                 if tab.loading {
                     Ring()
                 } else {
-                    Mark(icon: prefs.glyph == .icons ? tab.icon : nil, letter: tab.monogram, size: 15, dim: tab.asleep)
+                    Mark(icon: prefs.glyph == .icons ? tab.icon : nil, letter: tab.monogram, size: prefs.tabSize.mark, dim: tab.asleep)
                 }
             }
-            .frame(width: 16, height: 16)
-            .padding(.vertical, 6)
+            .frame(width: prefs.tabSize.mark + 1, height: prefs.tabSize.mark + 1)
+            .padding(.vertical, prefs.tabSize.inset)
             .frame(width: span)
         } else {
             titled
@@ -490,7 +492,7 @@ private struct TabPill: View {
                     .frame(height: 16)
             } else {
                 if prefs.glyph == .icons, !tab.isBlank {
-                    Mark(icon: tab.icon, letter: tab.monogram, size: 15)
+                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark)
                 }
                 if tab.bench {
                     // A script's tab, not yours.
@@ -505,7 +507,7 @@ private struct TabPill: View {
                         .foregroundStyle(colour.opacity(0.7))
                 }
                 Text(tab.label)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: prefs.tabSize.text))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(colour)
@@ -519,22 +521,22 @@ private struct TabPill: View {
             ZStack {
                 if hovering {
                     Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.system(size: prefs.tabSize.cross * 8 / 15, weight: .semibold))
                         .foregroundStyle(Palette.muted)
-                        .frame(width: 15, height: 15)
+                        .frame(width: prefs.tabSize.cross, height: prefs.tabSize.cross)
                         .background(Palette.ink.opacity(0.07), in: Circle())
                         .transition(.opacity)
                 } else if tab.loading {
-                    Ring().transition(.opacity)
+                    Ring(size: prefs.tabSize.cross * 10 / 15).transition(.opacity)
                 } else if tab.noisy {
                     // Which tab the noise is coming from. ⌘⇧M stops it.
                     Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 8))
+                        .font(.system(size: prefs.tabSize.cross * 8 / 15))
                         .foregroundStyle(Palette.muted)
                         .transition(.opacity)
                 }
             }
-            .frame(width: editing ? 0 : 15, height: 15)
+            .frame(width: editing ? 0 : prefs.tabSize.cross, height: prefs.tabSize.cross)
             .opacity(editing ? 0 : 1)
             // The cross is 15 points across because that is how big it should
             // look. What you have to hit is the whole right-hand end of the
@@ -543,7 +545,7 @@ private struct TabPill: View {
             .overlay {
                 if !editing {
                     Color.clear
-                        .frame(width: 30, height: 28)
+                        .frame(width: 30, height: prefs.tabSize.row)
                         .contentShape(Rectangle())
                         .onTapGesture { if hovering { close() } }
                 }
@@ -554,7 +556,7 @@ private struct TabPill: View {
         }
         .padding(.leading, 11)
         .padding(.trailing, editing ? 11 : 7)
-        .padding(.vertical, 6)
+        .padding(.vertical, prefs.tabSize.inset)
         .frame(width: span, alignment: .leading)
     }
 
