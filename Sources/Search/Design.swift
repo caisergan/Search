@@ -70,11 +70,14 @@ enum Palette {
 enum Theme: String, CaseIterable, Identifiable {
     case plain, glass
     // Hues
-    case graphite, rose, amber, lime, teal, sky, indigo, violet
+    case graphite, slate, sand, coral, rose, crimson, amber, lime, sage, teal, sky, indigo, violet, mauve
     // Gradients
-    case dusk, sunset, peach, citrus, mint, forest, lagoon, ocean, aurora, orchid, berry, candy, ember, nebula, midnight
+    case dusk, sunset, sherbet, peach, citrus, tropic, mint, forest, glacier, lagoon, ocean, aurora, twilight, orchid, plum, berry, candy, cherry, ember, nebula, midnight
     // Glows
-    case nova, borealis, reef, dream, lava, cosmos
+    case nova, borealis, reef, dream, prism, sunrise, velvet, lava, cosmos,
+         bloom, halo, iris, mirage, opal, solstice, tidal, flare, jade, sorbet
+    // Dark
+    case eclipse, abyss, noir, obsidian, ink, smoulder, moss
 
     var id: String { rawValue }
 
@@ -86,9 +89,9 @@ enum Theme: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The four ways, in the order the picker shows them.
+    /// The kinds, in the order the picker shows them.
     enum Family: CaseIterable {
-        case basic, hue, gradient, glow
+        case basic, hue, gradient, glow, dark
 
         var title: String {
             switch self {
@@ -96,6 +99,7 @@ enum Theme: String, CaseIterable, Identifiable {
             case .hue: return "Hues"
             case .gradient: return "Gradients"
             case .glow: return "Glows"
+            case .dark: return "Dark"
             }
         }
 
@@ -108,6 +112,7 @@ enum Theme: String, CaseIterable, Identifiable {
         case .hue: return .hue
         case .linear: return .gradient
         case .glow: return .glow
+        case .dark: return .dark
         }
     }
 
@@ -123,6 +128,9 @@ enum Theme: String, CaseIterable, Identifiable {
         /// A ground, and spots of colour on it, each fading out from its
         /// point.
         case glow(ground: Color, spots: [(Color, UnitPoint)])
+        /// A ground nearly black, lit at its edges by glows that stop well
+        /// short of the middle — the desktop all but gone behind it.
+        case dark(ground: Color, spots: [(Color, UnitPoint)])
     }
 
     var paint: Paint {
@@ -138,6 +146,12 @@ enum Theme: String, CaseIterable, Identifiable {
         case .sky: return .hue(rgb(0.30, 0.64, 0.96))
         case .indigo: return .hue(rgb(0.34, 0.36, 0.90))
         case .violet: return .hue(rgb(0.62, 0.38, 0.92))
+        case .slate: return .hue(rgb(0.36, 0.44, 0.56))
+        case .sand: return .hue(rgb(0.84, 0.72, 0.52))
+        case .coral: return .hue(rgb(1.00, 0.50, 0.40))
+        case .crimson: return .hue(rgb(0.82, 0.12, 0.24))
+        case .sage: return .hue(rgb(0.54, 0.66, 0.52))
+        case .mauve: return .hue(rgb(0.72, 0.52, 0.68))
 
         case .dusk: return .linear([rgb(0.95, 0.58, 0.30), rgb(0.80, 0.34, 0.40)], from: .topLeading, to: .bottomTrailing)
         case .sunset: return .linear([rgb(1.00, 0.66, 0.26), rgb(0.95, 0.33, 0.45), rgb(0.50, 0.24, 0.66)], from: .top, to: .bottom)
@@ -154,6 +168,12 @@ enum Theme: String, CaseIterable, Identifiable {
         case .ember: return .linear([rgb(0.96, 0.44, 0.16), rgb(0.62, 0.10, 0.14)], from: .top, to: .bottom)
         case .nebula: return .linear([rgb(0.60, 0.30, 0.86), rgb(0.26, 0.20, 0.64), rgb(0.08, 0.08, 0.22)], from: .topLeading, to: .bottomTrailing)
         case .midnight: return .linear([rgb(0.24, 0.26, 0.48), rgb(0.08, 0.09, 0.20)], from: .topLeading, to: .bottomTrailing)
+        case .sherbet: return .linear([rgb(1.00, 0.70, 0.36), rgb(1.00, 0.50, 0.62), rgb(0.72, 0.60, 0.96)], from: .topLeading, to: .bottomTrailing)
+        case .tropic: return .linear([rgb(0.98, 0.88, 0.30), rgb(0.40, 0.84, 0.44), rgb(0.10, 0.62, 0.66)], from: .top, to: .bottom)
+        case .glacier: return .linear([rgb(0.86, 0.96, 1.00), rgb(0.50, 0.80, 0.92), rgb(0.26, 0.56, 0.72)], from: .top, to: .bottom)
+        case .twilight: return .linear([rgb(0.10, 0.14, 0.40), rgb(0.46, 0.24, 0.62), rgb(0.96, 0.46, 0.60)], from: .top, to: .bottom)
+        case .plum: return .linear([rgb(0.52, 0.22, 0.52), rgb(0.26, 0.10, 0.32)], from: .topLeading, to: .bottomTrailing)
+        case .cherry: return .linear([rgb(1.00, 0.52, 0.66), rgb(0.80, 0.08, 0.22)], from: .topLeading, to: .bottomTrailing)
 
         case .nova: return .glow(ground: rgb(0.18, 0.08, 0.30), spots: [
             (rgb(1.00, 0.42, 0.62), .topLeading), (rgb(0.40, 0.46, 1.00), .bottomTrailing), (rgb(1.00, 0.70, 0.30), .bottomLeading),
@@ -173,6 +193,70 @@ enum Theme: String, CaseIterable, Identifiable {
         case .cosmos: return .glow(ground: rgb(0.03, 0.03, 0.10), spots: [
             (rgb(0.38, 0.20, 0.90), .topLeading), (rgb(0.10, 0.60, 0.90), .bottomTrailing), (rgb(0.90, 0.24, 0.70), .trailing),
         ])
+        case .prism: return .glow(ground: rgb(0.10, 0.10, 0.18), spots: [
+            (rgb(1.00, 0.30, 0.40), .topLeading), (rgb(1.00, 0.86, 0.30), .topTrailing),
+            (rgb(0.30, 0.90, 0.60), .bottomLeading), (rgb(0.36, 0.50, 1.00), .bottomTrailing),
+        ])
+        case .sunrise: return .glow(ground: rgb(0.36, 0.20, 0.36), spots: [
+            (rgb(1.00, 0.80, 0.40), .bottom), (rgb(1.00, 0.46, 0.40), .bottomLeading), (rgb(0.54, 0.46, 0.90), .top),
+        ])
+        case .velvet: return .glow(ground: rgb(0.14, 0.02, 0.10), spots: [
+            (rgb(0.80, 0.10, 0.36), .topTrailing), (rgb(0.44, 0.10, 0.60), .bottomLeading), (rgb(0.96, 0.40, 0.50), .leading),
+        ])
+        case .bloom: return .glow(ground: rgb(0.30, 0.10, 0.22), spots: [
+            (rgb(1.00, 0.56, 0.72), .topLeading), (rgb(1.00, 0.76, 0.52), .bottomTrailing), (rgb(0.86, 0.34, 0.60), .bottomLeading),
+        ])
+        case .halo: return .glow(ground: rgb(0.08, 0.10, 0.20), spots: [
+            (rgb(0.98, 0.90, 0.64), .center), (rgb(0.52, 0.64, 1.00), .topLeading), (rgb(0.62, 0.52, 0.96), .bottomTrailing),
+        ])
+        case .iris: return .glow(ground: rgb(0.12, 0.08, 0.28), spots: [
+            (rgb(0.54, 0.40, 1.00), .topTrailing), (rgb(0.30, 0.70, 1.00), .bottomLeading), (rgb(0.92, 0.56, 1.00), .leading),
+        ])
+        case .mirage: return .glow(ground: rgb(0.30, 0.22, 0.14), spots: [
+            (rgb(1.00, 0.72, 0.40), .top), (rgb(0.40, 0.80, 0.84), .bottomTrailing), (rgb(0.96, 0.52, 0.44), .bottomLeading),
+        ])
+        case .opal: return .glow(ground: rgb(0.78, 0.84, 0.88), spots: [
+            (rgb(0.66, 0.92, 0.88), .topLeading), (rgb(0.98, 0.76, 0.84), .trailing), (rgb(0.76, 0.74, 1.00), .bottom), (rgb(1.00, 0.92, 0.70), .top),
+        ])
+        case .solstice: return .glow(ground: rgb(0.24, 0.06, 0.06), spots: [
+            (rgb(1.00, 0.80, 0.24), .topLeading), (rgb(1.00, 0.40, 0.14), .center), (rgb(0.70, 0.16, 0.40), .bottomTrailing),
+        ])
+        case .tidal: return .glow(ground: rgb(0.02, 0.12, 0.22), spots: [
+            (rgb(0.20, 0.86, 0.96), .bottomLeading), (rgb(0.10, 0.40, 0.90), .topTrailing), (rgb(0.40, 1.00, 0.80), .leading),
+        ])
+        case .flare: return .glow(ground: rgb(0.12, 0.04, 0.20), spots: [
+            (rgb(1.00, 0.30, 0.20), .topTrailing), (rgb(1.00, 0.20, 0.70), .bottomLeading), (rgb(1.00, 0.66, 0.20), .trailing),
+        ])
+        case .jade: return .glow(ground: rgb(0.02, 0.16, 0.12), spots: [
+            (rgb(0.30, 0.86, 0.56), .topLeading), (rgb(0.10, 0.60, 0.56), .bottomTrailing), (rgb(0.76, 0.92, 0.46), .trailing),
+        ])
+        case .sorbet: return .glow(ground: rgb(0.96, 0.84, 0.80), spots: [
+            (rgb(1.00, 0.62, 0.50), .topLeading), (rgb(0.98, 0.84, 0.46), .bottom), (rgb(0.96, 0.60, 0.78), .trailing),
+        ])
+
+        // Night with a purple light in the top corner and a grey one at
+        // the foot — the look this kind was made for.
+        case .eclipse: return .dark(ground: rgb(0.035, 0.04, 0.07), spots: [
+            (rgb(0.44, 0.22, 0.64), .topTrailing), (rgb(0.44, 0.46, 0.56), .bottomLeading),
+        ])
+        case .abyss: return .dark(ground: rgb(0.02, 0.04, 0.08), spots: [
+            (rgb(0.08, 0.46, 0.56), .bottomTrailing), (rgb(0.14, 0.24, 0.56), .topLeading),
+        ])
+        case .noir: return .dark(ground: rgb(0.03, 0.03, 0.03), spots: [
+            (rgb(0.46, 0.36, 0.26), .top), (rgb(0.24, 0.24, 0.26), .bottomTrailing),
+        ])
+        case .obsidian: return .dark(ground: rgb(0.03, 0.03, 0.05), spots: [
+            (rgb(0.40, 0.22, 0.70), .topLeading), (rgb(0.12, 0.50, 0.40), .bottomTrailing),
+        ])
+        case .ink: return .dark(ground: rgb(0.03, 0.05, 0.12), spots: [
+            (rgb(0.20, 0.30, 0.66), .top), (rgb(0.10, 0.16, 0.40), .bottom),
+        ])
+        case .smoulder: return .dark(ground: rgb(0.06, 0.03, 0.03), spots: [
+            (rgb(0.70, 0.24, 0.10), .bottomLeading), (rgb(0.46, 0.10, 0.16), .topTrailing),
+        ])
+        case .moss: return .dark(ground: rgb(0.03, 0.05, 0.04), spots: [
+            (rgb(0.24, 0.44, 0.26), .topLeading), (rgb(0.36, 0.40, 0.20), .bottomTrailing),
+        ])
         }
     }
 
@@ -184,6 +268,7 @@ enum Theme: String, CaseIterable, Identifiable {
         case .hue: return 0.42
         case .gradient: return 0.50
         case .glow: return 0.72
+        case .dark: return 0.94
         }
     }
 
@@ -207,8 +292,22 @@ struct ThemePaint: View {
         case .linear(let colours, let from, let to):
             LinearGradient(colors: colours, startPoint: from, endPoint: to)
         case .glow(let ground, let spots):
+            Glows(ground: ground, spots: spots, reach: 0.75)
+        case .dark(let ground, let spots):
+            Glows(ground: ground, spots: spots, reach: 0.5)
+        }
+    }
+
+    /// Spots of colour on a ground, each fading to nothing this far out, as
+    /// a share of the longer side.
+    private struct Glows: View {
+        let ground: Color
+        let spots: [(Color, UnitPoint)]
+        let reach: CGFloat
+
+        var body: some View {
             GeometryReader { geo in
-                let reach = max(geo.size.width, geo.size.height) * 0.75
+                let radius = max(geo.size.width, geo.size.height) * reach
                 ZStack {
                     ground
                     ForEach(spots.indices, id: \.self) { index in
@@ -216,7 +315,7 @@ struct ThemePaint: View {
                             colors: [spots[index].0, spots[index].0.opacity(0)],
                             center: spots[index].1,
                             startRadius: 0,
-                            endRadius: reach
+                            endRadius: radius
                         )
                     }
                 }
