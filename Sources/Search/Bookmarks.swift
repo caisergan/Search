@@ -52,6 +52,12 @@ final class Bookmarks: ObservableObject {
         }
     }
 
+    /// Every site in the list, folders opened, titles and all — for the
+    /// address field, which offers them as well as the history.
+    static func sites(_ nodes: [Bookmark]) -> [Bookmark] {
+        nodes.flatMap { $0.isFolder ? sites($0.children ?? []) : [$0] }
+    }
+
     /// Every folder in the tree, each with how deep it sits — for "move to
     /// folder" lists, where a folder three deep should look like it.
     static func folders(_ nodes: [Bookmark], depth: Int = 0) -> [(node: Bookmark, depth: Int)] {
