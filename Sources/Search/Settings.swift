@@ -647,9 +647,12 @@ struct Segmented<Option: Hashable>: View {
 /// More of them than the card is wide, so they run on sideways in one row,
 /// each kind under its own word: two fingers slide it, and the arrows at
 /// either end step it along for a mouse, whose wheel only goes up and down.
+/// Over the row, a card for each kind narrows it to that kind alone.
 struct ThemePicker: View {
     @Binding var selection: Theme
 
+    /// The kind the row is narrowed to. Every theme, when nil.
+    @State private var kind: Theme.Family?
     /// The first theme in view, kept by the row as it slides.
     @State private var first: Theme?
     @State private var width: CGFloat = 0
@@ -659,7 +662,7 @@ struct ThemePicker: View {
     /// The extra air before the first theme of each kind.
     private static let kindGap: CGFloat = 12
 
-    private var all: [Theme] { Theme.allCases }
+    private var all: [Theme] { kind?.themes ?? Theme.allCases }
 
     /// How many fit side by side, and how far an arrow goes: all but one,
     /// so the one at the edge stays in view as a landmark.
@@ -668,11 +671,121 @@ struct ThemePicker: View {
     private var more: Bool { at + fits < all.count }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            kinds
+            row
+        }
+    }
+
+    // MARK: kinds
+
+    /// All, then one card per kind, sharing the width evenly.
+    private var kinds: some View {
+        HStack(spacing: 6) {
+            KindCard(title: "All", count: Theme.allCases.count, on: kind == nil) {
+                AngularGradient(
+                    colors: [.pink, .orange, .yellow, .green, .teal, .blue, .purple, .pink],
+                    center: .center
+                )
+                .blur(radius: 6)
+            } pick: { narrow(to: nil) }
+            ForEach(Theme.Family.allCases, id: \.self) { family in
+                KindCard(title: family.title, count: family.themes.count, on: kind == family) {
+                    KindFace(family: family)
+                } pick: { narrow(to: family) }
+            }
+        }
+    }
+
+    private func narrow(to family: Theme.Family?) {
+        withAnimation(Motion.settle) { kind = family }
+    }
+
+    /// A kind, drawn as a sample of itself, its name and how many it holds
+    /// laid over the sample.
+    private struct KindCard<Face: View>: View {
+        let title: String
+        let count: Int
+        let on: Bool
+        @ViewBuilder let face: () -> Face
+        let pick: () -> Void
+
+        @State private var hovering = false
+
+        var body: some View {
+            Button(action: pick) {
+                ZStack(alignment: .bottomLeading) {
+                    face()
+                    // Something for the words to stand on, whatever the
+                    // sample does underneath.
+                    LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .top, endPoint: .bottom)
+                    HStack(alignment: .lastTextBaseline, spacing: 3) {
+                        Text(title)
+                            .font(.system(size: 11, weight: .semibold))
+                        Spacer(minLength: 0)
+                        Text("\(count)")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .opacity(0.75)
+                    }
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 7)
+                    .padding(.bottom, 5)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Palette.hairline, lineWidth: 1)
+                )
+                .padding(2)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(on ? Palette.ink : (hovering ? Palette.faint : .clear), lineWidth: 1.5)
+                )
+                .scaleEffect(hovering && !on ? 1.02 : 1)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .animation(Motion.quick, value: hovering)
+            .animation(Motion.quick, value: on)
+        }
+    }
+
+    /// What each kind looks like at a glance.
+    private struct KindFace: View {
+        let family: Theme.Family
+
+        var body: some View {
+            switch family {
+            case .basic:
+                LinearGradient(colors: [Color(white: 0.62), Color(white: 0.34)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            case .hue:
+                HStack(spacing: 0) {
+                    ForEach([Theme.rose, .amber, .lime, .teal, .sky, .violet], id: \.self) { ThemePaint(theme: $0) }
+                }
+            case .gradient:
+                ThemePaint(theme: .sunset)
+            case .glow:
+                ThemePaint(theme: .nova)
+            case .dark:
+                ThemePaint(theme: .eclipse)
+            }
+        }
+    }
+
+    // MARK: the row
+
+    private var row: some View {
         ScrollViewReader { reader in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: Self.gap) {
                     ForEach(all) { theme in
-                        let opens = theme.family.themes.first == theme
+                        // The kinds' words only while every kind is in
+                        // the row; narrowed, its card above says it.
+                        let opens = kind == nil && theme.family.themes.first == theme
                         VStack(alignment: .leading, spacing: 6) {
                             // The kind's word over its first theme, and
                             // room for it over the rest.
@@ -724,6 +837,15 @@ struct ThemePicker: View {
             .animation(Motion.quick, value: more)
             // The one in use, in view, whichever it is.
             .onAppear { reader.scrollTo(selection, anchor: .center) }
+            // Narrowed or widened: from the start, or from the one in use
+            // when it is among them.
+            .onChange(of: kind) { _, _ in
+                if all.contains(selection) {
+                    reader.scrollTo(selection, anchor: .center)
+                } else if let start = all.first {
+                    reader.scrollTo(start, anchor: .leading)
+                }
+            }
         }
     }
 
