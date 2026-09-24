@@ -26,6 +26,9 @@ enum ExtensionShims {
     /// The name native messages to the browser itself go to.
     static let application = "search"
     nonisolated static let file = "search-shim.js"
+    /// Search's passkey patch, put first in every script an extension runs in
+    /// a page's own world (see Passkeys.swift, and `first` in the script).
+    nonisolated static let passkeys = "search-passkeys.js"
     /// The first line of a worker that already carries the shim.
     nonisolated static let marker = "/* Search: Chrome APIs WebKit lacks, filled in (ExtensionShims.swift) */"
     nonisolated static let ender = "/* Search: end of shim */"
@@ -37,11 +40,18 @@ enum ExtensionShims {
     /// every script and page an extension ships.
     nonisolated static let stamp = ".search-shim"
     nonisolated static let version: String = {
-        SHA256.hash(data: Data(script.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined() + (Store.testing ? "-test" : "")
+        SHA256.hash(data: Data((script + PasskeyRelay.page).utf8)).prefix(8).map { String(format: "%02x", $0) }.joined() + (Store.testing ? "-test" : "")
     }()
 
-    nonisolated static func prepare(_ folder: URL) throws {
+    /// `fresh`: a package just unpacked or copied in. What only Search writes
+    /// beside an extension — which permissions it added, which shim it
+    /// carries — is Search's to say, never the package's: anything by those
+    /// names that came inside it goes before a word of it is read.
+    nonisolated static func prepare(_ folder: URL, fresh: Bool = false) throws {
         let files = FileManager.default
+        if fresh {
+            for name in [stamp, ".search-added"] { try? files.removeItem(at: folder.appendingPathComponent(name)) }
+        }
         let stampURL = folder.appendingPathComponent(stamp)
         if (try? String(contentsOf: stampURL, encoding: .utf8)) == version { return }
         defer { try? version.write(to: stampURL, atomically: true, encoding: .utf8) }
@@ -51,6 +61,7 @@ enum ExtensionShims {
 
         let script = shim(for: folder)
         try script.write(to: folder.appendingPathComponent(file), atomically: true, encoding: .utf8)
+        try PasskeyRelay.page.write(to: folder.appendingPathComponent(passkeys), atomically: true, encoding: .utf8)
 
         // Native messaging is how the shim reaches the browser; user scripts
         // are carried out through WebKit's registered content scripts, which
@@ -73,8 +84,10 @@ enum ExtensionShims {
         // holds whether WebKit runs it as a worker or as a page, as a classic
         // script or a module, where a wrapper importing it would not.
         if var background = manifest["background"] as? [String: Any] {
-            if let worker = background["service_worker"] as? String {
-                let path = folder.appendingPathComponent(worker.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            // A manifest is not a way out of its own package: a worker path
+            // that resolves outside the folder, or is a link, is left alone.
+            if let worker = background["service_worker"] as? String,
+               let path = inside(worker, of: folder) {
                 if var source = try? String(contentsOf: path, encoding: .utf8) {
                     // Already carrying one: take the old one off, so a newer
                     // Search puts its newer shim in its place.
@@ -99,12 +112,17 @@ enum ExtensionShims {
             manifest["background"] = background
         }
 
-        // Content scripts too — there only the sendMessage mend applies.
+        // Content scripts too — there only the sendMessage mend applies. One
+        // that runs in the page's own world has Search's passkey patch before
+        // it: a password manager's there keeps a reference to
+        // navigator.credentials as it finds it, and that has to be Search's,
+        // not WebKit's (see Passkeys.swift).
         if let entries = manifest["content_scripts"] as? [[String: Any]] {
             manifest["content_scripts"] = entries.map { entry -> [String: Any] in
                 var entry = entry
-                if var js = entry["js"] as? [String], js.first != file {
-                    js.insert(file, at: 0)
+                if var js = entry["js"] as? [String] {
+                    if !js.contains(file) { js.insert(file, at: 0) }
+                    if (entry["world"] as? String)?.uppercased() == "MAIN", !js.contains(passkeys) { js.insert(passkeys, at: 0) }
                     entry["js"] = js
                 }
                 return entry
@@ -115,9 +133,10 @@ enum ExtensionShims {
         try data.write(to: manifestURL, options: .atomic)
 
         // Every page it ships — popup, options, background page, side panel.
-        let walker = files.enumerator(at: folder, includingPropertiesForKeys: nil)
+        let walker = files.enumerator(at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey])
         while let url = walker?.nextObject() as? URL {
-            guard ["html", "htm"].contains(url.pathExtension.lowercased()),
+            guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+                  ["html", "htm"].contains(url.pathExtension.lowercased()),
                   var html = try? String(contentsOf: url, encoding: .utf8),
                   !html.contains(file)
             else { continue }
@@ -129,6 +148,21 @@ enum ExtensionShims {
             }
             try? html.write(to: url, atomically: true, encoding: .utf8)
         }
+    }
+
+    /// A path a package names, resolved and kept inside the folder it came
+    /// in: `..` in a manifest is not a way out of the package. Nor is a
+    /// symbolic link, which a folder install keeps as it is: the worker is
+    /// read through it and written back over it as a regular file, so a
+    /// link to a file elsewhere would put that file's bytes in the package.
+    /// A folder on the way that is a link is caught by where it resolves.
+    nonisolated static func inside(_ name: String, of folder: URL) -> URL? {
+        let path = folder.appendingPathComponent(name.trimmingCharacters(in: CharacterSet(charactersIn: "/"))).standardizedFileURL
+        guard path.path.hasPrefix(folder.standardizedFileURL.path + "/"),
+              (try? path.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+              path.resolvingSymlinksInPath().path.hasPrefix(folder.resolvingSymlinksInPath().path + "/")
+        else { return nil }
+        return path
     }
 
     /// The shim as this extension gets it: with the events its code mentions
@@ -177,6 +211,13 @@ enum ExtensionShims {
       // the globals away (MetaMask's LavaMoat) would break the shim's own
       // code that needs them — every fetch of a Request, every import.
       const { URL, FileReader, Response, Blob, File, DOMException, HTMLImageElement, HTMLAnchorElement, Element } = root;
+      const chrome = root.chrome || root.browser;
+      // A page's own world, where an extension's MAIN-world script runs with
+      // this before it, has no extension APIs. Nothing to mend there, and
+      // nothing may be left there for a page to see: Safari leaves nothing.
+      // (There, Search's passkey patch holds navigator.credentials.)
+      const ours = (() => { try { return !!(chrome && chrome.runtime && chrome.runtime.id); } catch (e) { return false; } })();
+      if (!ours || root.__searchShim) return;
       // WebKit reverted `requestIdleCallback` after a page-load regression
       // (bug 287681), leaving Proton Pass's form detection without it.
       const nativeIdle = typeof root.requestIdleCallback === "function"
@@ -223,8 +264,6 @@ enum ExtensionShims {
       if (credentials && !Object.prototype.hasOwnProperty.call(root, "__searchCredentials")) {
         Object.defineProperty(root, "__searchCredentials", { value: credentials });
       }
-      const chrome = root.chrome || root.browser;
-      if (!chrome || root.__searchShim) return;
       Object.defineProperty(root, "__searchShim", { value: true });
       // WebKit finds a page's extension APIs through the `chrome` and
       // `browser` globals when it delivers an event. A sandbox that locks
@@ -1179,6 +1218,11 @@ enum ExtensionShims {
         });
       }
       fill("windows", {
+        // Chrome's, and not WebKit's: an extension subscribing to it at
+        // start — Session Buddy, inside a try — threw there and never
+        // reached the rest, its button's listener included. Never fired:
+        // a window's bounds are read when they are asked for.
+        onBoundsChanged: event(),
         CreateType: enumOf("normal", "popup", "panel"), WindowType: enumOf("normal", "popup", "panel", "app", "devtools"),
         WindowState: { NORMAL: "normal", MINIMIZED: "minimized", MAXIMIZED: "maximized", FULLSCREEN: "fullscreen", LOCKED_FULLSCREEN: "locked-fullscreen" },
       });
@@ -1484,6 +1528,24 @@ enum ExtensionShims {
       // than the extension's own onMessage. The list lives with the browser,
       // and is registered again whenever the worker starts.
       const scripting = chrome.scripting;
+      // What an extension registers for a page's own world has Search's
+      // passkey patch before it, as its manifest's do (see prepare): a
+      // password manager keeps a reference to navigator.credentials as it
+      // finds it, and falls back to that. An update that names no world gets
+      // it too; in any other world the patch does nothing.
+      if (scripting) {
+        const first = (scripts, updating) => Array.isArray(scripts) ? scripts.map((s) => {
+          if (!s || !Array.isArray(s.js) || s.js.includes("search-passkeys.js")) return s;
+          const world = String(s.world || "").toUpperCase();
+          return world === "MAIN" || (updating && !world) ? { ...s, js: ["search-passkeys.js", ...s.js] } : s;
+        }) : scripts;
+        for (const name of ["registerContentScripts", "updateContentScripts"]) {
+          const original = scripting[name];
+          if (typeof original === "function") {
+            put(scripting, name, function (scripts, ...rest) { return original.call(scripting, first(scripts, name === "updateContentScripts"), ...rest); });
+          }
+        }
+      }
       const wantsUserScripts = (() => { try { return (runtime.getManifest().permissions || []).includes("userScripts"); } catch (e) { return false; } })();
       if (!chrome.userScripts && wantsUserScripts && scripting && typeof scripting.registerContentScripts === "function") {
         const tag = "search-us-";
@@ -2206,12 +2268,63 @@ enum ExtensionShims {
         var errorDescription: String? { what }
     }
 
+    /// The families whose answers leave the extension's own origin: what the
+    /// browser knows about the person using it. WebKit keeps no permission
+    /// object for them, they are the APIs this shim exists to supply, so the
+    /// gate reads the names the extension's own manifest asked for.
+    private static let gates: [String: String] = [
+        "bookmarks": "bookmarks",
+        "history": "history",
+        "downloads": "downloads",
+        "sessions": "sessions",
+        "topSites": "topSites",
+        "browsingData": "browsingData",
+        "readingList": "readingList",
+        "userScripts": "userScripts",
+        "identity": "identity",
+    ]
+
+    /// What this extension asked for: the names in its manifest and any
+    /// optional ones granted since. The checks inside the shim are a
+    /// courtesy to honest code, the shim runs beside the extension's own,
+    /// so the one that counts is here. The manifest is the one WebKit
+    /// already holds, not the file read again on every call.
+    private static func allowed(_ id: String, context: WKWebExtensionContext) -> Set<String> {
+        let asked = (context.webExtension.manifest["permissions"] as? [Any] ?? []).compactMap { $0 as? String }
+        return Set(asked + (Store.settings.stringArray(forKey: "extensions.granted.\(id)") ?? []))
+    }
+
     private static func run(_ api: String, _ args: [Any], context: WKWebExtensionContext, owner: Extensions) async throws -> Any? {
         guard let browser = owner.browser else { throw Unsupported(what: "No browser window") }
         let first = args.first
         let id = context.uniqueIdentifier
 
-        if api.hasPrefix("setting.") { return setting(api, first as? [String: Any] ?? [:], extension: id, owner: owner) }
+        if api.hasPrefix("setting.") {
+            // A browser setting (chrome.privacy…) belongs to the family its
+            // name starts with, and only an extension that asked for that
+            // family may read or change it, as in Chrome.
+            let name = api.split(separator: ":", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+            let family = String(name.prefix(while: { $0 != "." }))
+            guard !family.isEmpty, allowed(id, context: context).contains(family) else {
+                throw Unsupported(what: "The extension never asked for \u{201C}\(family)\u{201D}")
+            }
+            return setting(api, first as? [String: Any] ?? [:], extension: id, owner: owner)
+        }
+
+        // What leaves this app is answered here, not in the injected script:
+        // the shim runs beside the extension's own code, so its checks stop
+        // only the honest. A family this extension never asked for is an
+        // error, the way Chrome answers a call to an API it lacks.
+        // `tabs.describe` is the one call inside a family WebKit does own
+        // where the permission guards reading a tab rather than moving or
+        // selecting it. WebKit keeps that permission, optional grants
+        // included, so it is asked.
+        if api == "tabs.describe", !context.hasPermission(.tabs) {
+            throw Unsupported(what: "The extension never asked for \u{201C}tabs\u{201D}")
+        }
+        if let needed = gates[String(api.prefix(while: { $0 != "." }))], !allowed(id, context: context).contains(needed) {
+            throw Unsupported(what: "The extension never asked for \u{201C}\(needed)\u{201D}")
+        }
 
         switch api {
         // MARK: bookmarks
@@ -2591,6 +2704,14 @@ enum ExtensionShims {
             return Store.settings.stringArray(forKey: "extensions.granted.\(id)") ?? []
         case "permissions.request":
             let wanted = (first as? [String]) ?? []
+            // As in Chrome: only what the manifest named, as a permission or
+            // an optional one. What was agreed to at install still describes
+            // the extension; it can't ask later for something it never named.
+            let manifest = context.webExtension.manifest
+            let named = Set(((manifest["permissions"] as? [Any] ?? []) + (manifest["optional_permissions"] as? [Any] ?? [])).compactMap { $0 as? String })
+            guard wanted.allSatisfy(named.contains) else {
+                throw Unsupported(what: "Only permissions specified in the manifest may be requested.")
+            }
             // Those Chrome grants without a word, having nothing to warn of.
             let silent: Set<String> = ["tabGroups", "sidePanel", "offscreen", "idle", "power", "fontSettings", "search",
                                        "system.cpu", "system.memory", "system.display", "favicon"]
@@ -2777,7 +2898,10 @@ enum ExtensionShims {
             if let inline = source["code"] as? String {
                 code += inline + "\n;\n"
             } else if let file = source["file"] as? String,
-                      let text = try? String(contentsOf: folder.appendingPathComponent(file.trimmingCharacters(in: CharacterSet(charactersIn: "/"))), encoding: .utf8) {
+                      // One of the extension's own files, and nothing outside
+                      // its folder: a name is resolved before it is read.
+                      let path = inside(file, of: folder),
+                      let text = try? String(contentsOf: path, encoding: .utf8) {
                 code += text + "\n;\n"
             }
         }
@@ -2963,13 +3087,23 @@ enum ExtensionAuth {
         }
     }
 
-    /// True when the address is an extension's OAuth redirect, which is then
-    /// handed over and never loaded.
-    static func intercept(_ url: URL, browser: Browser) -> Bool {
-        guard let host = url.host()?.lowercased(), host.hasSuffix(".chromiumapp.org") else { return false }
+    /// True when the address is an extension's OAuth redirect arriving in
+    /// the tab that began the sign-in, which is then handed over and never
+    /// loaded. Any page can go to an address shaped like one of these, and
+    /// what it carries would be delivered as the flow's answer: only the
+    /// tab the flow was started in may finish it, or a window that tab's
+    /// page opened, since some providers finish the sign-in in a popup.
+    static func intercept(_ url: URL, browser: Browser, from webView: WKWebView) -> Bool {
+        guard url.scheme?.lowercased() == "https", let host = url.host()?.lowercased(), host.hasSuffix(".chromiumapp.org") else { return false }
         let id = String(host.dropLast(".chromiumapp.org".count))
-        guard let entry = waiting.removeValue(forKey: id) else { return false }
+        guard let entry = waiting[id], let from = browser.tab(for: webView),
+              from.id == entry.tab || from.opener == entry.tab
+        else { return false }
+        waiting.removeValue(forKey: id)
         entry.finish(.success(url))
+        // The popup, when the answer came in one, goes with the flow's tab:
+        // left behind, it would hold a redirect that never loads.
+        if from.id != entry.tab { browser.close(from) }
         if let tab = browser.tabs.first(where: { $0.id == entry.tab }) { browser.close(tab) }
         return true
     }

@@ -52,12 +52,16 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
         // background unset, and their dark text over the popover's dark
         // material would vanish.
         web.alphaValue = 0
-        web.load(URLRequest(url: url))
+        web.load(URLRequest(url: Extensions.unpopped(url)))
 
         let stage = NSView(frame: NSRect(origin: .zero, size: ExtensionPopup.lastSize[context.uniqueIdentifier] ?? NSSize(width: 360, height: 240)))
         stage.addSubview(web)
         let host = NSViewController()
         host.view = stage
+        // The popover takes its size from its view controller: left at zero,
+        // it comes in as a sliver and grows to the size it was given,
+        // instead of standing at that size from the start.
+        host.preferredContentSize = stage.frame.size
         let popover = NSPopover()
         popover.contentViewController = host
         popover.contentSize = stage.frame.size

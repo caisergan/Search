@@ -173,9 +173,9 @@ extension Browser {
         if floater.showing { land() }
         writeSession(now: true)
 
-        // The row on screen is parked as it is. Its sound stops: a space
-        // you left is not one you are listening to.
-        for tab in tabs where tab.built != nil { tab.web.pauseAllMediaPlayback() }
+        // The row on screen is parked as it is, sound and all: music or a
+        // stream keeps playing in the space you left, as it does in a tab
+        // you left. ⌘⇧M, or its speaker, stops it.
         parked[spaceID] = Parked(tabs: tabs, active: activeID)
 
         spaceID = id
@@ -312,7 +312,11 @@ struct SpaceDot: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(hovering ? Palette.ink : Palette.muted)
                     .id(shown?.key ?? key)
-                    .transition(.push(from: browser.spaceStep > 0 ? .trailing : .leading))
+                    // The way the tabs go: sideways in the column; in the bar
+                    // across the top, up for the next space, down going back.
+                    .transition(.push(from: browser.prefs.sidebar
+                        ? (browser.spaceStep > 0 ? .trailing : .leading)
+                        : (browser.spaceStep > 0 ? .bottom : .top)))
             }
             .frame(width: SpaceDot.width, height: 26)
             .clipped()
@@ -324,7 +328,7 @@ struct SpaceDot: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("\(browser.space.name) — ⌃1–⌃9 or two fingers sideways to switch")
+        .help("\(browser.space.name) — ⌃1–⌃9, or two fingers \(browser.prefs.sidebar ? "sideways" : "up or down") over the tabs, to switch")
         .onChange(of: key) { _, now in
             let symbol = symbol
             DispatchQueue.main.async {

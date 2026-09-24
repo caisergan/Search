@@ -18,6 +18,11 @@ struct Login: Identifiable, Equatable, Hashable {
     var password: String
     /// When it was last used to sign in, if known. Newest first in lists.
     var used: Date?
+    /// Kept from a page sent in the clear, over plain http. Only these are
+    /// offered on such a page: one kept from https, or from before this was
+    /// written down, is never handed to a page anyone on the way could have
+    /// written.
+    var clear = false
 
     var id: String { host + "\u{1}" + user }
 }
@@ -131,26 +136,36 @@ enum Vault {
         // The keychain has no "last used" of its own; it rides in the comment.
         let used = (row[kSecAttrComment as String] as? String)
             .flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
-        return Login(host: host, user: user, password: "", used: used)
+        let clear = (row[kSecAttrProtocol as String] as? String) == (kSecAttrProtocolHTTP as String)
+        return Login(host: host, user: user, password: "", used: used, clear: clear)
     }
 
     // MARK: - writing
 
     @discardableResult
-    static func save(host: String, user: String, password: String, used: Date? = nil) -> Bool {
+    static func save(host: String, user: String, password: String, used: Date? = nil, clear: Bool = false) -> Bool {
         guard !host.isEmpty, !password.isEmpty,
               let data = password.data(using: .utf8)
         else { return false }
 
-        // Only ever our own: an item another app keeps for the same site and
-        // account is its own, and touching it is one more prompt.
+        // Ours only. Server and account alone also match what other apps
+        // keep for the same site — git's token for github.com under your
+        // username — and an update would write this password over it.
         let identity: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
-            kSecAttrLabel as String: label,
             kSecAttrServer as String: host,
             kSecAttrAccount as String: user,
+            kSecAttrLabel as String: label,
         ]
-        var fields: [String: Any] = [kSecValueData as String: data]
+        // A web form's, which also keeps ours apart from another app's item
+        // in the keychain's eyes: one for the same server, account and
+        // protocol — git's — makes adding ours fail as a duplicate.
+        var fields: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrLabel as String: label,
+            kSecAttrAuthenticationType as String: kSecAttrAuthenticationTypeHTMLForm,
+            kSecAttrProtocol as String: clear ? kSecAttrProtocolHTTP : kSecAttrProtocolHTTPS,
+        ]
         if let used { fields[kSecAttrComment as String] = String(used.timeIntervalSince1970) }
 
         let status = SecItemUpdate(identity as CFDictionary, fields as CFDictionary)
@@ -162,25 +177,27 @@ enum Vault {
         return SecItemAdd(fresh as CFDictionary, nil) == errSecSuccess
     }
 
-    /// It was just used to sign in. Lists put it first from now on. Only the
-    /// date is written; the secret is left alone, never read to be put back.
+    /// It was just used to sign in, over http or https. Lists put it first
+    /// from now on, and it is offered where it was last used. Only those are
+    /// written; the secret is left alone, never read to be put back.
     static func touch(_ login: Login) {
         SecItemUpdate([
             kSecClass as String: kSecClassInternetPassword,
-            kSecAttrLabel as String: label,
             kSecAttrServer as String: login.host,
             kSecAttrAccount as String: login.user,
+            kSecAttrLabel as String: label,
         ] as CFDictionary, [
             kSecAttrComment as String: String(Date().timeIntervalSince1970),
+            kSecAttrProtocol as String: login.clear ? kSecAttrProtocolHTTP : kSecAttrProtocolHTTPS,
         ] as CFDictionary)
     }
 
     static func forget(host: String, user: String) {
         SecItemDelete([
             kSecClass as String: kSecClassInternetPassword,
-            kSecAttrLabel as String: label,
             kSecAttrServer as String: host,
             kSecAttrAccount as String: user,
+            kSecAttrLabel as String: label,
         ] as CFDictionary)
     }
 
@@ -217,16 +234,9 @@ enum Vault {
     // MARK: - the site behind a host
 
     /// example.com for www.example.com and accounts.example.com; bbc.co.uk
-    /// stays bbc.co.uk. The handful of two-part endings that matter here are
-    /// listed; a full public suffix list would be a library for a corner.
+    /// stays bbc.co.uk.
     static func registrable(_ host: String) -> String {
-        let labels = host.lowercased().split(separator: ".").map(String.init)
-        guard labels.count > 2 else { return labels.joined(separator: ".") }
-        let seconds: Set<String> = ["co", "com", "org", "net", "gov", "gouv", "ac", "edu", "asso", "or", "ne"]
-        if seconds.contains(labels[labels.count - 2]), labels[labels.count - 1].count == 2 {
-            return labels.suffix(3).joined(separator: ".")
-        }
-        return labels.suffix(2).joined(separator: ".")
+        Registrable.domain(of: host, isSuffix: Passkeys.publicSuffix.map { test in { test($0 as CFString) } })
     }
 
     static func host(of text: String) -> String {
@@ -266,7 +276,8 @@ enum Vault {
                 skipped += 1
                 continue
             }
-            save(host: host, user: row[userAt], password: password) ? (kept += 1) : (skipped += 1)
+            let clear = row[urlAt].trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("http://")
+            save(host: host, user: row[userAt], password: password, clear: clear) ? (kept += 1) : (skipped += 1)
         }
         return (kept, skipped)
     }
