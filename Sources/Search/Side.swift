@@ -34,6 +34,9 @@ struct SideBar: View {
     /// The width the column had when the edge was picked up.
     @State private var grabbed: CGFloat?
     @State private var onEdge = false
+    /// How wide the extensions in the top corner are, kept clear of the
+    /// strip that drags the window.
+    @State private var corner: CGFloat = 0
 
     /// A pin, picked up out of the grid — a separate state from the loose
     /// rows above, since the two gestures never happen at once but move on
@@ -77,7 +80,8 @@ struct SideBar: View {
                 Color.clear
                     .frame(width: Metrics.helm)
                     .allowsHitTesting(false)
-                DragStrip()
+                // Not under the puzzle and its pinned buttons at the far end.
+                DragStrip(trailing: corner + 10)
             }
             .frame(height: Metrics.strip)
 
@@ -90,6 +94,15 @@ struct SideBar: View {
                     Color.clear.frame(width: Metrics.sideLights)
                     Helm(browser: browser)
                     Spacer(minLength: 0)
+                    // The extensions, in the corner across from the lights.
+                    ExtensionSlot(always: true, room: extensionRoom)
+                        .background {
+                            GeometryReader { box in
+                                Color.clear
+                                    .onAppear { corner = box.size.width }
+                                    .onChange(of: box.size.width) { _, width in corner = width }
+                            }
+                        }
                 }
                 .frame(height: Metrics.strip)
 
@@ -677,10 +690,17 @@ struct SideBar: View {
     /// The doors at the bottom: the spaces, the extensions and the
     /// bookmarks, and a new tab, when it was asked to live here, alone in
     /// the far corner where it never moves.
+    /// The pinned extension buttons that fit between reload and the puzzle:
+    /// the column less its padding, the lights, the three doors and the
+    /// puzzle with a little air, at a door and its gap each.
+    private var extensionRoom: Int {
+        let free = prefs.sideWidth - 20 - Metrics.sideLights - (3 * 26 + 2 * 2) - 26 - 4
+        return max(0, Int(free / 28))
+    }
+
     private var foot: some View {
         HStack(spacing: 2) {
             if browser.prefs.usesSpaces { SpaceDot(browser: browser) }
-            ExtensionSlot(edge: .trailing)
             Door(icon: "bookmark", help: "Bookmarks") { browser.bookmarksOpen.toggle() }
                 .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .trailing) {
                     BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)

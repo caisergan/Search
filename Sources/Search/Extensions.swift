@@ -1021,10 +1021,16 @@ struct ExtensionSlot: View {
     /// The side the list opens toward: down from the top row, out to the
     /// right from the sidebar.
     var edge: Edge = .bottom
+    /// Shown with nothing installed too — the sidebar's corner, where the
+    /// puzzle is the way in to adding the first one.
+    var always = false
+    /// How many pinned buttons fit beside the puzzle; the rest are still in
+    /// its list, pinned.
+    var room = Int.max
 
     var body: some View {
         if #available(macOS 15.4, *) {
-            ExtensionButtons(extensions: .shared, edge: edge)
+            ExtensionButtons(extensions: .shared, edge: edge, always: always, room: room)
         }
     }
 }
@@ -1033,11 +1039,13 @@ struct ExtensionSlot: View {
 private struct ExtensionButtons: View {
     @ObservedObject var extensions: Extensions
     let edge: Edge
+    let always: Bool
+    let room: Int
 
     var body: some View {
-        if !extensions.installed.isEmpty {
+        if always || !extensions.installed.isEmpty {
             HStack(spacing: 2) {
-                ForEach(extensions.buttons.filter(\.pinned)) { button in
+                ForEach(extensions.buttons.filter(\.pinned).prefix(room)) { button in
                     ActionButton(button: button) { extensions.press(button.id) }
                         .background(Anchor(id: button.id))
                         .contextMenu { ExtensionActions(id: button.id, name: button.name, extensions: extensions) }
@@ -1169,25 +1177,31 @@ func extensionMenuPicture() -> NSBitmapImageRep? {
     return picture
 }
 
-/// The list behind the puzzle button: every running extension, a pin for
-/// each, and the way to Settings.
+/// The list behind the puzzle button: every extension installed, on or off,
+/// a switch and a pin for each, and the ways in to more.
 @available(macOS 15.4, *)
 private struct ExtensionMenu: View {
     @ObservedObject var extensions: Extensions
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            let buttons = extensions.buttons
-            if buttons.isEmpty {
-                Text("None of your extensions is on")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(Palette.muted)
-                    .padding(14)
+            if extensions.installed.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("No extensions yet")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Palette.ink)
+                    Text("Add one from the Chrome Web Store, or load a folder.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(14)
             } else {
+                let buttons = extensions.buttons
                 ScrollView {
                     VStack(spacing: 1) {
-                        ForEach(buttons) { button in
-                            Row(button: button, extensions: extensions)
+                        ForEach(extensions.installed, id: \.id) { item in
+                            Row(item: item, button: buttons.first { $0.id == item.id }, extensions: extensions)
                         }
                     }
                     .padding(6)
@@ -1213,38 +1227,55 @@ private struct ExtensionMenu: View {
             }
             .padding(6)
         }
-        .frame(width: 280)
+        .frame(width: 290)
         .background(Palette.ground)
     }
 
+    /// One extension. Pressing it does what its button in the row would;
+    /// one that is off, or has nothing to press, only has its switch.
     private struct Row: View {
-        let button: Extensions.Button
+        let item: Installed
+        /// Its button, while it runs and has one.
+        let button: Extensions.Button?
         @ObservedObject var extensions: Extensions
         @State private var hovering = false
 
         var body: some View {
+            let pinned = item.pinned ?? false
             HStack(spacing: 9) {
-                ExtensionIcon(button: button, size: 16)
-                Text(button.name)
+                ExtensionIcon(button: button ?? still, size: 16)
+                Text(item.name)
                     .font(.system(size: 12.5))
-                    .foregroundStyle(button.enabled ? Palette.ink : Palette.muted)
+                    .foregroundStyle(item.enabled ? Palette.ink : Palette.muted)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                if hovering, extensions.installed.first(where: { $0.id == button.id })?.source != nil {
-                    Tool(symbol: "arrow.clockwise", help: "Reload from its folder") { extensions.reload(button.id) }
+                if hovering, item.source != nil {
+                    Tool(symbol: "arrow.clockwise", help: "Reload from its folder") { extensions.reload(item.id) }
                 }
-                if hovering || button.pinned {
-                    Tool(symbol: button.pinned ? "pin.fill" : "pin", help: button.pinned ? "Unpin" : "Pin to toolbar", on: button.pinned) {
-                        extensions.setPinned(button.id, !button.pinned)
+                if hovering {
+                    Tool(symbol: "trash", help: "Remove") {
+                        extensions.menuOpen = false
+                        let (id, name) = (item.id, item.name)
+                        DispatchQueue.main.async { ExtensionActions.confirmRemove(id, name: name, extensions) }
                     }
                 }
+                if button != nil, hovering || pinned {
+                    Tool(symbol: pinned ? "pin.fill" : "pin", help: pinned ? "Unpin" : "Pin to toolbar", on: pinned) {
+                        extensions.setPinned(item.id, !pinned)
+                    }
+                }
+                Switch(on: Binding(get: { item.enabled }, set: { extensions.setEnabled(item.id, $0) }))
+                    .scaleEffect(0.8)
+                    .frame(width: 26, height: 16)
+                    .help(item.enabled ? "Turn off" : "Turn on")
             }
             .padding(.leading, 8)
-            .padding(.trailing, 4)
+            .padding(.trailing, 6)
             .frame(height: 30)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(hovering ? Palette.wash : .clear))
             .contentShape(Rectangle())
             .onTapGesture {
+                guard let button else { return }
                 // The list goes first; the popup, if there is one, then
                 // hangs from the puzzle button it came out of.
                 extensions.menuOpen = false
@@ -1252,8 +1283,23 @@ private struct ExtensionMenu: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { extensions.press(id) }
             }
             .onHover { hovering = $0 }
-            .help(button.label)
-            .contextMenu { ExtensionActions(id: button.id, name: button.name, extensions: extensions) }
+            .help(button?.label ?? item.name)
+            .contextMenu { ExtensionActions(id: item.id, name: item.name, extensions: extensions) }
+            .animation(Motion.quick, value: hovering)
+        }
+
+        /// What the icon is drawn from when there is no button: the
+        /// extension's own icon, dimmed while it is off.
+        private var still: Extensions.Button {
+            Extensions.Button(
+                id: item.id,
+                name: item.name,
+                label: item.name,
+                icon: extensions.contexts[item.id]?.webExtension.icon(for: CGSize(width: 16, height: 16)),
+                badge: "",
+                enabled: item.enabled,
+                pinned: item.pinned ?? false
+            )
         }
     }
 
