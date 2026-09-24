@@ -1112,9 +1112,11 @@ final class Browser: NSObject, ObservableObject {
         if prefs.newTabOver, let here = active, !here.isBlank {
             cancelTabEdit()
             summoning = false
-            typed = ""
+            // Up before it is emptied, so the empty field has its list of
+            // what is open.
             editing = true
             opening = true
+            typed = ""
             focusRequest += 1
             return
         }
@@ -1808,17 +1810,28 @@ final class Browser: NSObject, ObservableObject {
             return
         }
 
+        // With new tabs opened over the page, the field is also where you
+        // go back to a tab, as in Zen: empty, it lists what is open; typed
+        // into, the open pages that match come first. Off, it stays the
+        // quieter field it was, and ⌘K is where the open pages are.
+        let tabbing = prefs.newTabOver
+
         guard !typed.trimmingCharacters(in: .whitespaces).isEmpty else {
-            offers = []
+            // Only while the field is up: a list worked out for a field
+            // that has just gone would be waiting, stale, for the next one.
+            offers = tabbing && fieldShowing ? Array(openPages(matching: "").prefix(5)) : []
             ending = nil
             picked = nil
             return
         }
 
-        // Three places and, if it can't be a place, a search. No open pages:
-        // ⌘K exists for those, and mixing them in here made the list long
-        // enough that reading it cost more than typing the address would have.
-        var list = history.suggestions(for: typed, limit: 3)
+        // Three places and, if it can't be a place, a search. No open pages
+        // unless asked for: ⌘K exists for those, and mixing them in here made
+        // the list long enough that reading it cost more than typing the
+        // address would have.
+        let open = tabbing ? Array(openPages(matching: typed).prefix(2)) : []
+        var list = open + history.suggestions(for: typed, limit: 3)
+            .filter { place in !open.contains { $0.url == place.url } }
         // Last in the list, and only when what was typed cannot be a place.
         if !typed.isEmpty,
            Address.url(from: typed) == nil,

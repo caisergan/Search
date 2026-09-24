@@ -103,7 +103,7 @@ struct Omnibox: View {
     private var list: some View {
         VStack(spacing: 0) {
             ForEach(Array(browser.offers.enumerated()), id: \.element.id) { index, offer in
-                Row(offer: offer, picked: browser.picked == index)
+                Row(offer: offer, picked: browser.picked == index, rich: browser.prefs.newTabOver)
                     .contentShape(Rectangle())
                     .onTapGesture { browser.take(offer) }
             }
@@ -123,25 +123,18 @@ struct Omnibox: View {
         /// Where the arrow keys have walked to. The pointer gets its own,
         /// quieter mark, and changes nothing but the look of the row.
         let picked: Bool
+        /// With new tabs over the page the list is where tabs are gone back
+        /// to, so its rows wear the site's icon and say which ones switch.
+        let rich: Bool
 
         @State private var hovering = false
 
         var body: some View {
             HStack(spacing: 10) {
-                switch offer.kind {
-                case .search:
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Palette.muted)
-                case .open:
-                    // Already open: naming it takes you back to it rather than
-                    // opening a second copy.
-                    Circle()
-                        .fill(Palette.ink.opacity(0.55))
-                        .frame(width: 5, height: 5)
-                        .padding(.horizontal, 2)
-                default:
-                    EmptyView()
+                if rich && offer.kind != .search {
+                    SiteIcon(url: offer.url)
+                } else {
+                    mark
                 }
                 Text(offer.key)
                     .font(.system(size: 13))
@@ -156,6 +149,19 @@ struct Omnibox: View {
                         .truncationMode(.tail)
                 }
                 Spacer(minLength: 0)
+                if rich && offer.kind == .open {
+                    HStack(spacing: 8) {
+                        Text("Switch to Tab")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Palette.muted)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Palette.ink.opacity(0.7))
+                            .frame(width: 18, height: 18)
+                            .background(Palette.wash, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    }
+                    .fixedSize()
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -170,6 +176,46 @@ struct Omnibox: View {
             }
             .onHover { hovering = $0 }
             .animation(Motion.quick, value: hovering)
+        }
+
+        @ViewBuilder
+        private var mark: some View {
+            switch offer.kind {
+            case .search:
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+            case .open:
+                // Already open: naming it takes you back to it rather than
+                // opening a second copy.
+                Circle()
+                    .fill(Palette.ink.opacity(0.55))
+                    .frame(width: 5, height: 5)
+                    .padding(.horizontal, 2)
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    /// The site's icon if one has ever been kept, and a quiet globe in its
+    /// place otherwise: the list asks nothing of the network.
+    private struct SiteIcon: View {
+        let url: URL
+
+        var body: some View {
+            Group {
+                if let host = url.host()?.lowercased(), let icon = Favicons.shared.cached(host) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .interpolation(.high)
+                } else {
+                    Image(systemName: "globe")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted)
+                }
+            }
+            .frame(width: 16, height: 16)
         }
     }
 }
