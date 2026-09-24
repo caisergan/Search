@@ -285,6 +285,15 @@ final class Preferences: ObservableObject {
     @Published var floatsAway: Bool {
         didSet { store.set(floatsAway, forKey: "float.away") }
     }
+    /// A link clicked with a key held opens over the page rather than in a
+    /// tab (see Glance.swift). Off unless asked for.
+    @Published var glances: Bool {
+        didSet { store.set(glances, forKey: "glance") }
+    }
+    /// Which key that is. ⌥ unless changed, as in Zen.
+    @Published var glanceTrigger: GlanceTrigger {
+        didSet { store.set(glanceTrigger.rawValue, forKey: "glance.trigger") }
+    }
     /// Separate sets of tabs, each with its own sign-ins (see Spaces.swift).
     /// Off unless asked for.
     @Published var usesSpaces: Bool {
@@ -353,6 +362,8 @@ final class Preferences: ObservableObject {
         // existed; they are not asked to sit through it.
         welcomed = store.bool(forKey: "welcomed") || store.object(forKey: "glyph") != nil
         usesSpaces = store.bool(forKey: "spaces")
+        glances = store.bool(forKey: "glance")
+        glanceTrigger = store.string(forKey: "glance.trigger").flatMap(GlanceTrigger.init) ?? .option
         let flicks = store.bool(forKey: "float.flicks")
         floatFlicks = flicks
         Float.flicks = flicks

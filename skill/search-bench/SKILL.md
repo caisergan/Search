@@ -88,12 +88,15 @@ id=$(./bench --test open https://example.com)
 
 `probe` prints the window as JSON: panels (`settings`, `welcome`, `passwords`, `history`, `downloads`, `bookmarks`), whether the address field is open, modal title, `look`, `appearance`, the key window, every window's frame, and traffic-light positions. Use it for chrome. `shot` cannot see chrome.
 
+`tap ID SELECTOR [MODS…]` (test only) is a real mouse click; `opt`, `cmd`, `shift`, `ctrl` hold keys through it. `probe` reports `glance`, the address glanced at over the page, if any.
+
 `ui KEY VALUE` changes chrome and answers `{"ok": true}`. On a test world unless they asked for it on theirs.
 
 | Key | Value |
 |---|---|
 | `settings` `passwords` `welcome` `history` `downloads` `bookmarks` `hidden` `sidebar` `extensions` | `on` or `off` |
 | `look` | `light`, `dark`, or `system` |
+| `glance` | `keep` (into a tab) or `off` |
 
 `extensions on` opens the puzzle-button menu. `ext-menu PATH` writes that menu to a PNG. `look` and `sidebar` are remembered.
 

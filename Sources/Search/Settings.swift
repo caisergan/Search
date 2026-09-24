@@ -328,6 +328,16 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.loadsPinned)
             }
             Rule()
+            Line("Glance", "Hold \(prefs.glanceTrigger.key) and click a link to look at it over the page instead of opening a tab. esc or a click beside it puts it away; the arrow keeps it as a tab.") {
+                Switch(on: $prefs.glances)
+            }
+            if prefs.glances {
+                Rule()
+                Line("Glance with", "The key held while clicking. ⌘⇧-click and the middle button still open a tab") {
+                    Segmented(options: GlanceTrigger.allCases.map { ($0, $0.title) }, selection: $prefs.glanceTrigger)
+                }
+            }
+            Rule()
             Line("Spaces", "Separate sets of tabs, signed in where the others are or starting afresh, switched with ⌃1–⌃9, two fingers sideways over the column, or the space's icon. Mission Control's own ⌃1–⌃9, if you turned them on, take those keys first.") {
                 Switch(on: $prefs.usesSpaces)
             }

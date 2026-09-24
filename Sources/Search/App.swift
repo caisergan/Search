@@ -31,7 +31,13 @@ struct SearchApp: App {
                 Button("Open Address…") { browser.edit() }
                     .keyboardShortcut("l")
                 Divider()
-                Button("Close Tab") { if let tab = browser.active { browser.close(tab) } }
+                Button("Close Tab") {
+                    if browser.glance != nil {
+                        browser.closeGlance()
+                    } else if let tab = browser.active {
+                        browser.close(tab)
+                    }
+                }
                     .keyboardShortcut("w")
             }
             CommandGroup(replacing: .printItem) {
@@ -302,6 +308,12 @@ struct ContentView: View {
                             }
                             .animation(Motion.quick, value: browser.suggesting)
                             .overlay(alignment: browser.prefs.zoomSpot.alignment) { zoomNote }
+                            .overlay {
+                                if let glance = browser.glance, glance.from == tab.id {
+                                    GlanceLayer(browser: browser, glance: glance)
+                                }
+                            }
+                            .animation(Motion.settle, value: browser.glance)
                             .modifier(PageCard(on: carded, top: band == 0, leading: !sidebar))
                     } else {
                         Palette.ground
@@ -439,6 +451,7 @@ struct ContentView: View {
                 }
             }
             .onChange(of: browser.activeID) { _, _ in handBack() }
+            .onChange(of: browser.glance) { _, glance in if glance == nil { handBack() } }
             .animation(Motion.settle, value: browser.recalling)
             .animation(Motion.settle, value: browser.hoarding)
             .animation(Motion.settle, value: browser.tuning)
@@ -766,6 +779,10 @@ struct ContentView: View {
                 browser.dropChoice()
                 return true
             }
+            if browser.glance != nil {
+                browser.closeGlance()
+                return true
+            }
             if browser.veiling {
                 browser.toggleHiding()
                 return true
@@ -905,7 +922,12 @@ struct ContentView: View {
         case "0":
             browser.resetZoom()
         case "w" where !shifted:
-            if let tab = browser.active { browser.close(tab) }
+            // A glance first: it is what is in front.
+            if browser.glance != nil {
+                browser.closeGlance()
+            } else if let tab = browser.active {
+                browser.close(tab)
+            }
         case "l" where !shifted:
             browser.edit()
         case "r" where !shifted:

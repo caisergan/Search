@@ -16,8 +16,14 @@ final class Browser: NSObject, ObservableObject {
             // from when it was first picked.
             guard oldValue != activeID, let old = oldValue else { return }
             tabs.first { $0.id == old }?.touch()
+            // A glance belongs to the page it was taken from, and goes when
+            // that page does.
+            if let glance, glance.from != activeID { closeGlance() }
         }
     }
+
+    /// A link looked at over its page rather than opened (see Glance.swift).
+    @Published private(set) var glance: Glance?
 
     /// The tab whose page is currently out in the little window. Nothing
     /// floating means no window: the two are checked against each other rather
@@ -1319,13 +1325,7 @@ final class Browser: NSObject, ObservableObject {
         // An extension's own page is served only to a view built from that
         // extension's configuration.
         let url = Browser.page(url)
-        let page = Browser.extensionConfiguration(for: url)
-        let tab = if let source, source.shy, page == nil {
-            Tab(shy: true, configuration: Web.configuration(shy: true, store: source.store))
-        } else {
-            Tab(configuration: page)
-        }
-        prepare(tab)
+        let tab = tab(going: url, from: source)
         tabs.insert(tab, at: atEnd ? tabs.count : slot(under: (source ?? active)?.id))
         tab.parent = atEnd ? nil : source?.id
         tab.go(to: url)
@@ -1336,6 +1336,64 @@ final class Browser: NSObject, ObservableObject {
             typed = ""
         }
         return tab
+    }
+
+    /// A tab for a page opened out of `source`, not yet anywhere.
+    private func tab(going url: URL, from source: Tab?) -> Tab {
+        let page = Browser.extensionConfiguration(for: url)
+        let tab = if let source, source.shy, page == nil {
+            Tab(shy: true, configuration: Web.configuration(shy: true, store: source.store))
+        } else {
+            Tab(configuration: page)
+        }
+        prepare(tab)
+        return tab
+    }
+
+    // MARK: - glance
+
+    /// A link clicked with the glance key: over the page, in a card, and in
+    /// no row. A second one takes the first one's place.
+    func glance(_ url: URL, from source: Tab) {
+        closeGlance()
+        let tab = tab(going: Browser.page(url), from: source)
+        tab.parent = source.id
+        tab.go(to: url)
+        glance = Glance(tab: tab, from: source.id)
+    }
+
+    /// esc, ⌘W, a click beside the card, or its cross. The page is let go
+    /// once the card has faded, not while it is still being seen.
+    func closeGlance() {
+        guard let glance else { return }
+        self.glance = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { glance.tab.close() }
+    }
+
+    /// The arrow beside the card: the glance kept, as a tab straight under
+    /// the one it was taken from, and gone to. In two steps: the card's
+    /// stage goes first, and only then is the page handed to the window's.
+    /// Handed over in one update, both stages are told to show it, and the
+    /// card's — asked last, on its way out — took it out of the window.
+    func expandGlance() {
+        guard let glance else { return }
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) { self.glance = nil }
+        DispatchQueue.main.async { [self] in
+            guard tabs.contains(where: { $0.id == glance.from }) else {
+                glance.tab.close()
+                return
+            }
+            withTransaction(still) {
+                leaving()
+                tabs.insert(glance.tab, at: slot(under: glance.from))
+                activeID = glance.tab.id
+                editing = false
+                typed = ""
+            }
+            rememberSession()
+        }
     }
 
     /// Where a tab opened from `source` goes: straight under it, after any
@@ -1927,6 +1985,19 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // happens and nothing says why. `.download` is what turns it into
         // the `WKDownload` that `didBecome download:` below already knows
         // what to do with.
+        // The glance key held: over the page, rather than in a tab. Before
+        // the download check, in case WebKit takes ⌥-click for Safari's
+        // "download this link". Not from a glance itself — a link in one is
+        // followed there.
+        if prefs.glances, action.navigationType == .linkActivated, action.buttonNumber != 2,
+           let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+           action.modifierFlags.intersection([.command, .option, .shift, .control]) == prefs.glanceTrigger.flags,
+           let source = tabs.first(where: { $0.built === webView }) {
+            glance(url, from: source)
+            decisionHandler(.cancel)
+            return
+        }
+
         guard !action.shouldPerformDownload else {
             decisionHandler(.download)
             return
@@ -1995,7 +2066,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         for action: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        let from = tab(for: webView)?.id ?? activeID
+        // From a glance, under the page the glance was taken from.
+        let from = glance?.tab.built === webView ? glance?.from : tab(for: webView)?.id ?? activeID
         let tab = Tab(shy: tab(for: webView)?.shy ?? false, configuration: configuration)
         prepare(tab)
         // Under the tab it came from, not at the end of the row.
@@ -2190,7 +2262,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     }
 
     func tab(for webView: WKWebView) -> Tab? {
-        tabs.first { $0.built === webView }
+        if let glance, glance.tab.built === webView { return glance.tab }
+        return tabs.first { $0.built === webView }
     }
 }
 

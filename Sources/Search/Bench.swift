@@ -325,6 +325,17 @@ final class Bench {
             guard let tab = find(request, in: browser), let selector = request["selector"] as? String else { answer(missing(request)); return }
             house(tab)
             let view = tab.web
+            // Keys held through the click: ⌘ for a tab beside, ⌥ for a glance.
+            var flags: NSEvent.ModifierFlags = []
+            for name in request["mods"] as? [String] ?? [] {
+                switch name {
+                case "cmd": flags.insert(.command)
+                case "shift": flags.insert(.shift)
+                case "ctrl": flags.insert(.control)
+                case "opt": flags.insert(.option)
+                default: break
+                }
+            }
             view.evaluateJavaScript(Bench.locate(selector)) { value, error in
                 MainActor.assumeIsolated {
                     guard let point = value as? [Double], point.count == 2, let window = view.window else {
@@ -335,7 +346,7 @@ final class Bench {
                     let spot = view.convert(local, to: nil)
                     for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                         guard let event = NSEvent.mouseEvent(
-                            with: type, location: spot, modifierFlags: [],
+                            with: type, location: spot, modifierFlags: flags,
                             timestamp: ProcessInfo.processInfo.systemUptime,
                             windowNumber: window.windowNumber, context: nil,
                             eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0
@@ -408,6 +419,9 @@ final class Bench {
                 return preferences.value(forKey: "developerExtrasEnabled") as? Bool
             }
             // The column folded away, out for a look, and the lights with it (see Fold.swift).
+            // A link glanced at over the page (see Glance.swift), and where.
+            out["glance"] = browser.glance?.tab.address?.absoluteString ?? ""
+            out["glanceFrom"] = browser.glance.map { String($0.from.uuidString.prefix(8)).lowercased() } ?? ""
             out["folded"] = browser.folded
             out["peeking"] = browser.peeking
             out["sideHides"] = browser.prefs.sideHides
@@ -1071,6 +1085,12 @@ final class Bench {
             if let on = request["folded"] as? Bool { browser.folded = on }
             if let on = request["pinnedfolded"] as? Bool { browser.prefs.pinnedFolded = on }
             if let on = request["peek"] as? Bool { browser.peeking = on }
+            // The glance over the page kept as a tab, or put away.
+            switch request["glance"] as? String {
+            case "keep": browser.expandGlance()
+            case "off": browser.closeGlance()
+            default: break
+            }
             // The address of the tab on screen being edited in the tab, with
             // this typed, and that edit let go of by a click elsewhere.
             if let text = request["edittab"] as? String, let tab = browser.active {
