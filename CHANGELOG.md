@@ -13,6 +13,8 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Added
 
+- Brave Search and Qwant join the engines in Settings › General › Search with. Thanks [@vivescene](https://github.com/vivescene) ([#52](https://github.com/driceroland/Search/pull/52))
+- Pages at 120 Hz on a screen that can, like a MacBook Pro's: animations and scrolling in pages drawn up to 120 times a second instead of about 60. Settings › General › Pages at 120 Hz, off by default, as in Safari; it uses more battery. Open tabs follow when reloaded. Thanks [@AxxzyWasTaken](https://github.com/AxxzyWasTaken) ([#87](https://github.com/driceroland/Search/pull/87))
 - The video you're watching can float when you switch to another app, as in Arc, and go back into its tab when you return to it. Settings › General › Float the video when you switch apps, off by default. Only from the sites a video floats from on its own when you leave its tab; one floated with ⌘⇧P stays out. Thanks [@farchanrifai](https://github.com/farchanrifai) ([#152](https://github.com/driceroland/Search/pull/152))
 - A mouse's back and forward side buttons navigate the page, the way the trackpad's two-finger swipe already does. Thanks [@reloadedhead](https://github.com/reloadedhead) ([#79](https://github.com/driceroland/Search/pull/79))
 - Flick the floating video to a corner, as in Arc and Dia: two fingers on the window send it to the corner or edge they point at, on a short spring, instead of pushing it along. Settings › General › Flick the floating video to a corner, off by default. Dragging still puts it anywhere. Thanks [@farchanrifai](https://github.com/farchanrifai) ([#151](https://github.com/driceroland/Search/pull/151))
@@ -51,6 +53,7 @@ in [ROADMAP.md](ROADMAP.md).
 - ⌘⇧N no longer piles up empty private tabs: one already open comes to the end of the row, as with ⌘T.
 - A new space's choice of sign-ins reads in full in the column ("Signed in" / "Signed out"), where it was cut short.
 - A column of tabs long enough to scroll no longer draws its scroll bar over the cross on the tab under the pointer, where one was taken for the other: it sits in the margin beside them instead. ([#83](https://github.com/driceroland/Search/issues/83)) Thanks [@caisergan](https://github.com/caisergan) ([#99](https://github.com/driceroland/Search/pull/99))
+- A hidden sidebar comes out every time the pointer reaches the left edge, and goes when the pointer leaves it. Brought out and put away quickly a few times, it could stay out after the pointer had gone, or not come out at all until the pointer left the edge and came back; the same for the tab bar folded away across the top. It now follows where the pointer is, even with another app in front. ([#114](https://github.com/driceroland/Search/issues/114)) Thanks [@caisergan](https://github.com/caisergan) ([#115](https://github.com/driceroland/Search/pull/115))
 
 ## 1.0.1 — 23 September 2026
 
