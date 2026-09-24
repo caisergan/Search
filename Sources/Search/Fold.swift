@@ -46,9 +46,9 @@ extension Browser {
     }
 }
 
-/// Over the window's left edge while the column is folded, or its top edge
-/// while the strip is: the band of edge that brings it out, and the column or
-/// the strip itself while it is out.
+/// Over the window while the column or the strip is folded: the column or
+/// the strip itself while it is out, brought out by the pointer at the
+/// window's left edge, or its top edge.
 struct Fold: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
@@ -59,9 +59,9 @@ struct Fold: View {
     @State private var arriving: DispatchWorkItem?
     /// The pointer is over the column.
     @State private var inside = false
+    @State private var pointer = Pointer()
 
-    /// How much of the edge answers the pointer. Thin enough that a page's
-    /// own left edge — a scrollbar is on the other side — still takes clicks.
+    /// How near the edge the pointer has to be.
     private static let edge: CGFloat = 6
     /// The grace before the column goes back in.
     private static let grace: TimeInterval = 0.3
@@ -86,38 +86,16 @@ struct Fold: View {
                     .frame(height: Fold.top)
                     .frame(maxWidth: .infinity)
             }
-            if folding, !prefs.sidebar {
-                Color.clear
-                    .frame(height: Fold.edge)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                    .onHover { over in if over { arrive() } else { pass() } }
-                if browser.peeking {
-                    TabBar(browser: browser)
-                        .shadow(color: .black.opacity(0.14), radius: 20, y: 4)
-                        .onHover { over in
-                            inside = over
-                            peek(over)
-                        }
-                        .transition(.move(edge: .top))
-                }
+            if folding, !prefs.sidebar, browser.peeking {
+                TabBar(browser: browser)
+                    .shadow(color: .black.opacity(0.14), radius: 20, y: 4)
+                    .transition(.move(edge: .top))
             }
             ZStack(alignment: .leading) {
                 Color.clear.frame(width: 0)
-                if folding, prefs.sidebar {
-                    Color.clear
-                        .frame(width: Fold.edge)
-                        .frame(maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                        .onHover { over in if over { arrive() } else { pass() } }
-                }
                 if folding, prefs.sidebar, browser.peeking {
                     SideBar(browser: browser, prefs: prefs)
                         .shadow(color: .black.opacity(0.14), radius: 20, x: 4)
-                        .onHover { over in
-                            inside = over
-                            peek(over)
-                        }
                         .transition(.move(edge: .leading))
                 }
             }
@@ -125,11 +103,19 @@ struct Fold: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .ignoresSafeArea()
-        .onAppear { hideLights() }
+        .onAppear {
+            hideLights()
+            pointer.watch { follow() }
+        }
+        .onDisappear { pointer.unwatch() }
         // A column folded for good is folded before there is a window to
         // hide the lights of; they go once there is one.
         .background(WindowSetup { window in
             window.standardWindowButton(.closeButton)?.superview?.isHidden = lightsOff
+            pointer.window = window
+            // The pointer's moves reach the monitor wherever it is over the
+            // window, not only over what tracks it.
+            window.acceptsMouseMovedEvents = true
         })
         .onChange(of: lightsOff) { _, _ in hideLights() }
         // Back to the strip and then to the column again: the column comes
@@ -160,13 +146,46 @@ struct Fold: View {
         browser.folded && !browser.peeking
     }
 
+    /// Opens or closes the column from the pointer's actual position, on
+    /// every move. Hover events weren't enough: a view that appears under a
+    /// still pointer never gets "entered", so it never gets "exited" either,
+    /// and after a few quick opens and closes the column stayed open, or the
+    /// edge stopped opening it.
+    private func follow() {
+        guard folding, let window = pointer.window, window.isVisible else { return pass() }
+        let screen = NSEvent.mouseLocation
+        let point = window.convertPoint(fromScreen: screen)
+        let size = window.frame.size
+        let inWindow = point.x >= 0 && point.x < size.width && point.y >= 0 && point.y < size.height
+        // Only react when this window is the one under the pointer, not
+        // another app's window on top of it. One of this app's own windows,
+        // such as a popover opened from the column, counts as the column.
+        let top = NSWindow.windowNumber(at: screen, belowWindowWithWindowNumber: 0)
+        let onWindow = top == window.windowNumber
+        let onOwnPanel = !onWindow && NSApp.windows.contains { $0.windowNumber == top }
+        // Distance from the left edge for the column, from the top for the strip.
+        let distance = prefs.sidebar ? point.x : size.height - point.y
+        if browser.peeking {
+            pass()
+            inside = onOwnPanel || (onWindow && inWindow && distance < (prefs.sidebar ? prefs.sideWidth : Metrics.strip))
+            peek(inside)
+        } else if onWindow, inWindow, distance < Fold.edge {
+            if arriving == nil { arrive() }
+        } else {
+            pass()
+        }
+    }
+
     /// The pointer on the edge: out at once, or after the dwell when the
     /// column is folded for good, and always for the strip, whose edge is
     /// the way to the menu bar.
     private func arrive() {
         guard !prefs.sidebar || prefs.sideHides else { return peek(true) }
         pass()
-        let coming = DispatchWorkItem { peek(true) }
+        let coming = DispatchWorkItem {
+            arriving = nil
+            peek(true)
+        }
         arriving = coming
         DispatchQueue.main.asyncAfter(deadline: .now() + Fold.dwell, execute: coming)
     }
@@ -177,15 +196,18 @@ struct Fold: View {
         arriving = nil
     }
 
-    /// Out at once; in only once the pointer has stayed away for the grace.
+    /// Out at once; in only once the pointer has stayed away for the grace,
+    /// counted from when it left rather than from its latest move.
     private func peek(_ out: Bool) {
-        leaving?.cancel()
-        leaving = nil
         if out {
+            leaving?.cancel()
+            leaving = nil
             guard !browser.peeking else { return }
             browser.peek(true)
         } else {
+            guard leaving == nil else { return }
             let going = DispatchWorkItem {
+                leaving = nil
                 guard browser.editingTab == nil else { return }
                 browser.peek(false)
             }
@@ -268,5 +290,33 @@ struct Fold: View {
         }
         layer.add(spring, forKey: "fold")
         CATransaction.commit()
+    }
+}
+
+/// The pointer's moves, wherever it goes: over this app's windows, and over
+/// everything else while another app is in front, since the edge is still
+/// the edge with Search behind.
+@MainActor
+private final class Pointer {
+    weak var window: NSWindow?
+    private var local: Any?
+    private var global: Any?
+
+    func watch(_ moved: @escaping @MainActor () -> Void) {
+        guard local == nil else { return }
+        local = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { event in
+            MainActor.assumeIsolated { moved() }
+            return event
+        }
+        global = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { _ in
+            MainActor.assumeIsolated { moved() }
+        }
+    }
+
+    func unwatch() {
+        if let local { NSEvent.removeMonitor(local) }
+        if let global { NSEvent.removeMonitor(global) }
+        local = nil
+        global = nil
     }
 }
