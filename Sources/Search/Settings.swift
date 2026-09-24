@@ -288,6 +288,7 @@ struct SettingsPanel: View {
         case .hue: return "The desktop shows through the tabs, blurred and tinted \(prefs.theme.title.lowercased()), the page a card on it"
         case .gradient: return "The desktop shows through the tabs, blurred under a gradient, the page a card on it"
         case .glow: return "Soft glows of colour over the blurred desktop, the page a card on them"
+        case .dark: return "Nearly black, lit at its edges by a glow or two, the page a card on it"
         }
     }
 
