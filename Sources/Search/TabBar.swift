@@ -494,7 +494,7 @@ private struct TabPill: View {
         HStack(spacing: 6) {
             if editing {
                 TabAddressField(browser: browser)
-                    .frame(height: 16)
+                    .frame(height: prefs.tabSize.field)
             } else {
                 if prefs.glyph == .icons, !tab.isBlank {
                     Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark, dim: resting)
@@ -525,14 +525,14 @@ private struct TabPill: View {
             // is here, the ring while the page is still coming, never both.
             ZStack {
                 if hovering {
-                    TabEnd(unpins: unpins, size: prefs.tabSize.cross)
+                    TabEnd(unpins: unpins, size: prefs.tabSize)
                         .transition(.opacity)
                 } else if tab.loading {
-                    Ring(size: prefs.tabSize.cross * 10 / 15).transition(.opacity)
+                    Ring(size: prefs.tabSize.ring).transition(.opacity)
                 } else if tab.noisy {
                     // Which tab the noise is coming from. ⌘⇧M stops it.
                     Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: prefs.tabSize.cross * 8 / 15))
+                        .font(.system(size: prefs.tabSize.glyph))
                         .foregroundStyle(Palette.muted)
                         .transition(.opacity)
                 }
@@ -624,7 +624,8 @@ struct TabAddressField: NSViewRepresentable {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = .systemFont(ofSize: 12.5)
+        // The title's size, so the tab doesn't change size to be typed into.
+        field.font = .systemFont(ofSize: browser.prefs.tabSize.text)
         field.textColor = Palette.NS.ink
         field.cell?.usesSingleLineMode = true
         field.cell?.wraps = false
@@ -770,14 +771,13 @@ struct TabMenu: View {
 /// put it down, which ⌘W and the middle button already do.
 struct TabEnd: View {
     let unpins: Bool
-    /// The tab size's cross (TabSize.cross): the circle's width.
-    let size: CGFloat
+    let size: TabSize
 
     var body: some View {
         Image(systemName: unpins ? "pin.fill" : "xmark")
-            .font(.system(size: size * 8 / 15, weight: .semibold))
+            .font(.system(size: size.glyph, weight: .semibold))
             .foregroundStyle(Palette.muted)
-            .frame(width: size, height: size)
+            .frame(width: size.cross, height: size.cross)
             .background(Palette.ink.opacity(0.07), in: Circle())
     }
 }

@@ -332,8 +332,8 @@ struct SideBar: View {
 
     /// However many columns the count calls for, they split the row's own
     /// width between them — the row is what fills edge to edge, not each
-    /// cell on its own, so this grows past 34 just as readily as it shrinks
-    /// below it.
+    /// cell on its own, so this grows past the square's height
+    /// (TabSize.square) just as readily as it shrinks below it.
     private var pinWidth: CGFloat { pinWidth(for: browser.pinnedCount) }
 
     private func pinWidth(for count: Int) -> CGFloat {
@@ -346,8 +346,8 @@ struct SideBar: View {
     /// The one dimension that doesn't chase the sidebar's width: past three
     /// columns' worth of room a cell would otherwise turn into a big square
     /// rather than the wide, short button pinned tabs actually look like
-    /// everywhere else in this app. It only shrinks below 34 alongside the
-    /// width, once a narrow column leaves no other choice.
+    /// everywhere else in this app. It only shrinks below the square's height
+    /// alongside the width, once a narrow column leaves no other choice.
     private var pinHeight: CGFloat {
         min(square, pinWidth)
     }
@@ -860,7 +860,7 @@ private struct SideRow: View {
         HStack(spacing: 8) {
             if editing {
                 TabAddressField(browser: browser)
-                    .frame(height: 16)
+                    .frame(height: prefs.tabSize.field)
             } else {
                 if prefs.glyph == .icons, !tab.isBlank {
                     Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark, dim: resting)
@@ -888,10 +888,10 @@ private struct SideRow: View {
 
                 ZStack {
                     if tab.loading {
-                        Ring(size: prefs.tabSize.cross * 10 / 15).transition(.opacity)
+                        Ring(size: prefs.tabSize.ring).transition(.opacity)
                     } else {
                         Image(systemName: "speaker.wave.2.fill")
-                            .font(.system(size: prefs.tabSize.cross * 8 / 15))
+                            .font(.system(size: prefs.tabSize.glyph))
                             .foregroundStyle(Palette.muted)
                             .transition(.opacity)
                     }
@@ -923,7 +923,7 @@ private struct SideRow: View {
             if !editing {
                 ZStack {
                     if hovering {
-                        TabEnd(unpins: unpins, size: prefs.tabSize.cross)
+                        TabEnd(unpins: unpins, size: prefs.tabSize)
                             .transition(.opacity)
                     }
                 }

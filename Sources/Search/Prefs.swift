@@ -83,6 +83,13 @@ enum TabSize: String, CaseIterable, Identifiable {
     /// The cross that closes a tab, and the ring and the speaker that take
     /// its place at the end of the line.
     var cross: CGFloat { self == .large ? 18 : 15 }
+    /// The cross's glyph inside that circle, and the speaker's.
+    var glyph: CGFloat { cross * 8 / 15 }
+    /// The ring that turns there while a page loads.
+    var ring: CGFloat { cross * 10 / 15 }
+    /// The address typed into a tab, the title's size, and the height of its
+    /// line.
+    var field: CGFloat { text + 3.5 }
     /// The air above and below a title in the row across the top.
     var inset: CGFloat { self == .large ? 8 : 6 }
     /// A tab in the row across the top, before too many make it give way,
