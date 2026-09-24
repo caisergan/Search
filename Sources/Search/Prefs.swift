@@ -176,6 +176,11 @@ final class Preferences: ObservableObject {
     @Published var newTabInFoot: Bool {
         didSet { store.set(newTabInFoot, forKey: "sidebar.newtab.foot") }
     }
+    /// ⌘T raises the field over the page you're on instead of opening an
+    /// empty tab; the tab is made when you go somewhere. Off unless asked for.
+    @Published var newTabOver: Bool {
+        didSet { store.set(newTabOver, forKey: "newtab.over") }
+    }
     /// How wide the column is. Pulled by its edge, and remembered.
     @Published var sideWidth: CGFloat {
         didSet { store.set(Double(sideWidth), forKey: "sidebar.width") }
@@ -321,6 +326,7 @@ final class Preferences: ObservableObject {
         loadsPinned = store.object(forKey: "pinned.load") as? Bool ?? true
         sideReveal = store.string(forKey: "sidebar.reveal").flatMap(Reveal.init) ?? .human
         newTabInFoot = store.bool(forKey: "sidebar.newtab.foot")
+        newTabOver = store.bool(forKey: "newtab.over")
         let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)
         sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters

@@ -102,7 +102,11 @@ final class Browser: NSObject, ObservableObject {
 
     /// The address field, raised over a page by ⌘L. A blank tab shows it
     /// without being asked — there is nothing else for that tab to show.
-    @Published var editing = false
+    @Published var editing = false { didSet { if !editing { opening = false } } }
+    /// The field is up over the page for a tab that doesn't exist yet (the
+    /// new tab over the page, in Settings): where it goes opens one, and
+    /// Escape leaves nothing behind.
+    private var opening = false
     /// What is in the field. Every change re-reads the history, because the
     /// list under the field and the grey ending inside it are both just
     /// answers to this string.
@@ -1103,6 +1107,17 @@ final class Browser: NSObject, ObservableObject {
             rememberSession()
             return
         }
+        // Over the page, if asked for: the field comes up where you are, and
+        // a tab is only made once there is somewhere for it to go.
+        if prefs.newTabOver, let here = active, !here.isBlank {
+            cancelTabEdit()
+            summoning = false
+            typed = ""
+            editing = true
+            opening = true
+            focusRequest += 1
+            return
+        }
         // Never two empty tabs. One already open anywhere in the row comes to
         // its end and is the one opened, with whatever was typed into it and
         // never gone to cleared away — a row of identical empty tabs is what
@@ -1537,7 +1552,7 @@ final class Browser: NSObject, ObservableObject {
             refusals += 1
             return
         }
-        (active ?? tabs.first)?.go(to: url)
+        go(to: url)
         editing = false
         typed = ""
     }
@@ -1777,6 +1792,7 @@ final class Browser: NSObject, ObservableObject {
         reviewing = false
         cancelTabEdit()
         summoning = true
+        opening = false
         typed = ""
         editing = true
         focusRequest += 1
@@ -1853,7 +1869,7 @@ final class Browser: NSObject, ObservableObject {
         if let id = offer.tab, let tab = tabs.first(where: { $0.id == id }) {
             select(tab)
         } else {
-            (active ?? tabs.first)?.go(to: offer.url)
+            go(to: offer.url)
         }
         editing = false
         typed = ""
@@ -1889,6 +1905,7 @@ final class Browser: NSObject, ObservableObject {
     /// and Escape puts it back.
     func edit() {
         summoning = false
+        opening = false
         typed = active?.address?.absoluteString ?? ""
         editing = true
         focusRequest += 1
@@ -1943,9 +1960,20 @@ final class Browser: NSObject, ObservableObject {
             refusals += 1
             return
         }
-        (active ?? tabs.first)?.go(to: url)
+        go(to: url)
         editing = false
         typed = ""
+    }
+
+    /// Where the field sends you: the tab it stands over, or a new one if it
+    /// was raised for a new tab.
+    private func go(to url: URL) {
+        if opening, let here = active {
+            open(url, foreground: true, atEnd: true, from: here)
+            rememberSession()
+        } else {
+            (active ?? tabs.first)?.go(to: url)
+        }
     }
 
     // MARK: - the page
