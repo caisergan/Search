@@ -320,7 +320,11 @@ final class Browser: NSObject, ObservableObject {
         guard let tab = tabs.first(where: { $0.id == suggesting?.tab }) ?? active else { return }
         suggesting = nil
         pickedInto = tab.id
-        tab.fill(user: login.user, password: login.password) { [weak self] worked in
+        guard let password = Vault.password(of: login) else {
+            announce("The keychain didn't give up the password")
+            return
+        }
+        tab.fill(user: login.user, password: password) { [weak self] worked in
             if !worked { self?.announce("Couldn't find the sign-in fields anymore") }
         }
         Vault.touch(login)
@@ -368,8 +372,12 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func copy(_ login: Login) {
+        guard let password = Vault.password(of: login) else {
+            announce("The keychain didn't give up the password")
+            return
+        }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(login.password, forType: .string)
+        NSPasteboard.general.setString(password, forType: .string)
         announce("Password copied")
     }
 
@@ -1729,15 +1737,20 @@ final class Browser: NSObject, ObservableObject {
             // A password manager extension that asked Chrome's way to do the
             // saving itself.
             if #available(macOS 15.4, *), Extensions.shared.passwordSavingTakenBy != nil { return }
-            let known = Vault.logins(for: host)
-            // Nothing to ask about one that is already known.
-            if let same = known.first(where: { $0.user == user && $0.password == password }) {
-                Vault.touch(same)
-                return
+            // Only the account just signed in with is read, not the site's
+            // every one — and not at all if its prompt was denied already.
+            let same = Vault.logins(for: host).first { $0.user == user }
+            if let same {
+                guard let kept = Vault.password(of: same, asked: false) else { return }
+                // Nothing to ask about one that is already known.
+                if kept == password {
+                    Vault.touch(same)
+                    return
+                }
             }
             let offer = Offer(
                 login: Login(host: host, user: user, password: password, used: nil),
-                changed: known.contains { $0.user == user }
+                changed: same != nil
             )
             guard offering != offer else { return }
             offering = offer

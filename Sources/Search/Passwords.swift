@@ -164,7 +164,7 @@ struct PasswordsPanel: View {
         let forget: () -> Void
 
         @State private var hovering = false
-        @State private var shown = false
+        @State private var shown: String?
         @State private var hide: DispatchWorkItem?
 
         var body: some View {
@@ -176,16 +176,17 @@ struct PasswordsPanel: View {
                     .truncationMode(.middle)
                     .frame(minWidth: 120, alignment: .leading)
 
-                Text(shown ? login.password : String(repeating: "•", count: min(12, max(6, login.password.count))))
-                    .font(.system(size: shown ? 12.5 : 10, design: .monospaced))
-                    .foregroundStyle(shown ? Palette.ink : Palette.muted)
+                // Dots of one length: the secret isn't read until Show.
+                Text(shown ?? String(repeating: "•", count: 10))
+                    .font(.system(size: shown != nil ? 12.5 : 10, design: .monospaced))
+                    .foregroundStyle(shown != nil ? Palette.ink : Palette.muted)
                     .lineLimit(1)
                     .textSelection(.enabled)
 
                 Spacer(minLength: 8)
 
-                if hovering || shown {
-                    Quick(shown ? "Hide" : "Show") { shown ? conceal() : reveal() }
+                if hovering || shown != nil {
+                    Quick(shown != nil ? "Hide" : "Show") { shown != nil ? conceal() : reveal() }
                     Quick("Copy", act: copy)
                     Quick("Remove", tint: .red.opacity(0.75), act: forget)
                 }
@@ -202,10 +203,10 @@ struct PasswordsPanel: View {
 
         private func reveal() {
             Vault.prove("show the password for \(login.host)") { ok in
-                guard ok else { return }
-                shown = true
+                guard ok, let password = Vault.password(of: login) else { return }
+                shown = password
                 // Long enough to read or type across, and not a minute more.
-                let work = DispatchWorkItem { shown = false }
+                let work = DispatchWorkItem { shown = nil }
                 hide?.cancel()
                 hide = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
@@ -214,7 +215,7 @@ struct PasswordsPanel: View {
 
         private func conceal() {
             hide?.cancel()
-            shown = false
+            shown = nil
         }
     }
 

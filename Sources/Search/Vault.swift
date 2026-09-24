@@ -13,6 +13,8 @@ import LocalAuthentication
 struct Login: Identifiable, Equatable, Hashable {
     var host: String
     var user: String
+    /// Empty on anything read back from the keychain: lists never carry a
+    /// secret. `Vault.password(of:)` fetches it, at the moment it is used.
     var password: String
     /// When it was last used to sign in, if known. Newest first in lists.
     var used: Date?
@@ -30,8 +32,15 @@ enum Vault {
     /// The keychain will list many items, or hand over one secret — not
     /// both in one call. Asked for every item's data at once it answers
     /// errSecParam, and it did so quietly enough that for a while this app
-    /// saved passwords it could never read back. So: the list first, without
-    /// secrets, then each secret on its own.
+    /// saved passwords it could never read back.
+    ///
+    /// And a secret is never read to make a list. Each item carries its own
+    /// list of apps allowed to read it, so a build signed differently from
+    /// the one that saved it gets a macOS prompt per item, per read — and a
+    /// list read every time the caret entered a field, the page scrolled or
+    /// the prompt itself took focus away and gave it back was ten prompts in
+    /// a row, Deny or not. Names and sites are readable without asking; the
+    /// secret is fetched for the one account you picked, when you pick it.
 
     /// What is kept for a host, exactly. See `logins(matching:)` for the
     /// version that also looks across a site's subdomains.
@@ -79,6 +88,18 @@ enum Vault {
         return rows
     }
 
+    /// Accounts whose secret the keychain refused this session — you denied
+    /// the prompt. Asked again only when you ask for that account yourself.
+    private static var refused: Set<String> = []
+
+    /// The secret of one kept account, read now. `asked` is whether you
+    /// asked for it — picked it, copied it, showed it — rather than Search
+    /// wanting it on its own, which a Deny earlier this session rules out.
+    static func password(of login: Login, asked: Bool = true) -> String? {
+        if !asked && refused.contains(login.id) { return nil }
+        return secret(host: login.host, user: login.user)
+    }
+
     /// One item's secret, by the two things that name it.
     private static func secret(host: String, user: String) -> String? {
         var out: CFTypeRef?
@@ -90,22 +111,27 @@ enum Vault {
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ] as CFDictionary, &out)
+        let id = Login(host: host, user: user, password: "").id
         guard status == errSecSuccess, let data = out as? Data else {
-            if status != errSecItemNotFound { NSLog("Vault: keychain read failed (%d)", status) }
+            if status == errSecAuthFailed || status == errSecUserCanceled || status == errSecInteractionNotAllowed {
+                refused.insert(id)
+            } else if status != errSecItemNotFound {
+                NSLog("Vault: keychain read failed (%d)", status)
+            }
             return nil
         }
+        refused.remove(id)
         return String(data: data, encoding: .utf8)
     }
 
     private static func login(from row: [String: Any]) -> Login? {
         guard let host = row[kSecAttrServer as String] as? String,
-              let user = row[kSecAttrAccount as String] as? String,
-              let password = secret(host: host, user: user)
+              let user = row[kSecAttrAccount as String] as? String
         else { return nil }
         // The keychain has no "last used" of its own; it rides in the comment.
         let used = (row[kSecAttrComment as String] as? String)
             .flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
-        return Login(host: host, user: user, password: password, used: used)
+        return Login(host: host, user: user, password: "", used: used)
     }
 
     // MARK: - writing
@@ -116,15 +142,15 @@ enum Vault {
               let data = password.data(using: .utf8)
         else { return false }
 
+        // Only ever our own: an item another app keeps for the same site and
+        // account is its own, and touching it is one more prompt.
         let identity: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
+            kSecAttrLabel as String: label,
             kSecAttrServer as String: host,
             kSecAttrAccount as String: user,
         ]
-        var fields: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrLabel as String: label,
-        ]
+        var fields: [String: Any] = [kSecValueData as String: data]
         if let used { fields[kSecAttrComment as String] = String(used.timeIntervalSince1970) }
 
         let status = SecItemUpdate(identity as CFDictionary, fields as CFDictionary)
@@ -136,14 +162,23 @@ enum Vault {
         return SecItemAdd(fresh as CFDictionary, nil) == errSecSuccess
     }
 
-    /// It was just used to sign in. Lists put it first from now on.
+    /// It was just used to sign in. Lists put it first from now on. Only the
+    /// date is written; the secret is left alone, never read to be put back.
     static func touch(_ login: Login) {
-        save(host: login.host, user: login.user, password: login.password, used: Date())
+        SecItemUpdate([
+            kSecClass as String: kSecClassInternetPassword,
+            kSecAttrLabel as String: label,
+            kSecAttrServer as String: login.host,
+            kSecAttrAccount as String: login.user,
+        ] as CFDictionary, [
+            kSecAttrComment as String: String(Date().timeIntervalSince1970),
+        ] as CFDictionary)
     }
 
     static func forget(host: String, user: String) {
         SecItemDelete([
             kSecClass as String: kSecClassInternetPassword,
+            kSecAttrLabel as String: label,
             kSecAttrServer as String: host,
             kSecAttrAccount as String: user,
         ] as CFDictionary)
