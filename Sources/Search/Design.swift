@@ -99,16 +99,17 @@ enum Theme: String, CaseIterable, Identifiable {
     /// How far in from the window's edges the page sits, and how round its
     /// corners are, when it is a card.
     static let inset: CGFloat = 8
-    static let corner: CGFloat = 10
+    static let corner: CGFloat = 12
 }
 
-/// A theme's glass: the frost, and its colour over it.
+/// A theme's glass: the desktop, blurred until only its colours are left,
+/// a thin shade over it so the tabs can be read, and the theme's colour.
 ///
-/// Behind the window, it is the desktop that is frosted — what the window
+/// Behind the window, it is the desktop that is blurred — what the window
 /// itself is made of. Within it, it is the page: for the column and the
 /// strip when they come out over the page folded, where the desktop would
-/// show through as a hole in the window and they need to be thicker to be
-/// read against whatever the page has there.
+/// show through as a hole in the window. There the shade is thicker, or the
+/// page would be read through the tabs.
 struct Backdrop: View {
     let theme: Theme
     var behind = true
@@ -116,37 +117,92 @@ struct Backdrop: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        let dark = scheme == .dark
         ZStack {
-            // Behind the window the frost is thinned, so the desktop is
-            // seen through it and not just its colours; over the page it
-            // stays whole, or the page would be read through the tabs.
-            Frost(material: behind ? .sidebar : .menu, blending: behind ? .behindWindow : .withinWindow, alpha: behind ? 0.72 : 1)
+            Blur(blending: behind ? .behindWindow : .withinWindow)
+            // Black under white ink, white under black: just enough for the
+            // titles, never so much the desktop's colours go grey.
+            (dark ? Color.black : Color.white)
+                .opacity(behind ? (dark ? 0.30 : 0.34) : (dark ? 0.58 : 0.66))
             if !theme.tint.isEmpty {
                 LinearGradient(colors: theme.tint, startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .opacity(behind ? (scheme == .dark ? 0.26 : 0.22) : (scheme == .dark ? 0.34 : 0.28))
+                    .opacity(dark ? 0.20 : 0.16)
             }
         }
         .allowsHitTesting(false)
     }
 
-    private struct Frost: NSViewRepresentable {
-        let material: NSVisualEffectView.Material
+    private struct Blur: NSViewRepresentable {
         let blending: NSVisualEffectView.BlendingMode
-        let alpha: CGFloat
 
-        func makeNSView(context: Context) -> NSVisualEffectView {
-            let view = NSVisualEffectView()
-            // Frosted whether or not the window is the one in front: a theme
+        func makeNSView(context: Context) -> ClearGlass {
+            let view = ClearGlass()
+            // Blurred whether or not the window is the one in front: a theme
             // that went grey every time another app was clicked would be two
             // themes.
             view.state = .active
+            view.material = .sidebar
             return view
         }
 
-        func updateNSView(_ view: NSVisualEffectView, context: Context) {
-            view.material = material
+        func updateNSView(_ view: ClearGlass, context: Context) {
             view.blendingMode = blending
-            view.alphaValue = alpha
+            view.strip()
+        }
+    }
+}
+
+/// The system's glass with only the blur left in it.
+///
+/// A material is a blur with a grey laid over it — a "fill" at 80% and a
+/// "tone" lightening that — which is why the window came out a flat, dull
+/// sheet and not the desktop's colours. Those two, and the desktop tint, are
+/// hidden, and the blur is made wider and less loud, so what is left reads
+/// as smooth light rather than as a picture out of focus. The layers are the
+/// system's to name (read on macOS 26); where they are called something
+/// else, the material is simply left whole, as it would have been.
+final class ClearGlass: NSVisualEffectView {
+    static let radius: CGFloat = 60
+    static let saturation: CGFloat = 1.7
+
+    override func layout() {
+        super.layout()
+        strip()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        // The system puts its layers back for the new appearance.
+        DispatchQueue.main.async { self.strip() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        DispatchQueue.main.async { self.strip() }
+    }
+
+    func strip() {
+        guard let root = layer else { return }
+        var found: [CALayer] = []
+        func walk(_ layer: CALayer) {
+            found.append(layer)
+            layer.sublayers?.forEach(walk)
+        }
+        walk(root)
+        guard found.contains(where: { $0.name == "backdrop" }) else { return }
+        for layer in found {
+            switch layer.name {
+            case "fill", "tone", "desktop tint":
+                if !layer.isHidden { layer.isHidden = true }
+            case "backdrop":
+                let filters = "filters.gaussianBlur.inputRadius"
+                if (layer.value(forKeyPath: filters) as? CGFloat) != ClearGlass.radius {
+                    layer.setValue(ClearGlass.radius, forKeyPath: filters)
+                    layer.setValue(ClearGlass.saturation, forKeyPath: "filters.colorSaturate.inputAmount")
+                }
+            default:
+                break
+            }
         }
     }
 }
