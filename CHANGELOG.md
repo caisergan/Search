@@ -22,6 +22,7 @@ in [ROADMAP.md](ROADMAP.md).
 - Scroll with the middle button, as on Windows: click the wheel on a page, then move the mouse up or down; another click stops it. Settings › General › Scroll with the middle button.
 - Homebrew: `brew install --cask driceroland/tap/search`, and `brew upgrade` brings each new version.
 - ⌘S folds the tab bar away in its layout across the top too, as it folds the column: the page takes the whole height, and the bar comes back down over it when the pointer rests against the top edge. The View menu says Hide Tab Bar there.
+- How soon a hidden sidebar comes out: Settings › Tabs › Show the sidebar, under Hide the sidebar until the pointer reaches the edge. Cheetah brings it the moment the pointer touches the left edge, and slides it out faster, Human waits the short moment it always has, and Turtle waits longer, for a pointer that keeps crossing the edge on its way to the Dock.
 
 ### Fixed
 

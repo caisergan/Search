@@ -249,6 +249,12 @@ struct SettingsPanel: View {
                 Line("Hide the sidebar until the pointer reaches the edge", "The page takes the whole window; push against its left edge for the tabs. ⌘S keeps them out.") {
                     Switch(on: $prefs.sideHides)
                 }
+                if prefs.sideHides {
+                    Rule()
+                    Line("Show the sidebar", "How long the pointer rests on the left edge to show the sidebar") {
+                        Segmented(options: Reveal.allCases.map { ($0, $0.title) }, selection: $prefs.sideReveal, icon: { $0.icon })
+                    }
+                }
             }
             Rule()
             Line("Tabs show", "Beside the title, and on a pinned square") {
@@ -531,13 +537,21 @@ struct Segmented<Option: Hashable>: View {
     /// True when the control has the whole width to itself, so the choices
     /// share it evenly instead of each taking only what its word needs.
     var wide = false
+    /// A symbol before a choice's word, for the choices that have one.
+    var icon: (Option) -> String? = { _ in nil }
 
     @Namespace private var slide
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(options, id: \.0) { option, title in
-                Text(title)
+                HStack(spacing: 4) {
+                    if let symbol = icon(option) {
+                        Image(systemName: symbol)
+                            .font(.system(size: 10))
+                    }
+                    Text(title)
+                }
                     .font(.system(size: 11.5, weight: option == selection ? .medium : .regular))
                     .foregroundStyle(option == selection ? Palette.ink : Palette.muted)
                     .lineLimit(1)
