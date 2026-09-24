@@ -1579,6 +1579,15 @@ final class Browser: NSObject, ObservableObject {
         // From a private tab, the new one is private too, as for ⌘-click.
         tab.onMiddleClick = { [weak self] tab, url in self?.open(url, foreground: false, from: tab) }
         tab.onCross = { [weak self] tab, url in self?.replace(tab, going: url) }
+        // A page reached without a load is kept like one reached with it, or
+        // the video you went on to from another is nowhere in the history.
+        // Only when it is another page: a #section of the same one isn't.
+        // The title may still be the last page's; it is put right as the
+        // page sets its own (see retitle).
+        tab.onMovedInPlace = { [weak self] tab, from, to in
+            guard let self, !tab.shy, !tab.bench, History.key(for: from) != History.key(for: to) else { return }
+            history.record(to, title: tab.title)
+        }
 
         // The caret in a sign-in box: the accounts kept for this site hang
         // from the box, and go when the caret does. Nothing is filled on
