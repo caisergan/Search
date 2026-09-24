@@ -142,6 +142,15 @@ struct Fold: View {
         browser.folded && browser.active?.immersed != true
     }
 
+    /// A panel over the window — Settings, History and the rest, drawn over
+    /// everything, the column too. Under one, the edge is the panel's: a
+    /// column brought out beneath it could be seen but not reached, its
+    /// clicks landing on the panel's dimmed ground instead.
+    private var covered: Bool {
+        browser.tuning || browser.recalling || browser.hoarding || browser.bookmarking
+            || browser.managing || browser.welcoming || browser.reviewing
+    }
+
     private var lightsOff: Bool {
         browser.folded && !browser.peeking
     }
@@ -153,6 +162,11 @@ struct Fold: View {
     /// edge stopped opening it.
     private func follow() {
         guard folding, let window = pointer.window, window.isVisible else { return pass() }
+        if covered {
+            pass()
+            if browser.peeking { peek(false) }
+            return
+        }
         let screen = NSEvent.mouseLocation
         let point = window.convertPoint(fromScreen: screen)
         let size = window.frame.size
@@ -168,6 +182,11 @@ struct Fold: View {
         if browser.peeking {
             pass()
             inside = onOwnPanel || (onWindow && inWindow && distance < (prefs.sidebar ? prefs.sideWidth : Metrics.strip))
+            // With a button held — the column's edge pulled wider, a tab
+            // carried along it — the pointer may stray past the column
+            // without the column going in under the hand. The next move
+            // after it is let go settles it.
+            if !inside, NSEvent.pressedMouseButtons != 0 { return }
             peek(inside)
         } else if onWindow, inWindow, distance < Fold.edge {
             if arriving == nil { arrive() }
