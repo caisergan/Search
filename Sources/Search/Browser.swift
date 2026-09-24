@@ -1712,7 +1712,7 @@ final class Browser: NSObject, ObservableObject {
         // Three places and, if it can't be a place, a search. No open pages:
         // ⌘K exists for those, and mixing them in here made the list long
         // enough that reading it cost more than typing the address would have.
-        var list = history.suggestions(for: typed, limit: 3)
+        var list = history.suggestions(for: typed, limit: 3, bookmarks: Bookmarks.sites(bookmarks.roots))
         // Last in the list, and only when what was typed cannot be a place.
         if !typed.isEmpty,
            Address.url(from: typed) == nil,
@@ -1732,16 +1732,16 @@ final class Browser: NSObject, ObservableObject {
     /// typed. On an empty field this is the whole point of the summon: it is
     /// the tab strip, except you read it only when you ask for it.
     private func openPages(matching typed: String) -> [Suggestion] {
-        let needle = typed.trimmingCharacters(in: .whitespaces).lowercased()
+        let words = Words(typed)
         return tabs
             .filter { $0.id != activeID && !$0.isBlank }
             .filter { tab in
-                guard !needle.isEmpty else { return true }
+                guard !words.isEmpty else { return true }
                 let address = tab.address.map { Address.pretty($0) } ?? ""
-                return tab.label.lowercased().contains(needle) || address.contains(needle)
+                return words.fit(in: Words.fold(tab.label + " " + address)) != nil
             }
             .sorted { $0.touched > $1.touched }
-            .prefix(needle.isEmpty ? 6 : 3)
+            .prefix(words.isEmpty ? 6 : 3)
             .compactMap { tab in
                 guard let url = tab.address else { return nil }
                 return Suggestion(

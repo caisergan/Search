@@ -56,6 +56,29 @@ enum Engine: String, CaseIterable, Identifiable {
         return URL(string: base.replacingOccurrences(of: mark, with: escaped), encodingInvalidCharacters: false)
     }
 
+    /// Whether an address is a page of results from one of the engines above,
+    /// whichever is chosen. The history keeps them; the address field doesn't
+    /// offer them back.
+    static func isResults(_ url: URL) -> Bool {
+        guard let host = url.host()?.lowercased() else { return false }
+        let bare = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        let path = url.path().isEmpty ? "/" : url.path()
+        guard let page = results.first(where: { $0.host == bare && $0.path == path }) else { return false }
+        let asked = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        return asked.contains { $0.name == page.field }
+    }
+
+    /// Where each engine answers, and the parameter the words go in.
+    private static let results: [(host: String, path: String, field: String)] = allCases.compactMap { engine in
+        guard engine != .custom,
+              let parts = URLComponents(string: engine.template(custom: "").replacingOccurrences(of: "%s", with: mark)),
+              let host = parts.host?.lowercased(),
+              let field = parts.queryItems?.first(where: { $0.value == mark })?.name
+        else { return nil }
+        let bare = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        return (bare, parts.path.isEmpty ? "/" : parts.path, field)
+    }
+
     private static let mark = "SEARCHWORDSGOHERE"
 
     private static let unreserved = CharacterSet(
