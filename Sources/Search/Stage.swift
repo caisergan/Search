@@ -103,7 +103,7 @@ private struct Disc: View {
                 .stroke(Palette.ink, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .padding(0.75)
-            Image(systemName: pull.back ? "arrow.left" : "arrow.right")
+            Image(systemName: pull.closes ? "xmark" : pull.back ? "arrow.left" : "arrow.right")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Palette.ink.opacity(0.4 + 0.6 * grown))
         }
