@@ -307,6 +307,10 @@ struct SettingsPanel: View {
                 Line("Hide the sidebar until the pointer reaches the edge", "The page takes the whole window; push against its left edge for the tabs. ⌘S keeps them out.") {
                     Switch(on: $prefs.sideHides)
                 }
+                Rule()
+                Line("Show the address in the sidebar", "Over the tabs, under the lights. A click, or ⌘L, opens the field from there.") {
+                    Switch(on: $prefs.sideAddress)
+                }
                 if prefs.sideHides {
                     Rule()
                     Line("Show the sidebar", "How long the pointer rests on the left edge to show the sidebar") {

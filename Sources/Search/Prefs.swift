@@ -185,6 +185,12 @@ final class Preferences: ObservableObject {
     @Published var sideHides: Bool {
         didSet { store.set(sideHides, forKey: "sidebar.hides") }
     }
+    /// The page's address at the head of the column, under the lights, and
+    /// the field unfurling from it (see SideAddress.swift). On unless
+    /// turned off.
+    @Published var sideAddress: Bool {
+        didSet { store.set(sideAddress, forKey: "sidebar.address") }
+    }
     /// The tabs loaded when Search opens, rather than waiting for a click.
     /// Pinned unless changed.
     @Published var startLoad: StartLoad {
@@ -351,6 +357,7 @@ final class Preferences: ObservableObject {
         sidebar = store.object(forKey: "sidebar") as? Bool
             ?? (store.string(forKey: "manner") == "side")
         sideHides = store.bool(forKey: "sidebar.hides")
+        sideAddress = store.object(forKey: "sidebar.address") as? Bool ?? true
         pinnedFolded = store.bool(forKey: "sidebar.pinned.folded")
         // The switch this replaced: on was the Essentials and pinned lines.
         startLoad = store.string(forKey: "start.load").flatMap(StartLoad.init)

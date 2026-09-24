@@ -360,7 +360,20 @@ struct ContentView: View {
     /// own whenever a tab has nowhere to be yet.
     @ViewBuilder
     private var field: some View {
-        if browser.fieldShowing {
+        if browser.fieldShowing, browser.fieldInColumn {
+            // The page out of the way as it is for the field in the middle,
+            // and the column left as it is: the field is unfurling from it.
+            Rectangle()
+                .fill(Palette.ground.opacity(0.5))
+                .padding(.leading, browser.prefs.sideWidth)
+                .contentShape(Rectangle())
+                .onTapGesture { browser.dismiss() }
+                .ignoresSafeArea()
+                .transition(.opacity)
+            ColumnField(browser: browser)
+                .ignoresSafeArea()
+                .transition(.asymmetric(insertion: .identity, removal: .opacity))
+        } else if browser.fieldShowing {
             Omnibox(browser: browser, over: !(browser.active?.isBlank ?? true))
                 // Centred on the page, not on the window. The column of tabs
                 // is not what the field is standing over, and dimming it along
@@ -419,6 +432,10 @@ struct ContentView: View {
             .overlay(alignment: .bottom) { bars }
             .overlay { field }
             .overlay { panels }
+            // Where the address in the column is measured and the field
+            // unfurled from it is placed: one space for the window, the
+            // column's own and the one folded out over the page alike.
+            .coordinateSpace(.named(SideAddress.space))
             .animation(Motion.settle, value: browser.fieldShowing)
             .background(WindowSetup { window = $0; dress($0) })
             .onChange(of: browser.prefs.sidebar) { _, _ in

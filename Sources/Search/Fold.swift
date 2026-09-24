@@ -28,8 +28,9 @@ import SwiftUI
 // Folded by hand with ⌘S, it comes at once and at its usual pace, as it
 // always did.
 //
-// While a tab's address is being typed into its row, the column stays out:
-// the pointer drifting off it is no reason to take the field away.
+// While a tab's address is being typed into its row, or into the field
+// unfurled from the address at its head, the column stays out: the pointer
+// drifting off it is no reason to take the field away.
 //
 // The strip across the top folds the same way: up out of the window, the
 // page taking the full height, and back down over the page when the pointer
@@ -141,6 +142,11 @@ struct Fold: View {
         .onChange(of: browser.editingTab) { _, editing in
             if editing == nil, !inside, browser.peeking { peek(false) }
         }
+        // The same for the field unfurled from the address at the column's
+        // head: the column holds it until it is put away.
+        .onChange(of: browser.fieldInColumn) { _, open in
+            if !open, !inside, browser.peeking { peek(false) }
+        }
     }
 
     /// Folded, and not taken over by a page filling the screen.
@@ -235,7 +241,7 @@ struct Fold: View {
             guard leaving == nil else { return }
             let going = DispatchWorkItem {
                 leaving = nil
-                guard browser.editingTab == nil else { return }
+                guard browser.editingTab == nil, !browser.fieldInColumn else { return }
                 browser.peek(false)
             }
             leaving = going
