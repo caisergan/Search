@@ -101,4 +101,6 @@ struct Pull: Equatable {
     var armed: Bool
     /// Let go while armed: the page is on its way, and the disc leaves.
     var going: Bool
+    /// Back, on a page with nowhere back to go: letting go closes the tab.
+    var closes = false
 }

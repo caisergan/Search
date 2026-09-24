@@ -1745,6 +1745,7 @@ final class Browser: NSObject, ObservableObject {
         tab.onPickTrouble = { [weak self] _, reason in
             self?.announce("Couldn't hide that — \(reason)")
         }
+        tab.onSwipeClose = { [weak self] tab in self?.close(tab) }
 
         // The line at the bottom doubles as the zoom read-out: it keeps being
         // rewritten while you pinch and fades a moment after you stop. Put

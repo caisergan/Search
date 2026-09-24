@@ -252,6 +252,8 @@ final class Tab: ObservableObject, Identifiable {
     var onImageMenu: ((Tab, URL) -> Void)?
     /// "Add to Search" was pressed on the Chrome Web Store page this tab shows.
     var onStoreAdd: ((Tab) -> Void)?
+    /// Swiped back with nowhere back to go: the tab is to be closed.
+    var onSwipeClose: ((Tab) -> Void)?
     /// The extension whose store page has its own "Add to Search" button in
     /// place — so the bar at the bottom of the window doesn't offer it twice.
     @Published var storePlaced: String?
@@ -355,6 +357,10 @@ final class Tab: ObservableObject, Identifiable {
         // PageView, and it moves nothing but a disc.
         web.allowsBackForwardNavigationGestures = false
         web.onPull = { [weak self] pull in self?.pull = pull }
+        web.onSwipeClose = { [weak self] in
+            guard let self else { return }
+            onSwipeClose?(self)
+        }
         web.onTouch = { [weak self] in self?.uncover() }
         web.holdForFirstFrame()
         // Pages follow the appearance of the window they are drawn in, and the
@@ -940,6 +946,7 @@ final class Tab: ObservableObject, Identifiable {
         onPick = nil
         onPickEnd = nil
         onSignIn = nil
+        onSwipeClose = nil
         onField = nil
         onCredentials = nil
         discard()
@@ -1130,6 +1137,10 @@ final class PageView: WKWebView {
     private var asked: Date?
     /// Already went somewhere, or was refused: nothing more this gesture.
     private var spent = false
+    /// Back with no page behind this one: letting go closes the tab instead.
+    private var closing = false
+    /// How the tab is closed; nil where a swipe should never close anything.
+    var onSwipeClose: (() -> Void)?
     private var armedNow = false
     private var showing = false
     private var going = false
@@ -1238,6 +1249,7 @@ final class PageView: WKWebView {
             free = nil
             asked = nil
             spent = false
+            closing = false
             armedNow = false
             showing = false
             // A disc still on its way out belongs to the last gesture. It is
@@ -1263,9 +1275,12 @@ final class PageView: WKWebView {
                     return
                 }
                 back = sideways > 0
+                // Nowhere back to go: the same swipe closes the tab, the way
+                // it does in Arc. ⇧⌘T brings it back.
+                closing = back && !canGoBack && onSwipeClose != nil
                 // Nowhere to go that way: nothing to show, and nothing more
                 // to read from this gesture.
-                if back ? !canGoBack : !canGoForward {
+                if !closing, back ? !canGoBack : !canGoForward {
                     spent = true
                     return
                 }
@@ -1329,7 +1344,7 @@ final class PageView: WKWebView {
             )
         }
         armedNow = armed
-        settle(Pull(back: back, travel: travel, armed: armed, going: false))
+        settle(Pull(back: back, travel: travel, armed: armed, going: false, closes: closing))
     }
 
     private func release() {
@@ -1339,8 +1354,13 @@ final class PageView: WKWebView {
             return
         }
         going = true
-        settle(Pull(back: back, travel: travel, armed: true, going: true))
-        if back { goBack() } else { goForward() }
+        settle(Pull(back: back, travel: travel, armed: true, going: true, closes: closing))
+        if closing {
+            // After this event is done with the view, not while it is still
+            // inside it.
+            let close = onSwipeClose
+            DispatchQueue.main.async { close?() }
+        } else if back { goBack() } else { goForward() }
         pulls += 1
         let mine = pulls
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
