@@ -729,11 +729,11 @@ private struct PinSquare: View {
             if browser.editingPin == tab.id {
                 PinField(browser: browser, tab: tab)
             } else if prefs.glyph == .icons, let icon = tab.icon {
-                Mark(icon: icon, letter: tab.pin ?? "", size: scale * 16 / 34, dim: tab.asleep)
+                Mark(icon: icon, letter: tab.pin ?? "", size: scale * 16 / 34)
             } else {
                 Text(tab.pin ?? "")
                     .font(.system(size: scale * 12 / 34, weight: .medium))
-                    .foregroundStyle((live ? Palette.ink : Palette.muted).opacity(tab.asleep ? 0.45 : 1))
+                    .foregroundStyle(live ? Palette.ink : Palette.muted)
             }
         }
         .frame(width: scale * 16 / 34, height: scale * 16 / 34)
@@ -843,9 +843,6 @@ private struct SideRow: View {
     @State private var hovering = false
     @State private var shake: CGFloat = 0
 
-    /// A pinned line put down with ⌘W: there, and paler, until opened.
-    private var resting: Bool { tab.kept && tab.asleep && !live }
-
     /// A pinned line's button unpins it; any other line's closes it.
     private var unpins: Bool { tab.kept }
 
@@ -863,7 +860,7 @@ private struct SideRow: View {
                     .frame(height: prefs.tabSize.field)
             } else {
                 if prefs.glyph == .icons, !tab.isBlank {
-                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark, dim: resting)
+                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark)
                 }
                 if tab.bench {
                     // A script's tab, not yours.
@@ -880,7 +877,7 @@ private struct SideRow: View {
                     .font(.system(size: prefs.tabSize.text))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .foregroundStyle(colour.opacity(resting ? 0.6 : 1))
+                    .foregroundStyle(colour)
             }
 
             if status {

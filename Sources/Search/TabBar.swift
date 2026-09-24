@@ -395,8 +395,6 @@ private struct TabPill: View {
     private var pinned: Bool { tab.pin != nil && !editing }
     /// Pinned as a line in the column: its button unpins it (see TabEnd).
     private var unpins: Bool { tab.kept }
-    /// A tab pinned as a line and put down with ⌘W: there, and paler.
-    private var resting: Bool { tab.kept && tab.asleep && !live }
     /// Too narrow for a title: the site's mark alone, the title in the
     /// tooltip, and ⌘W or the menu to close it — a cross on something this
     /// small would be what a click to pick the tab lands on.
@@ -416,13 +414,11 @@ private struct TabPill: View {
                     if browser.editingPin == tab.id {
                         PinField(browser: browser, tab: tab)
                     } else if prefs.glyph == .icons, let icon = tab.icon {
-                        Mark(icon: icon, letter: tab.pin ?? "", size: prefs.tabSize.mark + 1, dim: tab.asleep)
+                        Mark(icon: icon, letter: tab.pin ?? "", size: prefs.tabSize.mark + 1)
                     } else {
                         Text(tab.pin ?? "")
                             .font(.system(size: prefs.tabSize.text - 0.5, weight: .medium))
-                            // A pin holding no page is still there and still
-                            // yours; it just isn't costing anything.
-                            .foregroundStyle(colour.opacity(tab.asleep ? 0.45 : 1))
+                            .foregroundStyle(colour)
                     }
                 }
                 .frame(width: prefs.tabSize.mark + 1, height: prefs.tabSize.mark + 1)
@@ -479,7 +475,7 @@ private struct TabPill: View {
                 if tab.loading {
                     Ring()
                 } else {
-                    Mark(icon: prefs.glyph == .icons ? tab.icon : nil, letter: tab.monogram, size: prefs.tabSize.mark, dim: tab.asleep)
+                    Mark(icon: prefs.glyph == .icons ? tab.icon : nil, letter: tab.monogram, size: prefs.tabSize.mark)
                 }
             }
             .frame(width: prefs.tabSize.mark + 1, height: prefs.tabSize.mark + 1)
@@ -497,7 +493,7 @@ private struct TabPill: View {
                     .frame(height: prefs.tabSize.field)
             } else {
                 if prefs.glyph == .icons, !tab.isBlank {
-                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark, dim: resting)
+                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark)
                 }
                 if tab.bench {
                     // A script's tab, not yours.
@@ -515,7 +511,7 @@ private struct TabPill: View {
                     .font(.system(size: prefs.tabSize.text))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .foregroundStyle(colour.opacity(resting ? 0.6 : 1))
+                    .foregroundStyle(colour)
             }
 
             Spacer(minLength: 2)
