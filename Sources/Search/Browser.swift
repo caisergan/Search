@@ -1326,9 +1326,8 @@ final class Browser: NSObject, ObservableObject {
             Tab(configuration: page)
         }
         prepare(tab)
-        let here = atEnd ? nil : tabs.firstIndex { $0.id == activeID }
-        // Opened from a pinned tab, it goes to the head of the ordinary ones.
-        tabs.insert(tab, at: here.map { max($0 + 1, block(.loose).lowerBound) } ?? tabs.count)
+        tabs.insert(tab, at: atEnd ? tabs.count : slot(under: (source ?? active)?.id))
+        tab.parent = atEnd ? nil : source?.id
         tab.go(to: url)
         if foreground {
             leaving()
@@ -1337,6 +1336,18 @@ final class Browser: NSObject, ObservableObject {
             typed = ""
         }
         return tab
+    }
+
+    /// Where a tab opened from `source` goes: straight under it, after any
+    /// opened from it before that still sit there, as in Chrome — three links
+    /// opened one after another read in the order they were opened. From a
+    /// pinned tab, at the head of the ordinary ones. With nothing to go
+    /// under, at the end.
+    private func slot(under source: Tab.ID?) -> Int {
+        guard let source, let here = tabs.firstIndex(where: { $0.id == source }) else { return tabs.count }
+        var at = max(here + 1, block(.loose).lowerBound)
+        while at < tabs.count, tabs[at].parent == source { at += 1 }
+        return at
     }
 
     /// An extension's page sending its own tab to a website — 1Password's
@@ -1986,8 +1997,11 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     ) -> WKWebView? {
         let from = tab(for: webView)?.id ?? activeID
         let tab = Tab(shy: tab(for: webView)?.shy ?? false, configuration: configuration)
-        adopt(tab)
+        prepare(tab)
+        // Under the tab it came from, not at the end of the row.
+        tabs.insert(tab, at: slot(under: from))
         tab.opener = from
+        tab.parent = from
         activeID = tab.id
         editing = false
         // Returning the view is what makes it the target. WebKit loads the

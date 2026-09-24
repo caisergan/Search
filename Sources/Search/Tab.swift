@@ -278,6 +278,10 @@ final class Tab: ObservableObject, Identifiable {
     /// hand you back to it when they are done.
     var opener: Tab.ID?
 
+    /// The tab a link opened this one from. Others opened from it after this
+    /// one line up under it in the order they came (Browser.slot).
+    var parent: Tab.ID?
+
     /// One letter, when the tab has been pinned. A pinned tab keeps its place
     /// at the head of the row and gives up its title for that letter — which
     /// is all you need for the five or six pages you keep open all day.
