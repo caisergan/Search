@@ -60,10 +60,21 @@ enum Palette {
 
 /// What the window is made of around the page. Plain is the white (or
 /// black) it always was. The rest are glass: the desktop shows through the
-/// tabs and the bar, frosted, tinted by the theme's colour, and the page sits
-/// on it as a card with rounded corners — the one opaque thing in the window.
+/// tabs and the bar, blurred, coloured by the theme, and the page sits on it
+/// as a card with rounded corners — the one opaque thing in the window.
+///
+/// The colour comes four ways: none, for plain glass; one hue laid evenly;
+/// a gradient of two or three colours across the window; or glows, soft
+/// spots of colour on a deeper ground, the richest of them. Each is stored
+/// by its name, so a theme can be added anywhere in the list.
 enum Theme: String, CaseIterable, Identifiable {
-    case plain, glass, dusk, ocean, forest, orchid, midnight
+    case plain, glass
+    // Hues
+    case graphite, rose, amber, lime, teal, sky, indigo, violet
+    // Gradients
+    case dusk, sunset, peach, citrus, mint, forest, lagoon, ocean, aurora, orchid, berry, candy, ember, nebula, midnight
+    // Glows
+    case nova, borealis, reef, dream, lava, cosmos
 
     var id: String { rawValue }
 
@@ -71,28 +82,108 @@ enum Theme: String, CaseIterable, Identifiable {
         switch self {
         case .plain: return "Plain"
         case .glass: return "Glass"
-        case .dusk: return "Dusk"
-        case .ocean: return "Ocean"
-        case .forest: return "Forest"
-        case .orchid: return "Orchid"
-        case .midnight: return "Midnight"
+        default: return rawValue.prefix(1).uppercased() + rawValue.dropFirst()
+        }
+    }
+
+    /// The four ways, in the order the picker shows them.
+    enum Family: CaseIterable {
+        case basic, hue, gradient, glow
+
+        var title: String {
+            switch self {
+            case .basic: return "Basic"
+            case .hue: return "Hues"
+            case .gradient: return "Gradients"
+            case .glow: return "Glows"
+            }
+        }
+
+        var themes: [Theme] { Theme.allCases.filter { $0.family == self } }
+    }
+
+    var family: Family {
+        switch paint {
+        case .none: return .basic
+        case .hue: return .hue
+        case .linear: return .gradient
+        case .glow: return .glow
         }
     }
 
     /// Everything but plain lets the desktop through.
     var isGlass: Bool { self != .plain }
 
-    /// The colour laid over the frost, from the top left corner to the
-    /// bottom right. None for plain glass.
-    var tint: [Color] {
+    /// How a theme's colour is laid over the blur.
+    enum Paint {
+        case none
+        case hue(Color)
+        /// Colours evenly spaced from one point of the window to another.
+        case linear([Color], from: UnitPoint, to: UnitPoint)
+        /// A ground, and spots of colour on it, each fading out from its
+        /// point.
+        case glow(ground: Color, spots: [(Color, UnitPoint)])
+    }
+
+    var paint: Paint {
         func rgb(_ r: Double, _ g: Double, _ b: Double) -> Color { Color(red: r, green: g, blue: b) }
         switch self {
-        case .plain, .glass: return []
-        case .dusk: return [rgb(0.95, 0.58, 0.30), rgb(0.80, 0.34, 0.40)]
-        case .ocean: return [rgb(0.22, 0.60, 0.82), rgb(0.14, 0.30, 0.66)]
-        case .forest: return [rgb(0.36, 0.64, 0.42), rgb(0.16, 0.40, 0.32)]
-        case .orchid: return [rgb(0.66, 0.46, 0.88), rgb(0.90, 0.46, 0.66)]
-        case .midnight: return [rgb(0.24, 0.26, 0.48), rgb(0.08, 0.09, 0.20)]
+        case .plain, .glass: return .none
+
+        case .graphite: return .hue(rgb(0.30, 0.32, 0.36))
+        case .rose: return .hue(rgb(0.93, 0.36, 0.50))
+        case .amber: return .hue(rgb(0.96, 0.62, 0.18))
+        case .lime: return .hue(rgb(0.52, 0.80, 0.26))
+        case .teal: return .hue(rgb(0.12, 0.66, 0.64))
+        case .sky: return .hue(rgb(0.30, 0.64, 0.96))
+        case .indigo: return .hue(rgb(0.34, 0.36, 0.90))
+        case .violet: return .hue(rgb(0.62, 0.38, 0.92))
+
+        case .dusk: return .linear([rgb(0.95, 0.58, 0.30), rgb(0.80, 0.34, 0.40)], from: .topLeading, to: .bottomTrailing)
+        case .sunset: return .linear([rgb(1.00, 0.66, 0.26), rgb(0.95, 0.33, 0.45), rgb(0.50, 0.24, 0.66)], from: .top, to: .bottom)
+        case .peach: return .linear([rgb(1.00, 0.78, 0.60), rgb(0.98, 0.52, 0.52)], from: .topLeading, to: .bottomTrailing)
+        case .citrus: return .linear([rgb(0.98, 0.86, 0.28), rgb(0.98, 0.54, 0.16)], from: .topLeading, to: .bottomTrailing)
+        case .mint: return .linear([rgb(0.60, 0.94, 0.76), rgb(0.24, 0.72, 0.70)], from: .top, to: .bottom)
+        case .forest: return .linear([rgb(0.36, 0.64, 0.42), rgb(0.16, 0.40, 0.32)], from: .topLeading, to: .bottomTrailing)
+        case .lagoon: return .linear([rgb(0.20, 0.86, 0.86), rgb(0.12, 0.44, 0.84)], from: .topLeading, to: .bottomTrailing)
+        case .ocean: return .linear([rgb(0.22, 0.60, 0.82), rgb(0.14, 0.30, 0.66)], from: .topLeading, to: .bottomTrailing)
+        case .aurora: return .linear([rgb(0.30, 0.90, 0.60), rgb(0.16, 0.62, 0.78), rgb(0.52, 0.34, 0.90)], from: .topLeading, to: .bottomTrailing)
+        case .orchid: return .linear([rgb(0.66, 0.46, 0.88), rgb(0.90, 0.46, 0.66)], from: .topLeading, to: .bottomTrailing)
+        case .berry: return .linear([rgb(0.86, 0.22, 0.56), rgb(0.44, 0.18, 0.62)], from: .top, to: .bottom)
+        case .candy: return .linear([rgb(0.98, 0.56, 0.78), rgb(0.56, 0.72, 0.98)], from: .topLeading, to: .bottomTrailing)
+        case .ember: return .linear([rgb(0.96, 0.44, 0.16), rgb(0.62, 0.10, 0.14)], from: .top, to: .bottom)
+        case .nebula: return .linear([rgb(0.60, 0.30, 0.86), rgb(0.26, 0.20, 0.64), rgb(0.08, 0.08, 0.22)], from: .topLeading, to: .bottomTrailing)
+        case .midnight: return .linear([rgb(0.24, 0.26, 0.48), rgb(0.08, 0.09, 0.20)], from: .topLeading, to: .bottomTrailing)
+
+        case .nova: return .glow(ground: rgb(0.18, 0.08, 0.30), spots: [
+            (rgb(1.00, 0.42, 0.62), .topLeading), (rgb(0.40, 0.46, 1.00), .bottomTrailing), (rgb(1.00, 0.70, 0.30), .bottomLeading),
+        ])
+        case .borealis: return .glow(ground: rgb(0.04, 0.14, 0.20), spots: [
+            (rgb(0.24, 0.96, 0.62), .top), (rgb(0.30, 0.56, 1.00), .bottomLeading), (rgb(0.66, 0.36, 0.96), .trailing),
+        ])
+        case .reef: return .glow(ground: rgb(0.02, 0.24, 0.34), spots: [
+            (rgb(1.00, 0.50, 0.42), .topTrailing), (rgb(0.16, 0.86, 0.80), .leading), (rgb(1.00, 0.84, 0.40), .bottom),
+        ])
+        case .dream: return .glow(ground: rgb(0.86, 0.80, 0.96), spots: [
+            (rgb(0.98, 0.64, 0.82), .topLeading), (rgb(0.62, 0.78, 1.00), .trailing), (rgb(0.78, 0.66, 1.00), .bottom),
+        ])
+        case .lava: return .glow(ground: rgb(0.20, 0.03, 0.04), spots: [
+            (rgb(1.00, 0.36, 0.10), .bottomLeading), (rgb(0.96, 0.12, 0.30), .topTrailing), (rgb(1.00, 0.72, 0.20), .center),
+        ])
+        case .cosmos: return .glow(ground: rgb(0.03, 0.03, 0.10), spots: [
+            (rgb(0.38, 0.20, 0.90), .topLeading), (rgb(0.10, 0.60, 0.90), .bottomTrailing), (rgb(0.90, 0.24, 0.70), .trailing),
+        ])
+        }
+    }
+
+    /// How thickly the colour is laid over the blur: a glow nearly hides
+    /// the desktop, a hue only tints it.
+    var strength: Double {
+        switch family {
+        case .basic: return 0
+        case .hue: return 0.42
+        case .gradient: return 0.50
+        case .glow: return 0.72
         }
     }
 
@@ -100,6 +191,38 @@ enum Theme: String, CaseIterable, Identifiable {
     /// corners are, when it is a card.
     static let inset: CGFloat = 8
     static let corner: CGFloat = 12
+}
+
+/// A theme's colour, drawn to fill whatever it is given — the window, or a
+/// swatch in Settings.
+struct ThemePaint: View {
+    let theme: Theme
+
+    var body: some View {
+        switch theme.paint {
+        case .none:
+            Color.clear
+        case .hue(let colour):
+            colour
+        case .linear(let colours, let from, let to):
+            LinearGradient(colors: colours, startPoint: from, endPoint: to)
+        case .glow(let ground, let spots):
+            GeometryReader { geo in
+                let reach = max(geo.size.width, geo.size.height) * 0.75
+                ZStack {
+                    ground
+                    ForEach(spots.indices, id: \.self) { index in
+                        RadialGradient(
+                            colors: [spots[index].0, spots[index].0.opacity(0)],
+                            center: spots[index].1,
+                            startRadius: 0,
+                            endRadius: reach
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A theme's glass: the desktop, blurred until only its colours are left,
@@ -118,14 +241,13 @@ struct Backdrop: View {
         let dark = scheme == .dark
         ZStack {
             Blur()
-            // Black under white ink, white under black: just enough for the
-            // titles, never so much the desktop's colours go grey.
+            ThemePaint(theme: theme)
+                .opacity(theme.strength)
+            // Black under white ink, white under black, over the colour
+            // rather than under it: the colour can be as rich as it likes
+            // and the titles still read, never so much it all goes grey.
             (dark ? Color.black : Color.white)
                 .opacity(dark ? 0.30 : 0.34)
-            if !theme.tint.isEmpty {
-                LinearGradient(colors: theme.tint, startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .opacity(dark ? 0.20 : 0.16)
-            }
         }
         .allowsHitTesting(false)
     }

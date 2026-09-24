@@ -282,10 +282,12 @@ struct SettingsPanel: View {
     }
 
     private var themeDetail: String {
-        switch prefs.theme {
-        case .plain: return "The window around the page in one solid colour"
-        case .glass: return "The desktop shows through the tabs, frosted, and the page sits on it as a card"
-        default: return "The desktop shows through the tabs, frosted and tinted, and the page sits on it as a card"
+        switch prefs.theme.family {
+        case .basic where prefs.theme == .plain: return "The window around the page in one solid colour"
+        case .basic: return "The desktop shows through the tabs, blurred, and the page sits on it as a card"
+        case .hue: return "The desktop shows through the tabs, blurred and tinted \(prefs.theme.title.lowercased()), the page a card on it"
+        case .gradient: return "The desktop shows through the tabs, blurred under a gradient, the page a card on it"
+        case .glow: return "Soft glows of colour over the blurred desktop, the page a card on them"
         }
     }
 
@@ -650,16 +652,111 @@ struct Segmented<Option: Hashable>: View {
 
 /// Every theme as a small window of its own — the column, and the page as it
 /// sits beside it — its name under it, and a ring round the one in use.
+///
+/// More of them than the card is wide, so they run on sideways in one row,
+/// each kind under its own word: two fingers slide it, and the arrows at
+/// either end step it along for a mouse, whose wheel only goes up and down.
 struct ThemePicker: View {
     @Binding var selection: Theme
 
+    /// The first theme in view, kept by the row as it slides.
+    @State private var first: Theme?
+    @State private var width: CGFloat = 0
+
+    private static let swatch: CGFloat = 58
+    private static let gap: CGFloat = 8
+    /// The extra air before the first theme of each kind.
+    private static let kindGap: CGFloat = 12
+
+    private var all: [Theme] { Theme.allCases }
+
+    /// How many fit side by side, and how far an arrow goes: all but one,
+    /// so the one at the edge stays in view as a landmark.
+    private var fits: Int { max(1, Int(width / (Self.swatch + Self.gap))) }
+    private var at: Int { first.flatMap { all.firstIndex(of: $0) } ?? 0 }
+    private var more: Bool { at + fits < all.count }
+
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(Theme.allCases) { theme in
-                Swatch(theme: theme, on: theme == selection)
-                    .onTapGesture { withAnimation(Motion.settle) { selection = theme } }
+        ScrollViewReader { reader in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: Self.gap) {
+                    ForEach(all) { theme in
+                        let opens = theme.family.themes.first == theme
+                        VStack(alignment: .leading, spacing: 6) {
+                            // The kind's word over its first theme, and
+                            // room for it over the rest.
+                            Text(opens ? theme.family.title : " ")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(Palette.muted)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .frame(width: Self.swatch, alignment: .leading)
+                            Swatch(theme: theme, on: theme == selection)
+                                .frame(width: Self.swatch)
+                                .onTapGesture { withAnimation(Motion.settle) { selection = theme } }
+                        }
+                        .padding(.leading, opens && theme != all.first ? Self.kindGap : 0)
+                        .id(theme)
+                    }
+                }
+                .scrollTargetLayout()
             }
+            .scrollPosition(id: $first, anchor: .leading)
+            .background {
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { width = geo.size.width }
+                        .onChange(of: geo.size.width) { _, new in width = new }
+                }
+            }
+            // The row fades out under an arrow, so it reads as going on.
+            .mask {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: at > 0 ? 28 : 0)
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: more ? 28 : 0)
+                }
+            }
+            .overlay(alignment: .leading) {
+                if at > 0 {
+                    arrow("chevron.left") { step(-1, reader) }
+                }
+            }
+            .overlay(alignment: .trailing) {
+                if more {
+                    arrow("chevron.right") { step(1, reader) }
+                }
+            }
+            .animation(Motion.quick, value: at)
+            .animation(Motion.quick, value: more)
+            // The one in use, in view, whichever it is.
+            .onAppear { reader.scrollTo(selection, anchor: .center) }
         }
+    }
+
+    private func step(_ direction: Int, _ reader: ScrollViewProxy) {
+        let stride = max(1, fits - 1)
+        let to = min(max(0, at + direction * stride), all.count - 1)
+        withAnimation(Motion.glide) { reader.scrollTo(all[to], anchor: .leading) }
+    }
+
+    /// Level with the swatches, under the kinds' words.
+    private func arrow(_ icon: String, act: @escaping () -> Void) -> some View {
+        Button(action: act) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Palette.ink)
+                .frame(width: 22, height: 22)
+                .background(Palette.ground, in: Circle())
+                .overlay(Circle().strokeBorder(Palette.hairline, lineWidth: 1))
+                .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 2)
+        .transition(.opacity)
     }
 
     private struct Swatch: View {
@@ -700,10 +797,8 @@ struct ThemePicker: View {
                 if theme.isGlass {
                     // What frost looks like, without a desktop to frost.
                     LinearGradient(colors: [Palette.faint.opacity(0.9), Palette.wash], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    if !theme.tint.isEmpty {
-                        LinearGradient(colors: theme.tint, startPoint: .topLeading, endPoint: .bottomTrailing)
-                            .opacity(0.75)
-                    }
+                    ThemePaint(theme: theme)
+                        .opacity(min(1, theme.strength + 0.3))
                 } else {
                     Palette.ground
                 }
