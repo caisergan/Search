@@ -707,6 +707,10 @@ final class Bench {
             guard let id = request["id"] as? String,
                   let tab = browser.tabs.first(where: { Bench.short($0) == id })
             else { answer(["error": "pin needs a tab id"]); return }
+            if how == "essential" || how == "line", tab.isBlank {
+                answer(["error": "a blank tab can't be pinned"])
+                return
+            }
             switch how {
             case "essential": browser.pin(tab)
             case "line": browser.keep(tab)
@@ -1065,6 +1069,7 @@ final class Bench {
             if let on = request["spaces"] as? Bool { browser.prefs.usesSpaces = on }
             if let on = request["hides"] as? Bool { browser.prefs.sideHides = on }
             if let on = request["folded"] as? Bool { browser.folded = on }
+            if let on = request["pinnedfolded"] as? Bool { browser.prefs.pinnedFolded = on }
             if let on = request["peek"] as? Bool { browser.peeking = on }
             // The address of the tab on screen being edited in the tab, with
             // this typed, and that edit let go of by a click elsewhere.

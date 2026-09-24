@@ -393,6 +393,10 @@ private struct TabPill: View {
 
     private var editing: Bool { browser.editingTab == tab.id }
     private var pinned: Bool { tab.pin != nil && !editing }
+    /// Pinned as a line in the column: its button unpins it (see TabEnd).
+    private var unpins: Bool { tab.kept }
+    /// A tab pinned as a line and put down with ⌘W: there, and paler.
+    private var resting: Bool { tab.kept && tab.asleep && !live }
     /// Too narrow for a title: the site's mark alone, the title in the
     /// tooltip, and ⌘W or the menu to close it — a cross on something this
     /// small would be what a click to pick the tab lands on.
@@ -451,7 +455,8 @@ private struct TabPill: View {
                 browser.select(tab)
             }
         })
-        .overlay { MiddleClick(act: close) }
+        // A tab pinned as a line with no page has nothing to put down.
+        .overlay { MiddleClick { if !(tab.kept && tab.asleep) { close() } } }
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: close) }
         .help(pinned || compact ? tab.label : "")
@@ -492,7 +497,7 @@ private struct TabPill: View {
                     .frame(height: 16)
             } else {
                 if prefs.glyph == .icons, !tab.isBlank {
-                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark)
+                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark, dim: resting)
                 }
                 if tab.bench {
                     // A script's tab, not yours.
@@ -510,21 +515,17 @@ private struct TabPill: View {
                     .font(.system(size: prefs.tabSize.text))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .foregroundStyle(colour)
+                    .foregroundStyle(colour.opacity(resting ? 0.6 : 1))
             }
 
             Spacer(minLength: 2)
 
             // Pinned to the right-hand end of the pill, not trailing the title.
-            // One slot doing two jobs: the cross when the pointer is here, the
-            // ring while the page is still coming, never both.
+            // One slot doing two jobs: the cross (or the pin) when the pointer
+            // is here, the ring while the page is still coming, never both.
             ZStack {
                 if hovering {
-                    Image(systemName: "xmark")
-                        .font(.system(size: prefs.tabSize.cross * 8 / 15, weight: .semibold))
-                        .foregroundStyle(Palette.muted)
-                        .frame(width: prefs.tabSize.cross, height: prefs.tabSize.cross)
-                        .background(Palette.ink.opacity(0.07), in: Circle())
+                    TabEnd(unpins: unpins, size: prefs.tabSize.cross)
                         .transition(.opacity)
                 } else if tab.loading {
                     Ring(size: prefs.tabSize.cross * 10 / 15).transition(.opacity)
@@ -538,16 +539,24 @@ private struct TabPill: View {
             }
             .frame(width: editing ? 0 : prefs.tabSize.cross, height: prefs.tabSize.cross)
             .opacity(editing ? 0 : 1)
-            // The cross is 15 points across because that is how big it should
-            // look. What you have to hit is the whole right-hand end of the
-            // tab: an overlay is not laid out, so it can reach past its own
-            // frame without moving anything that is.
+            // The cross is the size the tabs' size gives it, because that is
+            // how big it should look. What you have to hit is the whole
+            // right-hand end of the tab: an overlay is not laid out, so it can
+            // reach past its own frame without moving anything that is.
             .overlay {
                 if !editing {
                     Color.clear
                         .frame(width: 30, height: prefs.tabSize.row)
                         .contentShape(Rectangle())
-                        .onTapGesture { if hovering { close() } }
+                        .onTapGesture {
+                            guard hovering else { return }
+                            if unpins {
+                                withAnimation(Motion.settle) { browser.unkeep(tab) }
+                            } else {
+                                close()
+                            }
+                        }
+                        .help(unpins ? "Unpin" : "")
                 }
             }
             .animation(Motion.quick, value: hovering)
@@ -753,6 +762,23 @@ struct TabMenu: View {
         // look for it: here too, where tabs are closed.
         Button("Reopen Closed Tab") { browser.reopen() }
             .disabled(browser.ghosts.isEmpty)
+    }
+}
+
+/// The button at a tab's end under the pointer: a cross that closes it — or,
+/// on a tab pinned as a line, a pin that unpins it. Its cross would only have
+/// put it down, which ⌘W and the middle button already do.
+struct TabEnd: View {
+    let unpins: Bool
+    /// The tab size's cross (TabSize.cross): the circle's width.
+    let size: CGFloat
+
+    var body: some View {
+        Image(systemName: unpins ? "pin.fill" : "xmark")
+            .font(.system(size: size * 8 / 15, weight: .semibold))
+            .foregroundStyle(Palette.muted)
+            .frame(width: size, height: size)
+            .background(Palette.ink.opacity(0.07), in: Circle())
     }
 }
 

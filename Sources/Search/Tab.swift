@@ -289,6 +289,9 @@ final class Tab: ObservableObject, Identifiable {
     /// leaves it. Never set together with `pin`.
     @Published var kept = false
 
+    /// Which of the row's three blocks it is in.
+    var place: Browser.Place { pin != nil ? .essential : kept ? .kept : .loose }
+
     /// A name you gave it, in place of whatever the page calls itself. It
     /// stays through navigation: a tab you named is a tab you are keeping for
     /// a job, not for a page.

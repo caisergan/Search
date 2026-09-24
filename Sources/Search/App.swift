@@ -126,6 +126,7 @@ struct SearchApp: App {
                             .disabled(tab.isBlank)
                     } else {
                         Button("Change Letter") { browser.editLetter(tab) }
+                        Button("Move to Pinned Tabs") { browser.keep(tab) }
                         Button("Remove from Essentials") { browser.unpin(tab) }
                     }
                 }

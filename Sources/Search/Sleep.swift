@@ -65,7 +65,9 @@ extension Browser {
     /// the caller's business; this is everything else.
     func awake(because tab: Tab) -> String? {
         if tab.id == activeID { return "on screen" }
-        if tab.pin != nil { return "pinned" }
+        // Essentials and pinned lines alike: pale is how a pinned line says
+        // it was put down, and it isn't one you put down.
+        if tab.place != .loose { return "pinned" }
         if tab.bench { return "a bench tab" }
         if tab.isBlank { return "blank" }
         if tab.asleep { return "already asleep" }

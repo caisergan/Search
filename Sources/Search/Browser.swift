@@ -498,81 +498,85 @@ final class Browser: NSObject, ObservableObject {
     /// and that letter arrives selected so the next keystroke replaces it.
     @Published var editingPin: Tab.ID?
 
-    var pinnedCount: Int { tabs.filter { $0.pin != nil }.count }
+    var pinnedCount: Int { tabs.filter { $0.place == .essential }.count }
 
     /// The tabs pinned as lines in the column, which come straight after the
     /// squares in the row.
-    var keptCount: Int { tabs.filter { $0.pin == nil && $0.kept }.count }
+    var keptCount: Int { tabs.filter { $0.place == .kept }.count }
 
     /// The three blocks the row is made of, in this order: the squares (the
-    /// Essentials), the lines pinned under them, and the rest.
-    enum Place { case essential, kept, loose }
+    /// Essentials), the lines pinned under them, and the rest. Which one a
+    /// tab is in is `Tab.place`.
+    enum Place: Int, CaseIterable, Comparable {
+        case essential, kept, loose
 
-    func place(of tab: Tab) -> Place {
-        tab.pin != nil ? .essential : tab.kept ? .kept : .loose
+        static func < (a: Place, b: Place) -> Bool { a.rawValue < b.rawValue }
     }
 
-    /// Where a block starts in the row, and how many it holds.
+    /// Where a block sits in the row.
     func block(_ place: Place) -> Range<Int> {
-        let essentials = pinnedCount
-        let kept = keptCount
-        switch place {
-        case .essential: return 0..<essentials
-        case .kept: return essentials..<(essentials + kept)
-        case .loose: return (essentials + kept)..<tabs.count
-        }
+        let start = tabs.filter { $0.place < place }.count
+        return start..<(start + tabs.filter { $0.place == place }.count)
+    }
+
+    /// A row in the order the blocks keep. Every change here keeps that
+    /// order; this puts right a row written down that doesn't, rather than
+    /// let `block` count across one it would misread.
+    static func ordered(_ row: [Tab]) -> [Tab] {
+        Place.allCases.flatMap { place in row.filter { $0.place == place } }
     }
 
     /// Makes the tab one of `place`'s, at `slot` among them — at their end
     /// when none is given — whichever block it was in before.
     func put(_ tab: Tab, _ place: Place, at slot: Int? = nil) {
         guard let here = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        // A tab with no address has nothing to keep: pinned, ⌘W would have
+        // no page to put down, and it could never be closed.
+        guard place == .loose || !tab.isBlank else { return }
         if place != .essential, editingPin == tab.id { editingPin = nil }
-        switch place {
-        case .essential:
-            if tab.pin == nil { tab.pin = tab.monogram }
-            tab.kept = false
-        case .kept:
-            tab.pin = nil
-            tab.kept = true
-        case .loose:
-            tab.pin = nil
-            tab.kept = false
-        }
+        // A tab pinned as a line is never pinned out of sight, under a
+        // heading folded earlier — nor let go of there mid-drag.
+        if place == .kept { prefs.pinnedFolded = false }
+        if place == .essential, tab.pin == nil { tab.pin = tab.monogram }
+        if place != .essential { tab.pin = nil }
+        tab.kept = place == .kept
         var row = tabs
         row.remove(at: here)
-        let essentials = row.filter { $0.pin != nil }.count
-        let kept = row.filter { $0.pin == nil && $0.kept }.count
-        let start: Int
-        let count: Int
-        switch place {
-        case .essential: (start, count) = (0, essentials)
-        case .kept: (start, count) = (essentials, kept)
-        case .loose: (start, count) = (essentials + kept, row.count - essentials - kept)
-        }
-        let at = start + min(max(0, slot ?? count), count)
-        row.insert(tab, at: at)
-        if at != here { tabs = row }
+        let start = row.filter { $0.place < place }.count
+        let count = row.filter { $0.place == place }.count
+        row.insert(tab, at: start + min(max(0, slot ?? count), count))
+        // Always, even when the tab kept its index: which block a tab is in
+        // lives on the tab, which the browser doesn't watch, and the column
+        // only redraws its blocks when the row is published anew.
+        tabs = row
         writeSession(now: true)
+    }
+
+    /// Add to Essentials. Squares live at the head of the row in the order
+    /// they were pinned, so their letters never move under your hand. No
+    /// dialog and no waiting cursor: the letter is taken from the address
+    /// and applied. Changing it is a separate act, for the day it matters —
+    /// which is why it is not folded into this one.
+    func pin(_ tab: Tab) {
+        guard tab.pin == nil else { return }
+        put(tab, .essential)
     }
 
     /// Pin as a line in the column, at the end of the others.
     func keep(_ tab: Tab) {
         put(tab, .kept)
-        rememberSession()
     }
 
     /// Back among the ordinary tabs, at their head.
     func unkeep(_ tab: Tab) {
         put(tab, .loose, at: 0)
-        rememberSession()
     }
 
     /// Clear, on the line under the pinned tabs: every ordinary tab goes, as
     /// in Zen. The squares and the pinned lines stay, and you land on the
     /// one of them you last looked at — or on a new tab, with none awake.
     func clearTabs() {
-        let going = tabs.filter { place(of: $0) == .loose }
+        let going = tabs.filter { $0.place == .loose }
         guard !going.isEmpty else { return }
         cancelTabEdit()
         if let floating, going.contains(where: { $0.id == floating }) { land() }
@@ -581,7 +585,7 @@ final class Browser: NSObject, ObservableObject {
             if let index = tabs.firstIndex(where: { $0.id == tab.id }) { remember(tab, at: index) }
             tab.close()
         }
-        tabs.removeAll { place(of: $0) == .loose }
+        tabs.removeAll { $0.place == .loose }
         if wasActive {
             activeID = nil
             if let back = tabs.filter({ !$0.asleep }).max(by: { $0.touched < $1.touched }) {
@@ -590,20 +594,6 @@ final class Browser: NSObject, ObservableObject {
                 newTab()
             }
         }
-        writeSession(now: true)
-    }
-
-    /// Add to Essentials: a square at the top of the column.
-    func pin(_ tab: Tab) {
-        if tab.pin == nil {
-            // Pinned tabs live at the head of the row, in the order they were
-            // pinned, so their letters never move under your hand.
-            put(tab, .essential)
-            return
-        }
-        // No dialog and no waiting cursor: the letter is taken from the
-        // address and applied. Changing it is a separate act, for the day it
-        // matters — which is why it is not folded into this one.
         writeSession(now: true)
     }
 
@@ -631,7 +621,6 @@ final class Browser: NSObject, ObservableObject {
     func unpin(_ tab: Tab) {
         // Back out of the pinned block, to the head of the loose tabs.
         put(tab, .loose, at: 0)
-        rememberSession()
     }
 
     // MARK: - the address, in the tab itself
@@ -909,7 +898,10 @@ final class Browser: NSObject, ObservableObject {
             adopt(Tab())
             return
         }
-        let here = min(max(0, saved.active), tabs.count - 1)
+        // Where you were is kept by tab, not by index, through the reorder.
+        let looked = tabs[min(max(0, saved.active), tabs.count - 1)].id
+        tabs = Browser.ordered(tabs)
+        let here = tabs.firstIndex { $0.id == looked } ?? 0
         activeID = tabs[here].id
         // Only the one you were looking at actually loads.
         tabs[here].wake()
@@ -1148,22 +1140,28 @@ final class Browser: NSObject, ObservableObject {
         // tab that no longer exists.
         if floating == tab.id { land() }
 
-        // A pinned tab is not closed by ⌘W — it is put down. The letter keeps
-        // its place, the page is let go, and you land on whatever you were
-        // looking at before. Only Unpin takes it out of the row.
-        if tab.pin != nil || tab.kept {
+        // A pinned tab is not closed by ⌘W — it is put down. The letter or
+        // the line keeps its place, the page is let go, and you land on
+        // whatever you were looking at before. Only Unpin takes it out of
+        // the row.
+        if tab.place != .loose, !tab.isBlank {
             tab.rest()
-            // Ordinary tabs first. Falling back to the most recent tab of any
-            // kind meant closing one pin landed you on another pin, and ⌘W
-            // bounced between the two instead of getting you out of them.
-            let others = tabs.filter { $0.id != tab.id && !$0.asleep }
-            let loose = others.filter { place(of: $0) == .loose }
-            if let back = (loose.isEmpty ? others : loose).max(by: { $0.touched < $1.touched }) {
-                select(back)
-            } else if let asleepPin = tabs.first(where: { $0.id != tab.id }) {
-                select(asleepPin)
-            } else {
-                newTab()
+            // Put down from its cross or the middle button while another
+            // tab is on screen, it leaves that one where it is.
+            if activeID == tab.id {
+                // Ordinary tabs first. Falling back to the most recent tab of
+                // any kind meant closing one pin landed you on another pin,
+                // and ⌘W bounced between the two instead of getting you out
+                // of them.
+                let others = tabs.filter { $0.id != tab.id && !$0.asleep }
+                let loose = others.filter { $0.place == .loose }
+                if let back = (loose.isEmpty ? others : loose).max(by: { $0.touched < $1.touched }) {
+                    select(back)
+                } else if let asleepPin = tabs.first(where: { $0.id != tab.id }) {
+                    select(asleepPin)
+                } else {
+                    newTab()
+                }
             }
             writeSession(now: true)
             return
@@ -1263,7 +1261,7 @@ final class Browser: NSObject, ObservableObject {
         // The pinned blocks and the loose one don't mix: a letter that wandered
         // into the middle of the titles would stop meaning anything. Moving
         // from one to another is put(_:_:at:).
-        guard block(place(of: tab)).contains(index) else { return }
+        guard block(tab.place).contains(index) else { return }
         tabs.move(fromOffsets: IndexSet(integer: here), toOffset: index > here ? index + 1 : index)
         rememberSession()
     }
@@ -1321,6 +1319,12 @@ final class Browser: NSObject, ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         let fresh = Tab(bench: tab.bench, configuration: Browser.extensionConfiguration(for: url))
         prepare(fresh)
+        // The same tab, to the eye: pinned where it was pinned, and named
+        // what it was named — a new one loose in the pinned block would also
+        // throw every count of the blocks out.
+        fresh.pin = tab.pin
+        fresh.kept = tab.kept
+        fresh.name = tab.name
         let wasActive = activeID == tab.id
         tabs[index] = fresh
         fresh.go(to: url)
@@ -1465,7 +1469,7 @@ final class Browser: NSObject, ObservableObject {
             row.append(tab)
         }
         let active = row.indices.contains(saved.active) ? row[saved.active].id : row.first?.id
-        return Parked(tabs: row, active: active)
+        return Parked(tabs: Browser.ordered(row), active: active)
     }
 
     /// Another space's row put on screen in place of this one (see
