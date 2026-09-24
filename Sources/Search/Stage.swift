@@ -11,6 +11,8 @@ import WebKit
 /// what turns that into a redraw.
 struct Page: View {
     @ObservedObject var tab: Tab
+    /// Rounded when it is a card on a theme's glass.
+    var corner: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -21,7 +23,7 @@ struct Page: View {
             // before and after the float changes nothing SwiftUI can see, so
             // the stage was never told to take it back when it landed, and
             // the tab stayed empty. Nothing, then the page, is a change.
-            WebStage(page: tab.isBlank || tab.asleep || tab.floating ? nil : tab.web)
+            WebStage(page: tab.isBlank || tab.asleep || tab.floating ? nil : tab.web, corner: corner)
 
             if let cover = tab.cover {
                 // The page as it was left, while it is rebuilt underneath —
@@ -124,10 +126,12 @@ private struct Disc: View {
 /// reload, no lost scroll position, no forgotten form.
 struct WebStage: NSViewRepresentable {
     let page: NSView?
+    var corner: CGFloat = 0
 
     func makeNSView(context: Context) -> StageView { StageView() }
 
     func updateNSView(_ view: StageView, context: Context) {
+        view.round(corner)
         view.show(page)
     }
 }
@@ -154,6 +158,16 @@ final class StageView: NSView {
     func show(_ page: NSView?) {
         wanted = page
         settle()
+    }
+
+    /// The page's corners, cut by its stage: SwiftUI's clipping stops at a
+    /// view AppKit draws, and a web view is one.
+    func round(_ corner: CGFloat) {
+        wantsLayer = true
+        guard let layer, layer.cornerRadius != corner else { return }
+        layer.cornerRadius = corner
+        layer.cornerCurve = .continuous
+        layer.masksToBounds = corner > 0
     }
 
     private func settle() {

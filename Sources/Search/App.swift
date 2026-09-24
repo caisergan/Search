@@ -197,6 +197,30 @@ struct SearchApp: App {
     }
 }
 
+/// The page lifted off the theme's glass: set in from the window's edges,
+/// its corners rounded, a hairline and a soft shadow round it. The page's own
+/// view is AppKit's and is rounded by its stage (see StageView); this rounds
+/// what SwiftUI draws over it. Beside the column the page needs no air on its
+/// left — the column's own padding is that.
+struct PageCard: ViewModifier {
+    let on: Bool
+    /// Nothing above it: no strip, which leaves its own air.
+    let top: Bool
+    /// Nothing beside it on the left: no column.
+    let leading: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: on ? Theme.corner : 0, style: .continuous)
+        content
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(Palette.ink.opacity(on ? 0.08 : 0), lineWidth: 1).allowsHitTesting(false))
+            .background(shape.fill(Palette.ground).shadow(color: .black.opacity(on ? 0.14 : 0), radius: 6, y: 1))
+            .padding(.top, on && top ? Theme.inset : 0)
+            .padding(.leading, on && leading ? Theme.inset : 0)
+            .padding([.trailing, .bottom], on ? Theme.inset : 0)
+    }
+}
+
 /// A page, as a line in a menu: its icon if one is known, and its name.
 private struct MenuLine: View {
     let title: String
@@ -237,7 +261,13 @@ struct ContentView: View {
         ZStack(alignment: .top) {
             // Black while a page has the screen, so the frame of our own window
             // that survives the transition is not a white band across the top.
-            (browser.active?.immersed == true ? Color.black : Palette.ground)
+            if browser.active?.immersed == true {
+                Color.black
+            } else if theme.isGlass {
+                Backdrop(theme: theme)
+            } else {
+                Palette.ground
+            }
 
             HStack(spacing: 0) {
                 // The column of tabs, in the way that has one. It takes the
@@ -257,7 +287,7 @@ struct ContentView: View {
 
                     // One stage, always.
                     if let tab = browser.active {
-                        Page(tab: tab)
+                        Page(tab: tab, corner: carded ? Theme.corner : 0)
                             .overlay(alignment: .topTrailing) {
                                 if browser.finding {
                                     FindBar(browser: browser)
@@ -272,8 +302,10 @@ struct ContentView: View {
                             }
                             .animation(Motion.quick, value: browser.suggesting)
                             .overlay(alignment: browser.prefs.zoomSpot.alignment) { zoomNote }
+                            .modifier(PageCard(on: carded, top: band == 0, leading: !sidebar))
                     } else {
                         Palette.ground
+                            .modifier(PageCard(on: carded, top: band == 0, leading: !sidebar))
                     }
                 }
             }
@@ -379,6 +411,9 @@ struct ContentView: View {
             .background(WindowSetup { window = $0; dress($0) })
             .onChange(of: browser.prefs.sidebar) { _, _ in
                 DispatchQueue.main.async { measureLights() }
+            }
+            .onChange(of: browser.prefs.theme) { _, _ in
+                if let window { paint(window) }
             }
             // Stepping away to another app: macOS draws its own resting
             // buttons, and on a light window they come out nearly white. Ours
@@ -576,6 +611,13 @@ struct ContentView: View {
         .transition(.opacity)
     }
 
+    private var theme: Theme { browser.prefs.theme }
+
+    /// The page as a card on the theme's glass — not while it has the screen.
+    private var carded: Bool {
+        theme.isGlass && browser.active?.immersed != true
+    }
+
     /// True while the tabs are down the left, and not folded away (see Fold.swift).
     private var sidebar: Bool {
         browser.prefs.sidebar && !browser.folded && browser.active?.immersed != true
@@ -616,7 +658,7 @@ struct ContentView: View {
         // with it.
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.backgroundColor = Palette.NS.ground
+        paint(window)
         // The strip does the dragging, so the page underneath can't be grabbed
         // by accident while selecting text.
         window.isMovableByWindowBackground = false
@@ -652,6 +694,14 @@ struct ContentView: View {
             container.wantsLayer = true
             container.layer?.zPosition = 10
         }
+    }
+
+    /// The ground colour that goes with the appearance, or nothing at all
+    /// for glass, which the window's content then draws itself.
+    private func paint(_ window: NSWindow) {
+        let glass = browser.prefs.theme.isGlass
+        window.isOpaque = !glass
+        window.backgroundColor = glass ? .clear : Palette.NS.ground
     }
 
     // MARK: - keys

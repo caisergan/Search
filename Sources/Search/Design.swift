@@ -27,8 +27,13 @@ enum Palette {
         static let muted = pair(0.55, 0.58)
         static let faint = pair(0.83, 0.32)
         static let hairline = pair(0.91, 0.20)
-        static let wash = pair(0.937, 0.175)
-        static let hover = pair(0.965, 0.15)
+        /// Ink laid thinly over whatever is behind, rather than a grey of
+        /// their own: over the ground they come out exactly the greys they
+        /// always were (0.937 and 0.965 light, 0.175 and 0.15 dark), and over
+        /// a theme's glass they let its colour through instead of sitting on
+        /// it as grey patches.
+        static let wash = veil(0.063, 0.073)
+        static let hover = veil(0.035, 0.045)
         /// The resting traffic lights, drawn by hand when the app is behind.
         static let resting = pair(0.80, 0.30)
 
@@ -37,6 +42,102 @@ enum Palette {
                 let dim = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
                 return NSColor(white: dim ? dark : light, alpha: 1)
             }
+        }
+
+        /// Black over a light window, white over a dark one, this thick.
+        private static func veil(_ light: CGFloat, _ dark: CGFloat) -> NSColor {
+            NSColor(name: nil) { appearance in
+                let dim = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                return NSColor(white: dim ? 1 : 0, alpha: dim ? dark : light)
+            }
+        }
+    }
+}
+
+/// What the window is made of around the page. Plain is the white (or
+/// black) it always was. The rest are glass: the desktop shows through the
+/// tabs and the bar, frosted, tinted by the theme's colour, and the page sits
+/// on it as a card with rounded corners — the one opaque thing in the window.
+enum Theme: String, CaseIterable, Identifiable {
+    case plain, glass, dusk, ocean, forest, orchid, midnight
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .plain: return "Plain"
+        case .glass: return "Glass"
+        case .dusk: return "Dusk"
+        case .ocean: return "Ocean"
+        case .forest: return "Forest"
+        case .orchid: return "Orchid"
+        case .midnight: return "Midnight"
+        }
+    }
+
+    /// Everything but plain lets the desktop through.
+    var isGlass: Bool { self != .plain }
+
+    /// The colour laid over the frost, from the top left corner to the
+    /// bottom right. None for plain glass.
+    var tint: [Color] {
+        func rgb(_ r: Double, _ g: Double, _ b: Double) -> Color { Color(red: r, green: g, blue: b) }
+        switch self {
+        case .plain, .glass: return []
+        case .dusk: return [rgb(0.95, 0.58, 0.30), rgb(0.80, 0.34, 0.40)]
+        case .ocean: return [rgb(0.22, 0.60, 0.82), rgb(0.14, 0.30, 0.66)]
+        case .forest: return [rgb(0.36, 0.64, 0.42), rgb(0.16, 0.40, 0.32)]
+        case .orchid: return [rgb(0.66, 0.46, 0.88), rgb(0.90, 0.46, 0.66)]
+        case .midnight: return [rgb(0.24, 0.26, 0.48), rgb(0.08, 0.09, 0.20)]
+        }
+    }
+
+    /// How far in from the window's edges the page sits, and how round its
+    /// corners are, when it is a card.
+    static let inset: CGFloat = 8
+    static let corner: CGFloat = 10
+}
+
+/// A theme's glass: the frost, and its colour over it.
+///
+/// Behind the window, it is the desktop that is frosted — what the window
+/// itself is made of. Within it, it is the page: for the column and the
+/// strip when they come out over the page folded, where the desktop would
+/// show through as a hole in the window and they need to be thicker to be
+/// read against whatever the page has there.
+struct Backdrop: View {
+    let theme: Theme
+    var behind = true
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        ZStack {
+            Frost(material: behind ? .sidebar : .menu, blending: behind ? .behindWindow : .withinWindow)
+            if !theme.tint.isEmpty {
+                LinearGradient(colors: theme.tint, startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .opacity(scheme == .dark ? 0.42 : 0.32)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private struct Frost: NSViewRepresentable {
+        let material: NSVisualEffectView.Material
+        let blending: NSVisualEffectView.BlendingMode
+
+        func makeNSView(context: Context) -> NSVisualEffectView {
+            let view = NSVisualEffectView()
+            // Frosted whether or not the window is the one in front: a theme
+            // that went grey every time another app was clicked would be two
+            // themes.
+            view.state = .active
+            return view
+        }
+
+        func updateNSView(_ view: NSVisualEffectView, context: Context) {
+            view.material = material
+            view.blendingMode = blending
         }
     }
 }

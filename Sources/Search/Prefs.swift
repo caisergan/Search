@@ -143,6 +143,10 @@ final class Preferences: ObservableObject {
             look.apply()
         }
     }
+    /// What the window is made of around the page. Plain unless changed.
+    @Published var theme: Theme {
+        didSet { store.set(theme.rawValue, forKey: "theme") }
+    }
     /// Titles down the left instead of across the top.
     @Published var sidebar: Bool {
         didSet { store.set(sidebar, forKey: "sidebar") }
@@ -300,6 +304,7 @@ final class Preferences: ObservableObject {
         // rather than `NSApp`: on macOS 14 SwiftUI builds this before it has
         // made the application, and `NSApp` is still nil here.
         NSApplication.shared.appearance = chosen.appearance
+        theme = store.string(forKey: "theme").flatMap(Theme.init) ?? .plain
         sidebar = store.object(forKey: "sidebar") as? Bool
             ?? (store.string(forKey: "manner") == "side")
         sideHides = store.bool(forKey: "sidebar.hides")
