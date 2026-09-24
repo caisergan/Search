@@ -562,6 +562,34 @@ final class Browser: NSObject, ObservableObject {
         put(tab, .essential)
     }
 
+    /// The spaces whose squares and pinned lines were loaded this session.
+    /// Once: a pinned tab put down after that stays put down, however often
+    /// its space is come back to.
+    private var pinnedWoken: Set<UUID> = []
+    /// Pinned tabs waiting their turn to load. One put down with ⌘W before
+    /// its turn comes is taken off, and left down.
+    private var pinnedWaking: Set<Tab.ID> = []
+
+    /// The squares and the pinned lines of the row on screen, loaded, the
+    /// first time this session the row is shown (Settings › Tabs). Pinned is
+    /// open and ready, as in Zen and Arc, not something to click before it
+    /// is there. After the tab on screen and one at a time, so the window is
+    /// up and its page on the way before any of them takes a turn.
+    func wakePinned() {
+        guard prefs.loadsPinned, pinnedWoken.insert(spaceID).inserted else { return }
+        let waiting = tabs.filter { $0.place != .loose && $0.asleep && $0.id != activeID }
+        pinnedWaking.formUnion(waiting.map(\.id))
+        for (turn, tab) in waiting.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1 + 0.25 * Double(turn)) { [weak self, weak tab] in
+                guard let self, let tab, pinnedWaking.remove(tab.id) != nil else { return }
+                // Still pinned, and still in the row on screen: a space
+                // switched away from keeps its tabs as they were left.
+                guard tab.place != .loose, tabs.contains(where: { $0.id == tab.id }) else { return }
+                _ = tab.wake()
+            }
+        }
+    }
+
     /// Pin as a line in the column, at the end of the others.
     func keep(_ tab: Tab) {
         put(tab, .kept)
@@ -903,8 +931,10 @@ final class Browser: NSObject, ObservableObject {
         tabs = Browser.ordered(tabs)
         let here = tabs.firstIndex { $0.id == looked } ?? 0
         activeID = tabs[here].id
-        // Only the one you were looking at actually loads.
+        // The one you were looking at loads now; the pinned ones follow,
+        // and nothing else loads until it is looked at.
         tabs[here].wake()
+        wakePinned()
     }
 
     /// The few settings that something else has to be told about. The rest are
@@ -1145,6 +1175,7 @@ final class Browser: NSObject, ObservableObject {
         // whatever you were looking at before. Only Unpin takes it out of
         // the row.
         if tab.place != .loose, !tab.isBlank {
+            pinnedWaking.remove(tab.id)
             tab.rest()
             // Put down from its cross or the middle button while another
             // tab is on screen, it leaves that one where it is.

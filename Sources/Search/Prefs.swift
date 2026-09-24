@@ -145,6 +145,11 @@ final class Preferences: ObservableObject {
     @Published var sideHides: Bool {
         didSet { store.set(sideHides, forKey: "sidebar.hides") }
     }
+    /// Essentials and pinned lines loaded when Search opens, rather than
+    /// waiting for a click as other tabs do. On unless turned off.
+    @Published var loadsPinned: Bool {
+        didSet { store.set(loadsPinned, forKey: "pinned.load") }
+    }
     /// The tabs pinned as lines in the column, folded away under their
     /// heading.
     @Published var pinnedFolded: Bool {
@@ -292,6 +297,7 @@ final class Preferences: ObservableObject {
             ?? (store.string(forKey: "manner") == "side")
         sideHides = store.bool(forKey: "sidebar.hides")
         pinnedFolded = store.bool(forKey: "sidebar.pinned.folded")
+        loadsPinned = store.object(forKey: "pinned.load") as? Bool ?? true
         sideReveal = store.string(forKey: "sidebar.reveal").flatMap(Reveal.init) ?? .human
         newTabInFoot = store.bool(forKey: "sidebar.newtab.foot")
         let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)

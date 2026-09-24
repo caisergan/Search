@@ -184,6 +184,7 @@ extension Browser {
         if let back = parked.removeValue(forKey: id), !back.tabs.isEmpty {
             showRow(back.tabs, active: back.active)
             if let active, !active.wake() { active.revive() }
+            wakePinned()
         } else {
             showRow([], active: nil)
             restoreSession()
