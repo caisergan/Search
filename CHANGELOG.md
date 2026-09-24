@@ -51,6 +51,7 @@ in [ROADMAP.md](ROADMAP.md).
 - ⌘⇧N no longer piles up empty private tabs: one already open comes to the end of the row, as with ⌘T.
 - A new space's choice of sign-ins reads in full in the column ("Signed in" / "Signed out"), where it was cut short.
 - A hidden sidebar comes out every time the pointer reaches the left edge, and goes when the pointer leaves it. Brought out and put away quickly a few times, it could stay out after the pointer had gone, or not come out at all until the pointer left the edge and came back; the same for the tab bar folded away across the top. It now follows where the pointer is, even with another app in front.
+- A column of tabs long enough to scroll no longer draws its scroll bar over the cross on the tab under the pointer, where one was taken for the other: a thin bar of its own sits in the margin beside the tabs instead, there while the pointer is over them. ([#83](https://github.com/driceroland/Search/issues/83))
 
 ## 1.0.1 — 23 September 2026
 
