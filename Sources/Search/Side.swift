@@ -597,6 +597,10 @@ private struct ThinScroll<Content: View>: View {
                     }
                 }
         }
+        // Hidden is not enough: with a mouse plugged in, or "Show scroll
+        // bars: Always", macOS brings its own bar back for a hidden one —
+        // over the crosses again.
+        .scrollIndicators(.never)
         .coordinateSpace(name: "scroll")
         .background {
             GeometryReader { box in
