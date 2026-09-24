@@ -24,9 +24,13 @@ enum Palette {
     enum NS {
         static let ground = pair(1.0, 0.11)
         static let ink = pair(0.09, 0.93)
-        static let muted = pair(0.55, 0.58)
-        static let faint = pair(0.83, 0.32)
-        static let hairline = pair(0.91, 0.20)
+        /// Like the wash below, ink laid thinly rather than greys of their
+        /// own: the same greys over the ground, and over a theme's colour a
+        /// lighter or darker shade of it — a fixed grey there has nothing to
+        /// stand out against and goes under.
+        static let muted = veil(0.45, 0.53)
+        static let faint = veil(0.17, 0.24)
+        static let hairline = veil(0.09, 0.10)
         /// Ink laid thinly over whatever is behind, rather than a grey of
         /// their own: over the ground they come out exactly the greys they
         /// always were (0.937 and 0.965 light, 0.175 and 0.15 dark), and over
@@ -113,10 +117,13 @@ struct Backdrop: View {
 
     var body: some View {
         ZStack {
-            Frost(material: behind ? .sidebar : .menu, blending: behind ? .behindWindow : .withinWindow)
+            // Behind the window the frost is thinned, so the desktop is
+            // seen through it and not just its colours; over the page it
+            // stays whole, or the page would be read through the tabs.
+            Frost(material: behind ? .sidebar : .menu, blending: behind ? .behindWindow : .withinWindow, alpha: behind ? 0.72 : 1)
             if !theme.tint.isEmpty {
                 LinearGradient(colors: theme.tint, startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .opacity(scheme == .dark ? 0.42 : 0.32)
+                    .opacity(behind ? (scheme == .dark ? 0.26 : 0.22) : (scheme == .dark ? 0.34 : 0.28))
             }
         }
         .allowsHitTesting(false)
@@ -125,6 +132,7 @@ struct Backdrop: View {
     private struct Frost: NSViewRepresentable {
         let material: NSVisualEffectView.Material
         let blending: NSVisualEffectView.BlendingMode
+        let alpha: CGFloat
 
         func makeNSView(context: Context) -> NSVisualEffectView {
             let view = NSVisualEffectView()
@@ -138,6 +146,7 @@ struct Backdrop: View {
         func updateNSView(_ view: NSVisualEffectView, context: Context) {
             view.material = material
             view.blendingMode = blending
+            view.alphaValue = alpha
         }
     }
 }
