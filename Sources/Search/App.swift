@@ -116,11 +116,17 @@ struct SearchApp: App {
                 Divider()
                 if let tab = browser.active {
                     if tab.pin == nil {
-                        Button("Pin Tab") { browser.pin(tab) }
+                        if tab.kept {
+                            Button("Unpin Tab") { browser.unkeep(tab) }
+                        } else {
+                            Button("Pin Tab") { browser.keep(tab) }
+                                .disabled(tab.isBlank)
+                        }
+                        Button("Add to Essentials") { browser.pin(tab) }
                             .disabled(tab.isBlank)
                     } else {
                         Button("Change Letter") { browser.editLetter(tab) }
-                        Button("Unpin Tab") { browser.unpin(tab) }
+                        Button("Remove from Essentials") { browser.unpin(tab) }
                     }
                 }
                 Button("Rename Tab") { if let tab = browser.active { browser.beginTabRename(tab) } }

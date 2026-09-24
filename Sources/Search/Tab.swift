@@ -283,6 +283,12 @@ final class Tab: ObservableObject, Identifiable {
     /// is all you need for the five or six pages you keep open all day.
     @Published var pin: String?
 
+    /// Pinned as a line in the column, under the squares, rather than as one
+    /// of them — as Zen keeps pinned tabs under its Essentials. Its place and
+    /// address are kept, ⌘W puts it down rather than closing it, and Clear
+    /// leaves it. Never set together with `pin`.
+    @Published var kept = false
+
     /// A name you gave it, in place of whatever the page calls itself. It
     /// stays through navigation: a tab you named is a tab you are keeping for
     /// a job, not for a page.

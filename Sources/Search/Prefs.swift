@@ -145,10 +145,16 @@ final class Preferences: ObservableObject {
     @Published var sideHides: Bool {
         didSet { store.set(sideHides, forKey: "sidebar.hides") }
     }
+    /// The tabs pinned as lines in the column, folded away under their
+    /// heading.
+    @Published var pinnedFolded: Bool {
+        didSet { store.set(pinnedFolded, forKey: "sidebar.pinned.folded") }
+    }
     /// How long the pointer rests on the edge before that column comes out.
     /// Human, as it always was, unless changed.
     @Published var sideReveal: Reveal {
         didSet { store.set(sideReveal.rawValue, forKey: "sidebar.reveal") }
+    }
     /// New tab as a button at the foot of the column, in a place that stays
     /// put, rather than as the row under the last tab. Off unless asked for.
     @Published var newTabInFoot: Bool {
@@ -285,6 +291,7 @@ final class Preferences: ObservableObject {
         sidebar = store.object(forKey: "sidebar") as? Bool
             ?? (store.string(forKey: "manner") == "side")
         sideHides = store.bool(forKey: "sidebar.hides")
+        pinnedFolded = store.bool(forKey: "sidebar.pinned.folded")
         sideReveal = store.string(forKey: "sidebar.reveal").flatMap(Reveal.init) ?? .human
         newTabInFoot = store.bool(forKey: "sidebar.newtab.foot")
         let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)

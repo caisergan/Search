@@ -720,11 +720,18 @@ struct TabMenu: View {
 
     var body: some View {
         if tab.pin == nil {
-            Button("Pin") { browser.pin(tab) }
+            if tab.kept {
+                Button("Unpin") { browser.unkeep(tab) }
+            } else {
+                Button("Pin") { browser.keep(tab) }
+                    .disabled(tab.isBlank)
+            }
+            Button("Add to Essentials") { browser.pin(tab) }
                 .disabled(tab.isBlank)
         } else {
             Button("Change Letter") { browser.editLetter(tab) }
-            Button("Unpin") { browser.unpin(tab) }
+            Button("Move to Pinned Tabs") { browser.keep(tab) }
+            Button("Remove from Essentials") { browser.unpin(tab) }
         }
         Divider()
         Button("Rename") { browser.beginTabRename(tab) }

@@ -13,8 +13,18 @@ struct SideBar: View {
     @Namespace private var pill
 
     @State private var dragging: Tab.ID?
-    @State private var from = 0
     @State private var travel: CGFloat = 0
+    /// Where the line held was when it was picked up, in the rows' space.
+    @State private var startY: CGFloat = 0
+    /// A line held over the squares, to become one of them when let go.
+    @State private var overGrid = false
+    /// A square held below the grid, to become a line when let go.
+    @State private var pinBelow = false
+    /// The rows' top and the squares' extent, on screen: the two blocks
+    /// measure their drags in spaces of their own, and these join them.
+    @State private var rowsTop: CGFloat = 0
+    @State private var gridTop: CGFloat = 0
+    @State private var gridBottom: CGFloat = 0
     @State private var landing = false
     /// The width the column had when the edge was picked up.
     @State private var grabbed: CGFloat?
@@ -33,11 +43,16 @@ struct SideBar: View {
 
     private static let gap: CGFloat = 2
     private static let pinGap: CGFloat = 4
+    /// The heading over the tabs pinned as lines, and the line with Clear
+    /// that parts them from the rest.
+    static let heading: CGFloat = 26
+    static let divider: CGFloat = 24
 
     /// A line, and a pinned square at its tallest, at the size picked in
     /// Settings › Customization.
     private var row: CGFloat { prefs.tabSize.row }
     private var square: CGFloat { prefs.tabSize.square }
+    private var step: CGFloat { row + SideBar.gap }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -183,6 +198,18 @@ struct SideBar: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if browser.pinnedCount > 0 {
                         pinned
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                                gridTop = frame.minY
+                                gridBottom = frame.maxY
+                            }
+                            // A line held over the squares lights them: let go,
+                            // it becomes one.
+                            .background {
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .fill(Palette.hover.opacity(overGrid ? 1 : 0))
+                                    .padding(-4)
+                            }
+                            .animation(Motion.quick, value: overGrid)
                             .padding(.bottom, 10)
                     }
                     // A row too long for the window scrolls between the pins
@@ -220,7 +247,8 @@ struct SideBar: View {
     /// it is the one on screen.
     private func preview(_ row: Parked, pill: Namespace.ID) -> some View {
         let pins = row.tabs.filter { $0.pin != nil }
-        let rest = row.tabs.filter { $0.pin == nil }
+        let kept = row.tabs.filter { $0.pin == nil && $0.kept }
+        let rest = row.tabs.filter { $0.pin == nil && !$0.kept }
         let cols = SideBar.pinColumns(pins.count)
         let width = pinWidth(for: pins.count)
         let height = min(square, width)
@@ -236,10 +264,19 @@ struct SideBar: View {
                 }
                 .padding(.bottom, 10)
             }
-            VStack(spacing: SideBar.gap) {
-                ForEach(rest) { tab in
-                    SideRow(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active, pill: pill, close: {})
+            if !kept.isEmpty {
+                PinnedHeading(browser: browser, prefs: prefs, tabs: kept)
+                if !prefs.pinnedFolded {
+                    ForEach(kept) { tab in
+                        SideRow(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active, pill: pill, close: {})
+                            .padding(.bottom, SideBar.gap)
+                    }
                 }
+            }
+            ClearLine(clears: !rest.isEmpty) {}
+            ForEach(rest) { tab in
+                SideRow(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active, pill: pill, close: {})
+                    .padding(.bottom, SideBar.gap)
             }
             if !prefs.newTabInFoot { newTab }
         }
@@ -255,15 +292,16 @@ struct SideBar: View {
         let pinRows = pins == 0 ? 0 : (pins + cols - 1) / cols
         let pinBlock = pinRows == 0 ? 0
             : CGFloat(pinRows) * pinHeight + CGFloat(pinRows - 1) * SideBar.pinGap + 10
-        let loose = CGFloat(browser.tabs.count - pins) * (row + SideBar.gap)
+        let loose = CGFloat(looseTabs.count) * step
         let newTab = prefs.newTabInFoot ? 0 : row
-        return Metrics.strip + pinBlock + loose + newTab + 8
+        return Metrics.strip + pinBlock + keptBlock + SideBar.divider + loose + newTab + 8
     }
 
     // MARK: - the pinned squares
 
     private var pinnedTabs: [Tab] { browser.tabs.filter { $0.pin != nil } }
-    private var looseTabs: [Tab] { browser.tabs.filter { $0.pin == nil } }
+    private var keptTabs: [Tab] { browser.tabs.filter { $0.pin == nil && $0.kept } }
+    private var looseTabs: [Tab] { browser.tabs.filter { $0.pin == nil && !$0.kept } }
 
     /// Three columns is the block's own shape — up to six pins, that's two
     /// full rows, and one or two is just those same three places with a
@@ -372,6 +410,10 @@ struct SideBar: View {
                     pinFrom = index
                 }
                 pinTravel = value.translation
+                // Taken down past the grid, it is on its way to the lines:
+                // the squares stop making way for it.
+                pinBelow = gridTop + value.location.y > gridBottom + 6
+                guard !pinBelow else { return }
                 let stepX = width + SideBar.pinGap
                 let stepY = height + SideBar.pinGap
                 let target = pinTarget(from: pinFrom, moved: pinDelta(columns: columns, stepX: stepX, stepY: stepY))
@@ -381,88 +423,157 @@ struct SideBar: View {
                     }
                 }
             }
-            .onEnded { _ in
+            .onEnded { value in
+                if pinBelow {
+                    // Where in the lines it was let go: the middle of a line
+                    // there, in the rows' own space.
+                    let y = gridTop + value.location.y - rowsTop
+                    let (place, slot) = aim(y, holding: tab)
+                    if place == .kept, prefs.pinnedFolded { prefs.pinnedFolded = false }
+                    withAnimation(Motion.settle) { browser.put(tab, place, at: slot) }
+                }
                 withAnimation(Motion.settle) {
                     pinDragging = nil
                     pinTravel = .zero
+                    pinBelow = false
                 }
             }
     }
 
     // MARK: - the rows
 
-    private var loose: some View {
-        VStack(spacing: SideBar.gap) {
-            // See the grid: the drag is measured in the column's space, not
-            // the row's, so a row that has just moved keeps its bearings.
-            ForEach(Array(looseTabs.enumerated()), id: \.element.id) { index, tab in
-                let step = row + SideBar.gap
-                let held = dragging == tab.id
-                SideRow(
-                    browser: browser,
-                    prefs: prefs,
-                    tab: tab,
-                    live: tab.id == browser.activeID,
-                    pill: pill,
-                    close: { browser.close(tab) }
-                )
-                .offset(y: held ? travel - CGFloat(index - from) * step : 0)
-                // Under the hand exactly. Its place in the row springs when it
-                // passes another tab, and the offset springs back the same way —
-                // until the next move of the hand cuts the offset's spring short
-                // and leaves the place's running: the tab jumped a whole slot and
-                // drifted back each time it passed one. Only the others glide.
-                .transaction { if held { $0.animation = nil } }
-                .zIndex(held ? 1 : 0)
-                .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
-                .gesture(reorder(tab: tab, index: index, step: step))
-            }
-        }
-        .coordinateSpace(name: "rows")
+    /// What the pinned lines take of the rows: their heading, and the lines
+    /// themselves unless folded under it. Nothing when there are none.
+    private var keptBlock: CGFloat {
+        let count = browser.keptCount
+        guard count > 0 else { return 0 }
+        return SideBar.heading + (prefs.pinnedFolded ? 0 : CGFloat(count) * step)
     }
 
-    /// Pick a row up and the others make way as it passes them.
-    private func reorder(tab: Tab, index: Int, step: CGFloat) -> some Gesture {
+    /// Where a line starts, in the rows' space. Added up from the same
+    /// numbers the rows are drawn with, as `rowsEnd` is.
+    private func top(of tab: Tab) -> CGFloat {
+        if let index = keptTabs.firstIndex(where: { $0.id == tab.id }) {
+            return SideBar.heading + CGFloat(index) * step
+        }
+        let index = looseTabs.firstIndex { $0.id == tab.id } ?? 0
+        return keptBlock + SideBar.divider + CGFloat(index) * step
+    }
+
+    /// The block, and the place in it, that a tab held with its middle at
+    /// `y` would take: above the middle of the line with Clear, the pinned
+    /// lines; under it, the rest.
+    private func aim(_ y: CGFloat, holding tab: Tab) -> (Browser.Place, Int) {
+        let kept = keptTabs.filter { $0.id != tab.id }.count
+        let loose = looseTabs.filter { $0.id != tab.id }.count
+        if y < keptBlock + SideBar.divider / 2 {
+            guard !prefs.pinnedFolded || browser.keptCount == 0 else { return (.kept, kept) }
+            return (.kept, min(max(0, Int(floor((y - SideBar.heading) / step))), kept))
+        }
+        return (.loose, min(max(0, Int(floor((y - keptBlock - SideBar.divider) / step))), loose))
+    }
+
+    private func line(_ tab: Tab) -> some View {
+        let held = dragging == tab.id
+        return SideRow(
+            browser: browser,
+            prefs: prefs,
+            tab: tab,
+            live: tab.id == browser.activeID,
+            pill: pill,
+            // A pinned line holding no page has nothing to put down.
+            closable: !(tab.kept && tab.asleep),
+            close: { browser.close(tab) }
+        )
+        .padding(.bottom, SideBar.gap)
+        .offset(y: held ? startY + travel - top(of: tab) : 0)
+        // Under the hand exactly. Its place in the row springs when it
+        // passes another tab, and the offset springs back the same way —
+        // until the next move of the hand cuts the offset's spring short
+        // and leaves the place's running: the tab jumped a whole slot and
+        // drifted back each time it passed one. Only the others glide.
+        .transaction { if held { $0.animation = nil } }
+        .zIndex(held ? 1 : 0)
+        .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
+        .opacity(held && overGrid ? 0.6 : 1)
+        .gesture(reorder(tab: tab))
+    }
+
+    /// Pick a line up and the others make way as it passes them — across
+    /// the line with Clear too, which pins it or unpins it, and up into the
+    /// squares, which makes it one of them once it is let go there.
+    private func reorder(tab: Tab) -> some Gesture {
+        // See the grid: the drag is measured in the rows' space, not the
+        // line's, so a line that has just moved keeps its bearings.
         DragGesture(minimumDistance: 5, coordinateSpace: .named("rows"))
             .onChanged { value in
                 if dragging != tab.id {
+                    startY = top(of: tab)
                     dragging = tab.id
-                    from = index
                 }
                 travel = value.translation.height
-                let moved = Int((travel / step).rounded())
-                let target = min(max(0, from + moved), looseTabs.count - 1)
-                if target != index {
-                    // Positions here are among the loose rows; the pinned
-                    // block sits in front of them in the real list.
-                    withAnimation(Motion.settle) {
-                        browser.move(tab, to: target + browser.pinnedCount)
+                let middle = startY + travel + row / 2
+                overGrid = browser.pinnedCount > 0 && rowsTop + middle < gridBottom + 4
+                guard !overGrid else { return }
+                let (place, slot) = aim(middle, holding: tab)
+                if place == .kept, prefs.pinnedFolded, browser.keptCount > 0 {
+                    // Open the folded lines to take it, rather than have it
+                    // vanish under their heading while still held.
+                    withAnimation(Motion.settle) { prefs.pinnedFolded = false }
+                    return
+                }
+                let now = browser.place(of: tab)
+                let index = (now == .kept ? keptTabs : looseTabs).firstIndex { $0.id == tab.id } ?? 0
+                guard place != now || slot != index else { return }
+                withAnimation(Motion.settle) {
+                    if place == now {
+                        browser.move(tab, to: browser.block(place).lowerBound + slot)
+                    } else {
+                        browser.put(tab, place, at: slot)
                     }
                 }
             }
             .onEnded { _ in
+                if overGrid {
+                    withAnimation(Motion.settle) { browser.pin(tab) }
+                }
                 withAnimation(Motion.settle) {
                     dragging = nil
                     travel = 0
+                    overGrid = false
                 }
             }
     }
 
-    /// The loose tabs and the row that makes another, which scroll as one —
-    /// unless the way to another is down in the foot.
+    /// The pinned lines under their heading, the line with Clear, the other
+    /// tabs and the row that makes another, which scroll as one — unless
+    /// the way to another is down in the foot.
     private var rows: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            loose
+        let kept = keptTabs
+        let loose = looseTabs
+        return VStack(alignment: .leading, spacing: 0) {
+            if !kept.isEmpty {
+                PinnedHeading(browser: browser, prefs: prefs, tabs: kept)
+                if !prefs.pinnedFolded {
+                    ForEach(kept) { tab in line(tab) }
+                }
+            }
+            ClearLine(clears: !loose.isEmpty) {
+                withAnimation(Motion.settle) { browser.clearTabs() }
+            }
+            ForEach(loose) { tab in line(tab) }
             if !prefs.newTabInFoot { newTab }
         }
+        .coordinateSpace(name: "rows")
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { rowsTop = $0 }
     }
 
     /// The foot's door and its margin beneath.
     private static let footHeight: CGFloat = 26 + 10
 
     private var newTab: some View {
+        // The line above it leaves the gap.
         Quiet(icon: "plus", title: "New tab", height: row, text: prefs.tabSize.text) { browser.newTab() }
-            .padding(.top, SideBar.gap)
     }
 
     /// The doors at the bottom: the spaces, the extensions and the
@@ -641,10 +752,15 @@ private struct SideRow: View {
     @ObservedObject var tab: Tab
     let live: Bool
     let pill: Namespace.ID
+    /// Whether the cross shows under the pointer.
+    var closable = true
     let close: () -> Void
 
     @State private var hovering = false
     @State private var shake: CGFloat = 0
+
+    /// A pinned line put down with ⌘W: there, and paler, until opened.
+    private var resting: Bool { tab.kept && tab.asleep && !live }
 
     private var editing: Bool { browser.editingTab == tab.id }
 
@@ -660,7 +776,7 @@ private struct SideRow: View {
                     .frame(height: 16)
             } else {
                 if prefs.glyph == .icons, !tab.isBlank {
-                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark)
+                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark, dim: resting)
                 }
                 if tab.bench {
                     // A script's tab, not yours.
@@ -677,7 +793,7 @@ private struct SideRow: View {
                     .font(.system(size: prefs.tabSize.text))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .foregroundStyle(colour)
+                    .foregroundStyle(colour.opacity(resting ? 0.6 : 1))
             }
 
             if status {
@@ -707,7 +823,7 @@ private struct SideRow: View {
         // doesn't jump on each row the pointer passes.
         .mask {
             ZStack {
-                Rectangle().opacity(hovering && !editing && !status ? 0 : 1)
+                Rectangle().opacity(hovering && closable && !editing && !status ? 0 : 1)
                 HStack(spacing: 0) {
                     Rectangle()
                     LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
@@ -719,7 +835,7 @@ private struct SideRow: View {
         .overlay(alignment: .trailing) {
             if !editing {
                 ZStack {
-                    if hovering {
+                    if hovering, closable {
                         Image(systemName: "xmark")
                             .font(.system(size: prefs.tabSize.cross * 8 / 15, weight: .semibold))
                             .foregroundStyle(Palette.muted)
@@ -733,7 +849,7 @@ private struct SideRow: View {
                     Color.clear
                         .frame(width: 30, height: prefs.tabSize.row)
                         .contentShape(Rectangle())
-                        .onTapGesture { if hovering { close() } }
+                        .onTapGesture { if hovering, closable { close() } }
                 }
                 .padding(.trailing, 7)
             }
@@ -784,6 +900,74 @@ private struct SideRow: View {
     private var colour: Color {
         if live { return Palette.ink }
         return hovering ? Palette.ink.opacity(0.7) : Palette.muted
+    }
+}
+
+/// "Pinned", over the tabs pinned as lines. A click folds them under it and
+/// brings them back; folded, a dot says one of them has its page open.
+private struct PinnedHeading: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject var prefs: Preferences
+    let tabs: [Tab]
+
+    @State private var hovering = false
+
+    var body: some View {
+        let open = prefs.pinnedFolded && tabs.contains { !$0.asleep }
+        Button {
+            withAnimation(Motion.settle) { prefs.pinnedFolded.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Text("Pinned")
+                    .font(.system(size: 11, weight: .medium))
+                if open {
+                    Circle().fill(Palette.muted).frame(width: 4, height: 4)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .rotationEffect(.degrees(prefs.pinnedFolded ? -90 : 0))
+                    .opacity(hovering ? 1 : 0)
+            }
+            .foregroundStyle(hovering ? Palette.ink.opacity(0.7) : Palette.muted)
+            .padding(.horizontal, 10)
+            .frame(height: SideBar.heading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Motion.quick, value: hovering)
+        .animation(Motion.settle, value: prefs.pinnedFolded)
+    }
+}
+
+/// The line between the pinned tabs and the rest, with Clear at its end:
+/// every tab under it goes, the pinned ones and the squares stay.
+private struct ClearLine: View {
+    let clears: Bool
+    let clear: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(Palette.hairline).frame(height: 1)
+            if clears {
+                Button(action: clear) {
+                    Text("Clear")
+                        .font(.system(size: 11))
+                        .foregroundStyle(hovering ? Palette.ink.opacity(0.7) : Palette.faint)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering = $0 }
+                .help("Close every tab that isn't pinned")
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: SideBar.divider)
+        .animation(Motion.quick, value: hovering)
     }
 }
 

@@ -695,6 +695,27 @@ final class Bench {
             browser.move(tab, to: to)
             answer(["at": browser.tabs.firstIndex { $0.id == tab.id } ?? -1])
 
+        case "pin":
+            // Where a tab sits: a square, a pinned line, or neither; or
+            // Clear, which closes every tab that is neither.
+            let how = request["how"] as? String ?? ""
+            if how == "clear" {
+                browser.clearTabs()
+                answer(["tabs": browser.tabs.count])
+                return
+            }
+            guard let id = request["id"] as? String,
+                  let tab = browser.tabs.first(where: { Bench.short($0) == id })
+            else { answer(["error": "pin needs a tab id"]); return }
+            switch how {
+            case "essential": browser.pin(tab)
+            case "line": browser.keep(tab)
+            case "none": browser.put(tab, .loose, at: 0)
+            case "close": browser.close(tab)
+            default: answer(["error": "pin ID essential|line|none|close, or pin clear"]); return
+            }
+            answer(["at": browser.tabs.firstIndex { $0.id == tab.id } ?? -1, "asleep": tab.asleep])
+
         case "window":
             // The browser's window, when a probe started hidden came up
             // without one: the Window menu's own item for it.
@@ -1064,7 +1085,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "field", "bookmark", "menu", "space", "strip", "column", "ui",
+                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "pin", "field", "bookmark", "menu", "space", "strip", "column", "ui",
             ]])
         }
     }
@@ -1195,6 +1216,8 @@ final class Bench {
             "bench": tab.bench,
             "active": tab.id == browser?.activeID,
             "asleep": tab.asleep,
+            "pin": tab.pin ?? "",
+            "kept": tab.kept,
             "shy": tab.shy,
             "extensions": { if #available(macOS 15.4, *) { return tab.carriesExtensions } else { return false } }(),
         ]

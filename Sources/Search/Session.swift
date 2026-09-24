@@ -9,6 +9,9 @@ enum Session {
         var url: String
         var title: String
         var pin: String?
+        /// Pinned as a line in the column (Tab.kept). Absent for every other
+        /// tab, and in a file from before there were such lines.
+        var kept: Bool?
         /// The name you gave the tab, when you gave it one.
         var name: String?
     }
