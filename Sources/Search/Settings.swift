@@ -43,9 +43,11 @@ struct SettingsPanel: View {
         }
     }
 
-    private static let rail: CGFloat = 168
-    private static let width: CGFloat = 660
-    private static let height: CGFloat = 500
+    private static let rail: CGFloat = 188
+    private static let width: CGFloat = 840
+    private static let height: CGFloat = 640
+    /// Room kept around the panel when the window is smaller than it.
+    private static let margin: CGFloat = 32
 
     var body: some View {
         HStack(spacing: 0) {
@@ -53,7 +55,8 @@ struct SettingsPanel: View {
             Rectangle().fill(Palette.hairline).frame(width: 1)
             content
         }
-        .frame(width: SettingsPanel.width, height: SettingsPanel.height)
+        // As big as it likes, short of a small window's edges.
+        .frame(maxWidth: SettingsPanel.width, maxHeight: SettingsPanel.height)
         .background(Palette.ground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -61,6 +64,7 @@ struct SettingsPanel: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
+        .padding(SettingsPanel.margin)
         .onChange(of: page) { _, page in Store.settings.set(page.rawValue, forKey: "settings.page") }
     }
 
