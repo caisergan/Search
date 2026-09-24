@@ -31,10 +31,13 @@ struct SideBar: View {
     @State private var pinFrom = 0
     @State private var pinTravel: CGSize = .zero
 
-    private static let row: CGFloat = 28
     private static let gap: CGFloat = 2
-    private static let square: CGFloat = 34
     private static let pinGap: CGFloat = 4
+
+    /// A line, and a pinned square at its tallest, at the size picked in
+    /// Settings › Customization.
+    private var row: CGFloat { prefs.tabSize.row }
+    private var square: CGFloat { prefs.tabSize.square }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -220,7 +223,7 @@ struct SideBar: View {
         let rest = row.tabs.filter { $0.pin == nil }
         let cols = SideBar.pinColumns(pins.count)
         let width = pinWidth(for: pins.count)
-        let height = min(SideBar.square, width)
+        let height = min(square, width)
         return VStack(alignment: .leading, spacing: 0) {
             if !pins.isEmpty {
                 VStack(spacing: 0) {
@@ -238,7 +241,7 @@ struct SideBar: View {
                     SideRow(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active, pill: pill, close: {})
                 }
             }
-            newTab
+            if !prefs.newTabInFoot { newTab }
         }
         .allowsHitTesting(false)
     }
@@ -252,8 +255,9 @@ struct SideBar: View {
         let pinRows = pins == 0 ? 0 : (pins + cols - 1) / cols
         let pinBlock = pinRows == 0 ? 0
             : CGFloat(pinRows) * pinHeight + CGFloat(pinRows - 1) * SideBar.pinGap + 10
-        let loose = CGFloat(browser.tabs.count - pins) * (SideBar.row + SideBar.gap)
-        return Metrics.strip + pinBlock + loose + SideBar.row + 8
+        let loose = CGFloat(browser.tabs.count - pins) * (row + SideBar.gap)
+        let newTab = prefs.newTabInFoot ? 0 : row
+        return Metrics.strip + pinBlock + loose + newTab + 8
     }
 
     // MARK: - the pinned squares
@@ -278,7 +282,7 @@ struct SideBar: View {
 
     private func pinWidth(for count: Int) -> CGFloat {
         let cols = SideBar.pinColumns(count)
-        guard cols > 0 else { return SideBar.square }
+        guard cols > 0 else { return square }
         let available = prefs.sideWidth - 20 - CGFloat(cols - 1) * SideBar.pinGap
         return max(20, available / CGFloat(cols))
     }
@@ -289,7 +293,7 @@ struct SideBar: View {
     /// everywhere else in this app. It only shrinks below 34 alongside the
     /// width, once a narrow column leaves no other choice.
     private var pinHeight: CGFloat {
-        min(SideBar.square, pinWidth)
+        min(square, pinWidth)
     }
 
     /// The grid itself: fixed-size cells, left-aligned, so a half-empty last
@@ -392,7 +396,7 @@ struct SideBar: View {
             // See the grid: the drag is measured in the column's space, not
             // the row's, so a row that has just moved keeps its bearings.
             ForEach(Array(looseTabs.enumerated()), id: \.element.id) { index, tab in
-                let step = SideBar.row + SideBar.gap
+                let step = row + SideBar.gap
                 let held = dragging == tab.id
                 SideRow(
                     browser: browser,
@@ -444,11 +448,12 @@ struct SideBar: View {
             }
     }
 
-    /// The loose tabs and the row that makes another, which scroll as one.
+    /// The loose tabs and the row that makes another, which scroll as one —
+    /// unless the way to another is down in the foot.
     private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             loose
-            newTab
+            if !prefs.newTabInFoot { newTab }
         }
     }
 
@@ -456,11 +461,13 @@ struct SideBar: View {
     private static let footHeight: CGFloat = 26 + 10
 
     private var newTab: some View {
-        Quiet(icon: "plus", title: "New tab", height: SideBar.row) { browser.newTab() }
+        Quiet(icon: "plus", title: "New tab", height: row, text: prefs.tabSize.text) { browser.newTab() }
             .padding(.top, SideBar.gap)
     }
 
-    /// One small door at the bottom: the settings.
+    /// The doors at the bottom: the spaces, the extensions and the
+    /// bookmarks, and a new tab, when it was asked to live here, alone in
+    /// the far corner where it never moves.
     private var foot: some View {
         HStack(spacing: 2) {
             if browser.prefs.usesSpaces { SpaceDot(browser: browser) }
@@ -470,6 +477,9 @@ struct SideBar: View {
                     BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
                 }
             Spacer(minLength: 0)
+            if prefs.newTabInFoot {
+                Door(icon: "plus", help: "New tab   ⌘T") { browser.newTab() }
+            }
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
@@ -650,7 +660,7 @@ private struct SideRow: View {
                     .frame(height: 16)
             } else {
                 if prefs.glyph == .icons, !tab.isBlank {
-                    Mark(icon: tab.icon, letter: tab.monogram, size: 15)
+                    Mark(icon: tab.icon, letter: tab.monogram, size: prefs.tabSize.mark)
                 }
                 if tab.bench {
                     // A script's tab, not yours.
@@ -664,7 +674,7 @@ private struct SideRow: View {
                         .foregroundStyle(colour.opacity(0.7))
                 }
                 Text(tab.label)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: prefs.tabSize.text))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(colour)
@@ -675,22 +685,22 @@ private struct SideRow: View {
 
                 ZStack {
                     if tab.loading {
-                        Ring().transition(.opacity)
+                        Ring(size: prefs.tabSize.cross * 10 / 15).transition(.opacity)
                     } else {
                         Image(systemName: "speaker.wave.2.fill")
-                            .font(.system(size: 8))
+                            .font(.system(size: prefs.tabSize.cross * 8 / 15))
                             .foregroundStyle(Palette.muted)
                             .transition(.opacity)
                     }
                 }
-                .frame(width: 15, height: 15)
+                .frame(width: prefs.tabSize.cross, height: prefs.tabSize.cross)
                 // The cross takes this place while the pointer is here.
                 .opacity(hovering ? 0 : 1)
             }
         }
         .padding(.leading, 10)
         .padding(.trailing, status ? 7 : 10)
-        .frame(height: 28)
+        .frame(height: prefs.tabSize.row)
         .frame(maxWidth: .infinity, alignment: .leading)
         // The title keeps its length under the pointer and fades out
         // beneath the cross, rather than being cut shorter, so its end
@@ -702,7 +712,7 @@ private struct SideRow: View {
                     Rectangle()
                     LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
                         .frame(width: 16)
-                    Color.clear.frame(width: 26)
+                    Color.clear.frame(width: prefs.tabSize.cross + 11)
                 }
             }
         }
@@ -711,17 +721,17 @@ private struct SideRow: View {
                 ZStack {
                     if hovering {
                         Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .semibold))
+                            .font(.system(size: prefs.tabSize.cross * 8 / 15, weight: .semibold))
                             .foregroundStyle(Palette.muted)
-                            .frame(width: 15, height: 15)
+                            .frame(width: prefs.tabSize.cross, height: prefs.tabSize.cross)
                             .background(Palette.ink.opacity(0.07), in: Circle())
                             .transition(.opacity)
                     }
                 }
-                .frame(width: 15, height: 15)
+                .frame(width: prefs.tabSize.cross, height: prefs.tabSize.cross)
                 .overlay {
                     Color.clear
-                        .frame(width: 30, height: 28)
+                        .frame(width: 30, height: prefs.tabSize.row)
                         .contentShape(Rectangle())
                         .onTapGesture { if hovering { close() } }
                 }
@@ -782,6 +792,8 @@ struct Quiet: View {
     let icon: String
     let title: String
     var height: CGFloat = 28
+    /// The title's size, kept with the tabs' it sits under.
+    var text: CGFloat = 12.5
     let act: () -> Void
 
     @State private var hovering = false
@@ -793,7 +805,7 @@ struct Quiet: View {
                     .font(.system(size: 10, weight: .medium))
                     .frame(width: 15)
                 Text(title)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: text))
                 Spacer(minLength: 0)
             }
             .foregroundStyle(hovering ? Palette.ink.opacity(0.7) : Palette.faint)

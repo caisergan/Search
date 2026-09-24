@@ -264,6 +264,7 @@ struct ContentView: View {
                                 }
                             }
                             .animation(Motion.quick, value: browser.suggesting)
+                            .overlay(alignment: browser.prefs.zoomSpot.alignment) { zoomNote }
                     } else {
                         Palette.ground
                     }
@@ -433,17 +434,36 @@ struct ContentView: View {
     @ViewBuilder
     private var announcement: some View {
         if let text = browser.announcement {
-            Text(text)
-                .font(.system(size: 12))
-                .foregroundStyle(Palette.ink)
-                .padding(.horizontal, 15)
-                .padding(.vertical, 9)
-                .background(Palette.ground, in: Capsule())
-                .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
-                .shadow(color: .black.opacity(0.10), radius: 18, y: 6)
+            note(text)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .animation(Motion.settle, value: browser.announcement)
         }
+    }
+
+    /// The zoom level, in the spot picked for it along the top of the page.
+    /// Clear of the find bar, which has the top right first.
+    private var zoomNote: some View {
+        let spot = browser.prefs.zoomSpot
+        return ZStack {
+            if let text = browser.zoomNote, spot != .bottom {
+                note(text)
+                    .padding(.top, spot == .topRight && browser.finding ? 60 : 12)
+                    .padding(.horizontal, 14)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.settle, value: browser.zoomNote)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.ink)
+            .padding(.horizontal, 15)
+            .padding(.vertical, 9)
+            .background(Palette.ground, in: Capsule())
+            .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.10), radius: 18, y: 6)
     }
 
     /// A page asking to see or hear you. Named by the site, in its own words,
@@ -584,8 +604,9 @@ struct ContentView: View {
 
     private func dress(_ window: NSWindow) {
         Links.window = window
-        // Light or dark is the app's to say (Settings › Appearance); the
-        // window only has to be the ground colour that goes with it.
+        // Light or dark is the app's to say (Settings › Customization ›
+        // Appearance); the window only has to be the ground colour that goes
+        // with it.
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.backgroundColor = Palette.NS.ground

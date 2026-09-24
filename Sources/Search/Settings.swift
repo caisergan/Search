@@ -15,11 +15,12 @@ struct SettingsPanel: View {
     @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
 
     enum Page: String, CaseIterable, Identifiable {
-        case general, tabs, extensions, passwords, downloads, privacy, about
+        case general, customization, tabs, extensions, passwords, downloads, privacy, about
         var id: String { rawValue }
         var title: String {
             switch self {
             case .general: return "General"
+            case .customization: return "Customization"
             case .tabs: return "Tabs"
             case .extensions: return "Extensions"
             case .passwords: return "Passwords"
@@ -31,6 +32,7 @@ struct SettingsPanel: View {
         var icon: String {
             switch self {
             case .general: return "macwindow"
+            case .customization: return "paintbrush"
             case .tabs: return "rectangle.split.3x1"
             case .extensions: return "puzzlepiece.extension"
             case .passwords: return "key"
@@ -132,6 +134,7 @@ struct SettingsPanel: View {
                 VStack(alignment: .leading, spacing: 18) {
                     switch page {
                     case .general: general
+                    case .customization: customization
                     case .tabs: tabs
                     case .extensions: ExtensionsPage(browser: browser)
                     case .passwords: passwords
@@ -200,10 +203,6 @@ struct SettingsPanel: View {
                 .padding(.bottom, 11)
             }
             Rule()
-            Line("Appearance", "Light, dark, or whatever the Mac is doing — pages follow it too") {
-                Segmented(options: Look.allCases.map { ($0, $0.title) }, selection: $prefs.look)
-            }
-            Rule()
             Line("Correct spelling as you type", "macOS's autocorrect inside pages — the one that capitalises for you") {
                 Switch(on: $prefs.autocorrect)
             }
@@ -232,6 +231,48 @@ struct SettingsPanel: View {
             return "An http or https address with %s where the words go. Until then, Google"
         }
         return "Words go to \(prefs.engine.name(custom: prefs.customEngine))"
+    }
+
+    // MARK: - customization
+
+    /// How Search looks, as opposed to what it does. Everything here but the
+    /// appearance is off until someone picks it.
+    private var customization: some View {
+        Card {
+            Line("Appearance", "Light, dark, or whatever the Mac is doing — pages follow it too") {
+                Segmented(options: Look.allCases.map { ($0, $0.title) }, selection: $prefs.look)
+            }
+            Rule()
+            Line("Tab size", "Large makes titles easier to read, in the sidebar and across the top") {
+                Segmented(
+                    options: TabSize.allCases.map { ($0, $0.title) },
+                    selection: Binding(
+                        get: { prefs.tabSize },
+                        set: { size in withAnimation(Motion.glide) { prefs.tabSize = size } }
+                    )
+                )
+            }
+            Rule()
+            Line("Show zoom at", "Where the page's size shows while ⌘+, ⌘− or a pinch changes it") {
+                Picker("", selection: $prefs.zoomSpot) {
+                    ForEach(ZoomSpot.allCases) { spot in
+                        Text(spot.title).tag(spot)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            if prefs.sidebar {
+                Rule()
+                Line("New tab at the foot of the sidebar", "A + in the bottom right corner, instead of the row under the last tab") {
+                    Switch(on: Binding(
+                        get: { prefs.newTabInFoot },
+                        set: { on in withAnimation(Motion.glide) { prefs.newTabInFoot = on } }
+                    ))
+                }
+            }
+        }
     }
 
     // MARK: - tabs

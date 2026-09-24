@@ -345,8 +345,9 @@ final class Tab: ObservableObject, Identifiable {
         web.onTouch = { [weak self] in self?.uncover() }
         web.holdForFirstFrame()
         // Pages follow the appearance of the window they are drawn in, and the
-        // window follows Settings › Appearance — so a site that honours
-        // prefers-color-scheme goes dark with the frame, and not otherwise.
+        // window follows Settings › Customization › Appearance — so a site
+        // that honours prefers-color-scheme goes dark with the frame, and not
+        // otherwise.
         // Safari's Develop menu can reach it, and so can the page's own
         // Inspect Element — a configuration handed over by an opener included.
         if #available(macOS 13.3, *) { web.isInspectable = true }
