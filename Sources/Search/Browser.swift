@@ -572,29 +572,30 @@ final class Browser: NSObject, ObservableObject {
         put(tab, .essential)
     }
 
-    /// The spaces whose squares and pinned lines were loaded this session.
-    /// Once: a pinned tab put down after that stays put down, however often
-    /// its space is come back to.
+    /// The spaces whose tabs were loaded this session. Once: a tab put down
+    /// after that stays put down, however often its space is come back to.
     private var pinnedWoken: Set<UUID> = []
-    /// Pinned tabs waiting their turn to load. One put down with ⌘W before
-    /// its turn comes is taken off, and left down.
+    /// Tabs waiting their turn to load. One put down with ⌘W before its turn
+    /// comes is taken off, and left down.
     private var pinnedWaking: Set<Tab.ID> = []
 
-    /// The squares and the pinned lines of the row on screen, loaded, the
-    /// first time this session the row is shown (Settings › Tabs). Pinned is
+    /// The squares and the pinned lines of the row on screen — or only the
+    /// squares, every tab, or none, as Settings › Tabs › Load with Search
+    /// says — loaded the first time this session the row is shown. Pinned is
     /// open and ready, as in Zen and Arc, not something to click before it
     /// is there. After the tab on screen and one at a time, so the window is
     /// up and its page on the way before any of them takes a turn.
     func wakePinned() {
-        guard prefs.loadsPinned, pinnedWoken.insert(spaceID).inserted else { return }
-        let waiting = tabs.filter { $0.place != .loose && $0.asleep && $0.id != activeID }
+        let load = prefs.startLoad
+        guard load != .none, pinnedWoken.insert(spaceID).inserted else { return }
+        let waiting = tabs.filter { load.loads($0.place) && $0.asleep && $0.id != activeID }
         pinnedWaking.formUnion(waiting.map(\.id))
         for (turn, tab) in waiting.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1 + 0.25 * Double(turn)) { [weak self, weak tab] in
                 guard let self, let tab, pinnedWaking.remove(tab.id) != nil else { return }
-                // Still pinned, and still in the row on screen: a space
+                // Still one to load, and still in the row on screen: a space
                 // switched away from keeps its tabs as they were left.
-                guard tab.place != .loose, tabs.contains(where: { $0.id == tab.id }) else { return }
+                guard load.loads(tab.place), tabs.contains(where: { $0.id == tab.id }) else { return }
                 _ = tab.wake()
             }
         }

@@ -331,8 +331,8 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.sleepsTabs)
             }
             Rule()
-            Line("Open pinned tabs with Search", "Essentials and pinned tabs load when Search opens, after the tab you were on, instead of waiting for a click") {
-                Switch(on: $prefs.loadsPinned)
+            Line("Load with Search", "The tabs that load when Search opens, after the tab you were on, instead of waiting for a click. Pinned takes in the Essentials.") {
+                Segmented(options: StartLoad.allCases.map { ($0, $0.title) }, selection: $prefs.startLoad)
             }
             Rule()
             Line("Glance", "Hold \(prefs.glanceTrigger.key) and click a link to look at it over the page instead of opening a tab. esc or a click beside it puts it away; the arrow keeps it as a tab.") {

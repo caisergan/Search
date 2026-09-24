@@ -57,6 +57,35 @@ enum Reveal: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which tabs brought back from the last session load when Search opens,
+/// after the one on screen, rather than waiting for a click. Each takes in
+/// the ones before it: pinned is the Essentials and the pinned lines, all is
+/// every tab in the row.
+enum StartLoad: String, CaseIterable, Identifiable {
+    case none, essentials, pinned, all
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .essentials: return "Essentials"
+        case .pinned: return "Pinned"
+        case .all: return "All"
+        }
+    }
+
+    /// Whether a tab in this place is one of those loaded.
+    func loads(_ place: Browser.Place) -> Bool {
+        switch self {
+        case .none: return false
+        case .essentials: return place == .essential
+        case .pinned: return place != .loose
+        case .all: return true
+        }
+    }
+}
+
 /// How big a tab is drawn, in the column and in the row across the top.
 /// Regular is the size tabs have always been; large is a step up for anyone
 /// who finds that hard to read, with everything on the line grown to match.
@@ -156,10 +185,10 @@ final class Preferences: ObservableObject {
     @Published var sideHides: Bool {
         didSet { store.set(sideHides, forKey: "sidebar.hides") }
     }
-    /// Essentials and pinned lines loaded when Search opens, rather than
-    /// waiting for a click as other tabs do. On unless turned off.
-    @Published var loadsPinned: Bool {
-        didSet { store.set(loadsPinned, forKey: "pinned.load") }
+    /// The tabs loaded when Search opens, rather than waiting for a click.
+    /// Pinned unless changed.
+    @Published var startLoad: StartLoad {
+        didSet { store.set(startLoad.rawValue, forKey: "start.load") }
     }
     /// The tabs pinned as lines in the column, folded away under their
     /// heading.
@@ -323,7 +352,9 @@ final class Preferences: ObservableObject {
             ?? (store.string(forKey: "manner") == "side")
         sideHides = store.bool(forKey: "sidebar.hides")
         pinnedFolded = store.bool(forKey: "sidebar.pinned.folded")
-        loadsPinned = store.object(forKey: "pinned.load") as? Bool ?? true
+        // The switch this replaced: on was the Essentials and pinned lines.
+        startLoad = store.string(forKey: "start.load").flatMap(StartLoad.init)
+            ?? ((store.object(forKey: "pinned.load") as? Bool ?? true) ? .pinned : .none)
         sideReveal = store.string(forKey: "sidebar.reveal").flatMap(Reveal.init) ?? .human
         newTabInFoot = store.bool(forKey: "sidebar.newtab.foot")
         newTabOver = store.bool(forKey: "newtab.over")
