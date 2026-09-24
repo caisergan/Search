@@ -52,6 +52,8 @@ struct SideBar: View {
     /// that parts them from the rest.
     static let heading: CGFloat = 26
     static let divider: CGFloat = 24
+    /// The air under the address, the same the squares leave under them.
+    static let addressGap: CGFloat = 10
 
     /// A line, and a pinned square at its tallest, at the size picked in
     /// Settings › Customization.
@@ -90,6 +92,14 @@ struct SideBar: View {
                     Spacer(minLength: 0)
                 }
                 .frame(height: Metrics.strip)
+
+                // The page's address, and the field unfurling from it (see
+                // SideAddress.swift). Over the spaces rather than in each:
+                // it is the page's, whichever space the page is in.
+                if prefs.sideAddress {
+                    SideAddress(browser: browser)
+                        .padding(.bottom, SideBar.addressGap)
+                }
 
                 // The spaces side by side, as pages: two fingers sideways move
                 // the one on screen and the next one together, the next one
@@ -321,7 +331,8 @@ struct SideBar: View {
         let pinRows = pins == 0 ? 0 : (pins + cols - 1) / cols
         let pinBlock = pinRows == 0 ? 0
             : CGFloat(pinRows) * pinHeight + CGFloat(pinRows - 1) * SideBar.pinGap + 10
-        return Metrics.strip + pinBlock + rowsHeight + 8
+        let address = prefs.sideAddress ? SideAddress.height + SideBar.addressGap : 0
+        return Metrics.strip + address + pinBlock + rowsHeight + 8
     }
 
     /// What the rows take, top to bottom: the pinned lines, the line with

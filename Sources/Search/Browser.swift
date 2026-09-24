@@ -106,7 +106,7 @@ final class Browser: NSObject, ObservableObject {
     /// The field is up over the page for a tab that doesn't exist yet (the
     /// new tab over the page, in Settings): where it goes opens one, and
     /// Escape leaves nothing behind.
-    private var opening = false
+    private(set) var opening = false
     /// What is in the field. Every change re-reads the history, because the
     /// list under the field and the grey ending inside it are both just
     /// answers to this string.
@@ -133,6 +133,14 @@ final class Browser: NSObject, ObservableObject {
 
     var active: Tab? { tabs.first { $0.id == activeID } }
     var fieldShowing: Bool { editing || active?.isBlank ?? true }
+    /// The field is up over a page and unfurls from the address at the head
+    /// of the column, rather than standing in the middle of the page: the
+    /// column is there to hold it, and it is the page's own address being
+    /// changed — not a new tab's, nor ⌘K's switcher (see SideAddress.swift).
+    var fieldInColumn: Bool {
+        prefs.sidebar && prefs.sideAddress && editing && !opening && !summoning
+            && active?.isBlank == false && (!folded || peeking)
+    }
 
     /// Typed plus whatever the field is quietly finishing for you.
     var completed: String {

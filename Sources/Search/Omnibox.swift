@@ -118,7 +118,7 @@ struct Omnibox: View {
         .transition(.scale(scale: 0.98, anchor: .top).combined(with: .opacity))
     }
 
-    private struct Row: View {
+    struct Row: View {
         let offer: Suggestion
         /// Where the arrow keys have walked to. The pointer gets its own,
         /// quieter mark, and changes nothing but the look of the row.

@@ -13,6 +13,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Added
 
+- The page's address at the head of the sidebar, as in Zen: the site under the traffic lights, with a button to copy the address under the pointer. A click, or ⌘L, unfurls the address field from it over the page, with the same list and keys as the field in the middle. Settings › Tabs › Show the address in the sidebar, on by default.
 - New tabs can open over the page you're on: Settings › Tabs › Open new tabs over the page. ⌘T, or New tab, brings the address field up over the current page, dimmed behind it, and the tab opens only once you go somewhere; esc leaves you where you were, with no empty tab behind. Off by default. With it on, the empty field lists your open tabs, as in Zen, and typing puts the open tabs that match first, each with its site's icon and Switch to Tab.
 - Glance, as in Zen: hold ⌥ and click a link to look at it over the page, in a card, instead of opening a tab. esc, ⌘W or a click beside it puts it away; the arrow beside it keeps it as a tab under the one it came from. Settings › Tabs › Glance, off by default; ⇧ or ⌘ can be the key instead.
 - The video you're watching can float when you switch to another app, as in Arc, and go back into its tab when you return to it. Settings › General › Float the video when you switch apps, off by default. Only from the sites a video floats from on its own when you leave its tab; one floated with ⌘⇧P stays out. Thanks [@farchanrifai](https://github.com/farchanrifai) ([#152](https://github.com/driceroland/Search/pull/152))
