@@ -41,8 +41,8 @@ extension Browser {
     }
 
     /// The folded column out over the page, or back in.
-    func peek(_ out: Bool) {
-        withAnimation(Motion.glide) { peeking = out }
+    func peek(_ out: Bool, in motion: Animation = Motion.glide) {
+        withAnimation(motion) { peeking = out }
     }
 }
 
@@ -67,9 +67,9 @@ struct Fold: View {
     private static let grace: TimeInterval = 0.3
     /// The band along the top that is the title bar over the page.
     private static let top: CGFloat = 8
-    /// How long the pointer rests on the edge before a column folded for
-    /// good comes out. Long enough to cross the edge, short enough not to be
-    /// waited for.
+    /// How long the pointer rests on the top edge before the strip comes
+    /// down. Long enough to cross the edge, short enough not to be waited
+    /// for. A column folded for good waits as long as Settings says.
     private static let dwell: TimeInterval = 0.15
 
     var body: some View {
@@ -160,15 +160,17 @@ struct Fold: View {
         browser.folded && !browser.peeking
     }
 
-    /// The pointer on the edge: out at once, or after the dwell when the
-    /// column is folded for good, and always for the strip, whose edge is
-    /// the way to the menu bar.
+    /// The pointer on the edge: out at once, or after the wait Settings
+    /// gives a column folded for good, and always after the dwell for the
+    /// strip, whose edge is the way to the menu bar.
     private func arrive() {
         guard !prefs.sidebar || prefs.sideHides else { return peek(true) }
         pass()
+        let wait = prefs.sidebar ? prefs.sideReveal.wait : Fold.dwell
+        guard wait > 0 else { return peek(true) }
         let coming = DispatchWorkItem { peek(true) }
         arriving = coming
-        DispatchQueue.main.asyncAfter(deadline: .now() + Fold.dwell, execute: coming)
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: coming)
     }
 
     /// The pointer crossed the edge without stopping.
@@ -183,7 +185,10 @@ struct Fold: View {
         leaving = nil
         if out {
             guard !browser.peeking else { return }
-            browser.peek(true)
+            // Asked to come at once, the column doesn't then take its time
+            // sliding out either.
+            let cheetah = prefs.sidebar && prefs.sideReveal == .cheetah
+            browser.peek(true, in: cheetah ? Motion.quick : Motion.glide)
         } else {
             let going = DispatchWorkItem {
                 guard browser.editingTab == nil else { return }
