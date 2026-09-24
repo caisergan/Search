@@ -23,7 +23,10 @@ import SwiftUI
 // Folded like that, the edge is met far more often by a hand on its way
 // somewhere else — the Dock, the window beside — than by one reaching for
 // the tabs, so the column waits for the pointer to settle there a moment
-// before it comes. Folded by hand with ⌘S, it comes at once, as it always did.
+// before it comes. How long a moment is Settings' to say: none at all for
+// the cheetah, whose column slides out quicker too, and the lights with it.
+// Folded by hand with ⌘S, it comes at once and at its usual pace, as it
+// always did.
 //
 // While a tab's address is being typed into its row, the column stays out:
 // the pointer drifting off it is no reason to take the field away.
@@ -185,9 +188,6 @@ struct Fold: View {
         leaving = nil
         if out {
             guard !browser.peeking else { return }
-            // Asked to come at once, the column doesn't then take its time
-            // sliding out either.
-            let cheetah = prefs.sidebar && prefs.sideReveal == .cheetah
             browser.peek(true, in: cheetah ? Motion.quick : Motion.glide)
         } else {
             let going = DispatchWorkItem {
@@ -205,10 +205,19 @@ struct Fold: View {
     private func hideLights() {
         guard let bar = Fold.titlebar else { return }
         if prefs.sidebar {
-            Fold.slide(bar, off: lightsOff, by: prefs.sideWidth)
+            // Out with a cheetah's column, at its pace; everything else — in
+            // again, or ⌘S — on the column's usual spring.
+            Fold.slide(bar, off: lightsOff, by: prefs.sideWidth, quick: cheetah && browser.peeking)
         } else {
             Fold.slide(bar, off: lightsOff, by: Metrics.strip, up: true)
         }
+    }
+
+    /// A column that hides, asked in Settings to come at once: it doesn't
+    /// then take its time sliding out either. Only for that column — one
+    /// folded with ⌘S keeps its pace, whatever the setting left behind.
+    private var cheetah: Bool {
+        prefs.sidebar && prefs.sideHides && prefs.sideReveal == .cheetah
     }
 
     static var titlebar: NSView? {
@@ -226,7 +235,8 @@ struct Fold: View {
     /// column's own spring (Motion.glide, in Core Animation's terms) — from
     /// wherever they are, when the pointer turns back halfway. `up`: off the
     /// top edge with the strip rather than off the left edge with the column.
-    static func slide(_ bar: NSView, off: Bool, by width: CGFloat, up: Bool = false) {
+    /// `quick`: on Motion.quick instead, with a column that came at once.
+    static func slide(_ bar: NSView, off: Bool, by width: CGFloat, up: Bool = false, quick: Bool = false) {
         slides += 1
         let turn = slides
         guard let layer = bar.layer else {
@@ -253,15 +263,23 @@ struct Fold: View {
             bar.isHidden = off
             return
         }
-        let spring = CASpringAnimation(keyPath: path)
-        spring.mass = 1
-        spring.stiffness = pow(2 * .pi / 0.34, 2)
-        spring.damping = 4 * .pi * 0.82 / 0.34
-        spring.fromValue = from
-        spring.toValue = to
-        spring.duration = spring.settlingDuration
-        spring.fillMode = .forwards
-        spring.isRemovedOnCompletion = false
+        let motion: CABasicAnimation
+        if quick {
+            motion = CABasicAnimation(keyPath: path)
+            motion.duration = 0.14
+            motion.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        } else {
+            let spring = CASpringAnimation(keyPath: path)
+            spring.mass = 1
+            spring.stiffness = pow(2 * .pi / 0.34, 2)
+            spring.damping = 4 * .pi * 0.82 / 0.34
+            spring.duration = spring.settlingDuration
+            motion = spring
+        }
+        motion.fromValue = from
+        motion.toValue = to
+        motion.fillMode = .forwards
+        motion.isRemovedOnCompletion = false
         bar.isHidden = false
         CATransaction.begin()
         CATransaction.setCompletionBlock {
@@ -271,7 +289,7 @@ struct Fold: View {
                 bar.isHidden = off
             }
         }
-        layer.add(spring, forKey: "fold")
+        layer.add(motion, forKey: "fold")
         CATransaction.commit()
     }
 }
