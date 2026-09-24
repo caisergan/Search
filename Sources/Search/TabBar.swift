@@ -585,6 +585,13 @@ private struct TabPill: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            // On glass, an edge of light round it, as a pane of it would have.
+            .overlay {
+                if prefs.theme.isGlass {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(Palette.ink.opacity(0.08), lineWidth: 1)
+                }
+            }
             .matchedGeometryEffect(id: "live", in: pill)
         } else if hovering {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
