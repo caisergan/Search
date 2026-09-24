@@ -23,7 +23,7 @@ struct Omnibox: View {
             if over {
                 // The page is still there, just out of the way.
                 Rectangle()
-                    .fill(Palette.ground.opacity(0.74))
+                    .fill(Palette.ground.opacity(0.5))
                     .ignoresSafeArea()
                     .onTapGesture { browser.dismiss() }
                     .transition(.opacity)
