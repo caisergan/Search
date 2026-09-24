@@ -243,6 +243,12 @@ struct SettingsPanel: View {
                 Segmented(options: Look.allCases.map { ($0, $0.title) }, selection: $prefs.look)
             }
             Rule()
+            Line("Theme", themeDetail) { EmptyView() }
+                .padding(.bottom, -4)
+            ThemePicker(selection: $prefs.theme)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
+            Rule()
             Line("Tab size", "Large makes titles easier to read, in the sidebar and across the top") {
                 Segmented(
                     options: TabSize.allCases.map { ($0, $0.title) },
@@ -272,6 +278,14 @@ struct SettingsPanel: View {
                     ))
                 }
             }
+        }
+    }
+
+    private var themeDetail: String {
+        switch prefs.theme {
+        case .plain: return "The window around the page in one solid colour"
+        case .glass: return "The desktop shows through the tabs, frosted, and the page sits on it as a card"
+        default: return "The desktop shows through the tabs, frosted and tinted, and the page sits on it as a card"
         }
     }
 
@@ -621,6 +635,89 @@ struct Segmented<Option: Hashable>: View {
         .padding(2)
         .background(Palette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .animation(Motion.settle, value: selection)
+    }
+}
+
+/// Every theme as a small window of its own — the column, and the page as it
+/// sits beside it — its name under it, and a ring round the one in use.
+struct ThemePicker: View {
+    @Binding var selection: Theme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(Theme.allCases) { theme in
+                Swatch(theme: theme, on: theme == selection)
+                    .onTapGesture { withAnimation(Motion.settle) { selection = theme } }
+            }
+        }
+    }
+
+    private struct Swatch: View {
+        let theme: Theme
+        let on: Bool
+        @State private var hovering = false
+
+        var body: some View {
+            VStack(spacing: 5) {
+                window
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 38)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(Palette.hairline, lineWidth: 1)
+                    )
+                    .padding(2)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .strokeBorder(on ? Palette.ink : (hovering ? Palette.faint : .clear), lineWidth: 1.5)
+                    )
+                Text(theme.title)
+                    .font(.system(size: 11, weight: on ? .medium : .regular))
+                    .foregroundStyle(on ? Palette.ink : Palette.muted)
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .animation(Motion.quick, value: hovering)
+            .help(theme.title)
+        }
+
+        /// A column with a live line in it, and the page beside it: flat for
+        /// plain, a card on glass for the rest.
+        private var window: some View {
+            ZStack {
+                if theme.isGlass {
+                    // What frost looks like, without a desktop to frost.
+                    LinearGradient(colors: [Palette.faint.opacity(0.9), Palette.wash], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    if !theme.tint.isEmpty {
+                        LinearGradient(colors: theme.tint, startPoint: .topLeading, endPoint: .bottomTrailing)
+                            .opacity(0.75)
+                    }
+                } else {
+                    Palette.ground
+                }
+                HStack(spacing: theme.isGlass ? 3 : 0) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Capsule().fill(Palette.ink.opacity(0.18)).frame(height: 4)
+                        Capsule().fill(Palette.ink.opacity(0.10)).frame(width: 9, height: 4)
+                        Capsule().fill(Palette.ink.opacity(0.10)).frame(width: 11, height: 4)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, 8)
+                    .padding(.horizontal, 4)
+                    .frame(width: 22)
+                    .overlay(alignment: .trailing) {
+                        if !theme.isGlass { Rectangle().fill(Palette.hairline).frame(width: 1) }
+                    }
+                    RoundedRectangle(cornerRadius: theme.isGlass ? 3 : 0, style: .continuous)
+                        .fill(Palette.ground)
+                        .shadow(color: .black.opacity(theme.isGlass ? 0.15 : 0), radius: 1.5, y: 0.5)
+                        .padding(.vertical, theme.isGlass ? 3 : 0)
+                        .padding(.trailing, theme.isGlass ? 3 : 0)
+                }
+            }
+        }
     }
 }
 

@@ -9,6 +9,8 @@ import SwiftUI
 struct SideBar: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
+    /// Out over the page, folded (see Fold.swift), rather than beside it.
+    var floating = false
 
     @Namespace private var pill
 
@@ -110,9 +112,13 @@ struct SideBar: View {
         // Rows on their way to or from another space stay in the column.
         .clipped()
         .onAppear { SpaceSwipe.shared.start(for: browser) }
-        .background(landing ? Palette.hover : Palette.ground)
+        .background { ground }
+        // On a theme's glass, beside the page, the card's own edge is the
+        // line between them.
         .overlay(alignment: .trailing) {
-            Rectangle().fill(Palette.hairline).frame(width: 1)
+            if !prefs.theme.isGlass || floating {
+                Rectangle().fill(Palette.hairline).frame(width: 1)
+            }
         }
         .overlay(alignment: .trailing) { edge }
         .onDrop(of: [.url, .text], isTargeted: $landing) { providers in
@@ -127,6 +133,21 @@ struct SideBar: View {
         .animation(Motion.settle, value: prefs.pinnedFolded)
         .onChange(of: holdingLine) { _, holding in if !holding { letGoOfLine() } }
         .onChange(of: holdingSquare) { _, holding in if !holding { letGoOfSquare() } }
+    }
+
+    /// The ground, or a theme's glass: nothing of its own beside the page,
+    /// where the window's glass is already behind it, and glass thick enough
+    /// to read against the page when it comes out over it.
+    @ViewBuilder
+    private var ground: some View {
+        ZStack {
+            if !prefs.theme.isGlass {
+                Palette.ground
+            } else if floating {
+                Backdrop(theme: prefs.theme, behind: false)
+            }
+            if landing { Palette.hover }
+        }
     }
 
     /// The column's edge: pull it to make the column wider or narrower,

@@ -91,13 +91,16 @@ struct Fold: View {
             }
             if folding, !prefs.sidebar, browser.peeking {
                 TabBar(browser: browser)
+                    .background {
+                        if prefs.theme.isGlass { Backdrop(theme: prefs.theme, behind: false) }
+                    }
                     .shadow(color: .black.opacity(0.14), radius: 20, y: 4)
                     .transition(.move(edge: .top))
             }
             ZStack(alignment: .leading) {
                 Color.clear.frame(width: 0)
                 if folding, prefs.sidebar, browser.peeking {
-                    SideBar(browser: browser, prefs: prefs)
+                    SideBar(browser: browser, prefs: prefs, floating: true)
                         .shadow(color: .black.opacity(0.14), radius: 20, x: 4)
                         .transition(.move(edge: .leading))
                 }
