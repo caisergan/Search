@@ -92,7 +92,7 @@ struct Fold: View {
             if folding, !prefs.sidebar, browser.peeking {
                 TabBar(browser: browser)
                     .background {
-                        if prefs.theme.isGlass { Backdrop(theme: prefs.theme, behind: false) }
+                        if prefs.theme.isGlass { Backdrop(theme: prefs.theme) }
                     }
                     .shadow(color: .black.opacity(0.14), radius: 20, y: 4)
                     .transition(.move(edge: .top))

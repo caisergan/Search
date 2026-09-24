@@ -105,25 +105,23 @@ enum Theme: String, CaseIterable, Identifiable {
 /// A theme's glass: the desktop, blurred until only its colours are left,
 /// a thin shade over it so the tabs can be read, and the theme's colour.
 ///
-/// Behind the window, it is the desktop that is blurred — what the window
-/// itself is made of. Within it, it is the page: for the column and the
-/// strip when they come out over the page folded, where the desktop would
-/// show through as a hole in the window. There the shade is thicker, or the
-/// page would be read through the tabs.
+/// Always the desktop, wherever it is drawn — beside the page, and over it
+/// when the column or the strip comes out folded. Blurring the page there
+/// instead turned the column into a smear of whatever the page had under
+/// it: grey over a black page, and nothing like the column it stands in for.
 struct Backdrop: View {
     let theme: Theme
-    var behind = true
 
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let dark = scheme == .dark
         ZStack {
-            Blur(blending: behind ? .behindWindow : .withinWindow)
+            Blur()
             // Black under white ink, white under black: just enough for the
             // titles, never so much the desktop's colours go grey.
             (dark ? Color.black : Color.white)
-                .opacity(behind ? (dark ? 0.30 : 0.34) : (dark ? 0.58 : 0.66))
+                .opacity(dark ? 0.30 : 0.34)
             if !theme.tint.isEmpty {
                 LinearGradient(colors: theme.tint, startPoint: .topLeading, endPoint: .bottomTrailing)
                     .opacity(dark ? 0.20 : 0.16)
@@ -133,8 +131,6 @@ struct Backdrop: View {
     }
 
     private struct Blur: NSViewRepresentable {
-        let blending: NSVisualEffectView.BlendingMode
-
         func makeNSView(context: Context) -> ClearGlass {
             let view = ClearGlass()
             // Blurred whether or not the window is the one in front: a theme
@@ -142,11 +138,11 @@ struct Backdrop: View {
             // themes.
             view.state = .active
             view.material = .sidebar
+            view.blendingMode = .behindWindow
             return view
         }
 
         func updateNSView(_ view: ClearGlass, context: Context) {
-            view.blendingMode = blending
             view.strip()
         }
     }

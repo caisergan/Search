@@ -136,15 +136,15 @@ struct SideBar: View {
     }
 
     /// The ground, or a theme's glass: nothing of its own beside the page,
-    /// where the window's glass is already behind it, and glass thick enough
-    /// to read against the page when it comes out over it.
+    /// where the window's glass is already behind it, and the same glass of
+    /// its own when it comes out over the page.
     @ViewBuilder
     private var ground: some View {
         ZStack {
             if !prefs.theme.isGlass {
                 Palette.ground
             } else if floating {
-                Backdrop(theme: prefs.theme, behind: false)
+                Backdrop(theme: prefs.theme)
             }
             if landing { Palette.hover }
         }
