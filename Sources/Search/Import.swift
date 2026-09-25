@@ -25,6 +25,8 @@ enum Chromium {
         let folder: String
         let service: String
         let account: String
+        /// The app itself, for sending tabs to it (see Transfer.swift).
+        let bundle: String
 
         var id: String { name }
 
@@ -43,13 +45,13 @@ enum Chromium {
     }
 
     static let known: [Source] = [
-        Source(name: "Dia", folder: "Dia/User Data", service: "Dia Safe Storage", account: "Dia"),
-        Source(name: "Chrome", folder: "Google/Chrome", service: "Chrome Safe Storage", account: "Chrome"),
-        Source(name: "Arc", folder: "Arc/User Data", service: "Arc Safe Storage", account: "Arc"),
-        Source(name: "Brave", folder: "BraveSoftware/Brave-Browser", service: "Brave Safe Storage", account: "Brave"),
-        Source(name: "Edge", folder: "Microsoft Edge", service: "Microsoft Edge Safe Storage", account: "Microsoft Edge"),
-        Source(name: "Vivaldi", folder: "Vivaldi", service: "Vivaldi Safe Storage", account: "Vivaldi"),
-        Source(name: "Chromium", folder: "Chromium", service: "Chromium Safe Storage", account: "Chromium"),
+        Source(name: "Dia", folder: "Dia/User Data", service: "Dia Safe Storage", account: "Dia", bundle: "company.thebrowser.dia"),
+        Source(name: "Chrome", folder: "Google/Chrome", service: "Chrome Safe Storage", account: "Chrome", bundle: "com.google.Chrome"),
+        Source(name: "Arc", folder: "Arc/User Data", service: "Arc Safe Storage", account: "Arc", bundle: "company.thebrowser.Browser"),
+        Source(name: "Brave", folder: "BraveSoftware/Brave-Browser", service: "Brave Safe Storage", account: "Brave", bundle: "com.brave.Browser"),
+        Source(name: "Edge", folder: "Microsoft Edge", service: "Microsoft Edge Safe Storage", account: "Microsoft Edge", bundle: "com.microsoft.edgemac"),
+        Source(name: "Vivaldi", folder: "Vivaldi", service: "Vivaldi Safe Storage", account: "Vivaldi", bundle: "com.vivaldi.Vivaldi"),
+        Source(name: "Chromium", folder: "Chromium", service: "Chromium Safe Storage", account: "Chromium", bundle: "org.chromium.Chromium"),
     ]
 
     /// Only the browsers actually on this Mac, with something to read.

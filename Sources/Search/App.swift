@@ -150,6 +150,28 @@ struct SearchApp: App {
                     .disabled(browser.active?.isBlank ?? true)
                 Button("Paste and Go") { browser.pasteAndGo() }
                     .keyboardShortcut("v", modifiers: [.command, .shift])
+                // The browsers Import.swift reads, both ways (see Transfer.swift).
+                Menu("Transfer Tabs") {
+                    Menu("Bring Tabs from") {
+                        ForEach(Chromium.sessions) { source in
+                            Button(source.name) { browser.bringTabs(from: source) }
+                        }
+                    }
+                    .disabled(Chromium.sessions.isEmpty)
+                    Divider()
+                    Menu("Send This Tab to") {
+                        ForEach(Chromium.apps, id: \.source.id) { app in
+                            Button(app.source.name) { browser.sendTabs(to: app.app, named: app.source.name, all: false) }
+                        }
+                    }
+                    .disabled(Chromium.apps.isEmpty || browser.active?.isBlank != false || browser.active?.shy == true)
+                    Menu("Send All Tabs to") {
+                        ForEach(Chromium.apps, id: \.source.id) { app in
+                            Button(app.source.name) { browser.sendTabs(to: app.app, named: app.source.name, all: true) }
+                        }
+                    }
+                    .disabled(Chromium.apps.isEmpty)
+                }
                 Divider()
                 Button("Close Other Tabs") { if let tab = browser.active { browser.closeOthers(but: tab) } }
                     .disabled(browser.tabs.count < 2)
