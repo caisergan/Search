@@ -71,7 +71,33 @@ enum Web {
     /// starting, the window stuck meanwhile. Sharing one lets WebKit have
     /// the next process ready: 9 to 10 ms, for the same memory and the same
     /// number of processes (measured with ./bench bookmark URL new, 24 Sep 2026).
-    static let pool = WKProcessPool()
+    ///
+    /// And made as Safari makes its own: with a web process kept warm for
+    /// the next tab, and the processes of pages just left kept for a while
+    /// to be used again. A pool made plainly has both off; they are set
+    /// through the configuration it is made with, which only WebKit's own
+    /// names reach. Where those names are missing, a plain pool as before.
+    static let pool: WKProcessPool = {
+        let initialize = NSSelectorFromString("_initWithConfiguration:")
+        guard let kind = NSClassFromString("_WKProcessPoolConfiguration") as? NSObject.Type,
+              WKProcessPool.instancesRespond(to: initialize)
+        else { return WKProcessPool() }
+        let configuration = kind.init()
+        for (setter, key) in [("setPrewarmsProcessesAutomatically:", "prewarmsProcessesAutomatically"),
+                              ("setUsesWebProcessCache:", "usesWebProcessCache")]
+        where configuration.responds(to: NSSelectorFromString(setter)) {
+            configuration.setValue(true, forKey: key)
+        }
+        guard let blank = (WKProcessPool.self as AnyObject).perform(NSSelectorFromString("alloc"))?.takeUnretainedValue() as? NSObject
+        else { return WKProcessPool() }
+        typealias Make = @convention(c) (AnyObject, Selector, AnyObject) -> Unmanaged<WKProcessPool>
+        let make = unsafeBitCast(blank.method(for: initialize), to: Make.self)
+        let pool = make(blank, initialize, configuration).takeRetainedValue()
+        // The first one now, rather than when the first page wants it.
+        let warm = NSSelectorFromString("_warmInitialProcess")
+        if pool.responds(to: warm) { pool.perform(warm) }
+        return pool
+    }()
 
     /// `space`: the space the tab belongs to, when it is not the one on
     /// screen — a parked row made ahead of time (see Spaces.swift).
@@ -1049,8 +1075,13 @@ final class Tab: ObservableObject, Identifiable {
         return there.absoluteString == "about:blank" && pending == nil && address != nil
     }
 
-    /// Again from the network. A view that has lost its document is given
-    /// the address back instead: there is nothing else for it to reload.
+    /// The page again, as ⌘R does in Safari and Chrome: the server asked
+    /// whether each file has changed, and only what has is fetched again.
+    /// It went from the network every time, every file of it — a third
+    /// slower, and apple.com's 1.6 MB fetched as 2.5 (measured 26 Sep 2026);
+    /// Empty Cache and Reload (⇧⌘R, below) is there for a site that serves
+    /// an old version. A view that has lost its document is given the
+    /// address back instead: there is nothing else for it to reload.
     func reload() {
         // A pin put down with ⌘W has no view left to reload; waking it is
         // the reload.
@@ -1058,7 +1089,7 @@ final class Tab: ObservableObject, Identifiable {
         if hollow, let address {
             web.open(address)
         } else {
-            web.reloadFromOrigin()
+            web.reload()
         }
     }
     /// A reload with this site's cache emptied first — what Chrome calls
@@ -1728,5 +1759,29 @@ extension WKWebView {
         evaluateJavaScript(js, in: nil, in: Web.world) { result in
             then?(try? result.get())
         }
+    }
+}
+
+/// A connection opened ahead of a page — its name looked up, TCP and TLS
+/// done — so that when the page is asked for, the request goes at once:
+/// tens to hundreds of milliseconds, more on a slow network. Only the host
+/// is reached; no request is made. Through WebKit's own network process, so
+/// the page uses that connection, reached by a name only WebKit has.
+@MainActor
+enum Preconnect {
+    private static var recent: [String: Date] = [:]
+
+    static func to(_ url: URL?, through web: WKWebView?) {
+        guard let url, let host = url.host()?.lowercased(), let web,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+        else { return }
+        let now = Date()
+        // A connection lasts a while: once per host is enough for that.
+        if let last = recent[host], now.timeIntervalSince(last) < 30 { return }
+        recent[host] = now
+        if recent.count > 100 { recent = recent.filter { now.timeIntervalSince($0.value) < 30 } }
+        let preconnect = NSSelectorFromString("_preconnectToServer:")
+        guard web.responds(to: preconnect) else { return }
+        web.perform(preconnect, with: url)
     }
 }

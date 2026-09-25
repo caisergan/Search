@@ -2077,6 +2077,14 @@ final class Browser: NSObject, ObservableObject {
         }
         offers = list
         ending = history.completion(for: typed, among: offers.filter { $0.kind != .open })
+        // Where Return would go, connected to ahead of it: a place already
+        // been to, or the search engine. Only the host is reached — nothing
+        // typed leaves the Mac before Return.
+        let lower = typed.lowercased()
+        let completed = ending == nil ? nil : offers.first { $0.kind != .open && $0.kind != .search && $0.key.hasPrefix(lower) }
+        if let bound = completed ?? offers.last(where: { $0.kind == .search }) {
+            Preconnect.to(bound.url, through: active?.built)
+        }
         // A row that was picked stops being the right row the moment the
         // question changes.
         picked = nil
