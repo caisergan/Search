@@ -71,6 +71,9 @@ final class Extensions: NSObject, ObservableObject {
     private var watching: [Tab.ID: [AnyCancellable]] = [:]
     private var bag = Set<AnyCancellable>()
     private(set) lazy var window = ExtensionWindow(owner: self)
+    /// The pop-up windows extensions opened, each a tab of the one window
+    /// (see openNewWindowUsing), by that tab.
+    private(set) var popups: [Tab.ID: ExtensionPopupWindow] = [:]
     /// Where each extension's button is on screen, for its popup to hang from.
     var anchors: [String: WeakView] = [:]
 
@@ -173,6 +176,8 @@ final class Extensions: NSObject, ObservableObject {
     /// extension could reach.
     private func seen(_ tab: Tab) -> Bool { !tab.shy || tab.carriesExtensions }
     var visibleTabs: [Tab] { browser?.tabs.filter(seen) ?? [] }
+    /// The tabs of the window itself: not the ones standing for a pop-up.
+    var windowTabs: [Tab] { visibleTabs.filter { popups[$0.id] == nil } }
 
     var activeAdapter: ExtensionTab? {
         guard let tab = browser?.active, seen(tab) else { return nil }
@@ -184,7 +189,9 @@ final class Extensions: NSObject, ObservableObject {
         let ids = now.map(\.id)
         let gone = order.filter { !ids.contains($0) }
         for id in gone {
-            if let adapter = adapters[id] { controller.didCloseTab(adapter, windowIsClosing: false) }
+            let popup = popups.removeValue(forKey: id)
+            if let adapter = adapters[id] { controller.didCloseTab(adapter, windowIsClosing: popup != nil) }
+            if let popup { controller.didCloseWindow(popup) }
             adapters[id] = nil
             watching[id] = nil
         }
@@ -684,6 +691,15 @@ final class Extensions: NSObject, ObservableObject {
         return parts.url ?? url
     }
 
+    /// The address as the extension named it: the copy's name taken back.
+    static func popped(_ url: URL) -> URL {
+        guard url.scheme == scheme, url.lastPathComponent.contains(popupCopy),
+              var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return url }
+        parts.path = parts.path.replacingOccurrences(of: popupCopy + ".", with: ".")
+        return parts.url ?? url
+    }
+
     /// The page the manifest names for the button, when WebKit hasn't said.
     static func popupURL(for context: WKWebExtensionContext) -> URL? {
         let manifest = context.webExtension.manifest
@@ -893,11 +909,11 @@ final class Extensions: NSObject, ObservableObject {
 @available(macOS 15.4, *)
 extension Extensions: WKWebExtensionControllerDelegate {
     func webExtensionController(_ controller: WKWebExtensionController, openWindowsFor extensionContext: WKWebExtensionContext) -> [any WKWebExtensionWindow] {
-        [window]
+        [window] + popups.values.sorted { $0.opened < $1.opened }
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, focusedWindowFor extensionContext: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
-        window
+        browser?.activeID.flatMap { popups[$0] } ?? window
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, openNewTabUsing configuration: WKWebExtension.TabConfiguration, for extensionContext: WKWebExtensionContext) async throws -> (any WKWebExtensionTab)? {
@@ -909,8 +925,22 @@ extension Extensions: WKWebExtensionControllerDelegate {
     }
 
     /// One window, on purpose. A new window's pages become tabs in this one.
+    ///
+    /// A pop-up of one page — Bitwarden's passkey and unlock prompts — is a
+    /// tab too, but a window of its own to the extension: WebKit answered
+    /// with this window, so Bitwarden closed "its" pop-up by closing the
+    /// browser's, which did nothing, left the prompt open, and never heard
+    /// when the tab was closed by hand while the site waited on it.
     func webExtensionController(_ controller: WKWebExtensionController, openNewWindowUsing configuration: WKWebExtension.WindowConfiguration, for extensionContext: WKWebExtensionContext) async throws -> (any WKWebExtensionWindow)? {
         guard let browser else { return nil }
+        if configuration.windowType == .popup, configuration.tabURLs.count <= 1 {
+            let before = browser.active
+            let tab = browser.open(configuration.tabURLs.first ?? URL(string: "about:blank")!, foreground: configuration.shouldBeFocused, atEnd: true)
+            let popup = ExtensionPopupWindow(owner: self, tab: tab, returnTo: before, type: configuration.windowType, frame: configuration.frame)
+            popups[tab.id] = popup
+            controller.didOpenWindow(popup)
+            return popup
+        }
         for (index, url) in configuration.tabURLs.enumerated() {
             browser.open(url, foreground: index == 0 && configuration.shouldBeFocused, atEnd: true)
         }
@@ -1013,16 +1043,22 @@ final class ExtensionTab: NSObject, WKWebExtensionTab {
 
     private var browser: Browser? { owner.browser }
 
-    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { owner.window }
+    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
+        tab.flatMap { owner.popups[$0.id] } ?? owner.window
+    }
 
     func indexInWindow(for context: WKWebExtensionContext) -> Int {
         guard let tab else { return NSNotFound }
-        return owner.visibleTabs.firstIndex { $0.id == tab.id } ?? NSNotFound
+        if owner.popups[tab.id] != nil { return 0 }
+        return owner.windowTabs.firstIndex { $0.id == tab.id } ?? NSNotFound
     }
 
     func webView(for context: WKWebExtensionContext) -> WKWebView? { tab?.built }
     func title(for context: WKWebExtensionContext) -> String? { tab?.title }
-    func url(for context: WKWebExtensionContext) -> URL? { tab?.address }
+    /// A popup page loaded from its copy (see Extensions.unpopped) is told
+    /// by its own name: Bitwarden looks for its pop-out that way, to bring it
+    /// forward or close it, and found none.
+    func url(for context: WKWebExtensionContext) -> URL? { tab?.address.map(Extensions.popped) }
     func isLoadingComplete(for context: WKWebExtensionContext) -> Bool { !(tab?.loading ?? false) }
     func isSelected(for context: WKWebExtensionContext) -> Bool { tab?.id == browser?.activeID }
     func isPinned(for context: WKWebExtensionContext) -> Bool { tab?.pin != nil }
@@ -1083,15 +1119,21 @@ final class ExtensionWindow: NSObject, WKWebExtensionWindow {
     init(owner: Extensions) { self.owner = owner }
 
     private var nsWindow: NSWindow? {
-        NSApp.windows.first { $0.isVisible && $0.contentView != nil && $0.frameAutosaveName == "search" }
+        // Named as App.swift names it, a test world's included.
+        let name = Store.world.map { "search (\($0))" } ?? "search"
+        return NSApp.windows.first { $0.isVisible && $0.contentView != nil && $0.frameAutosaveName == name }
             ?? NSApp.mainWindow
     }
 
     func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] {
-        owner.visibleTabs.map(owner.adapter(for:))
+        owner.windowTabs.map(owner.adapter(for:))
     }
 
-    func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? { owner.activeAdapter }
+    /// With a pop-up's tab in front, the page it was opened over.
+    func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? {
+        guard let active = owner.browser?.active, let popup = owner.popups[active.id] else { return owner.activeAdapter }
+        return popup.returnTo.map(owner.adapter(for:))
+    }
     func windowType(for context: WKWebExtensionContext) -> WKWebExtension.WindowType { .normal }
     func isPrivate(for context: WKWebExtensionContext) -> Bool { false }
 
@@ -1108,6 +1150,64 @@ final class ExtensionWindow: NSObject, WKWebExtensionWindow {
     func focus(for context: WKWebExtensionContext) async throws {
         NSApp.activate(ignoringOtherApps: true)
         nsWindow?.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// A pop-up window an extension opened, as the extension sees it: the tab
+/// it is in Search, alone in a window of its own (see openNewWindowUsing).
+/// Closed, it closes that tab and goes back to the page it was opened over.
+@available(macOS 15.4, *)
+@MainActor
+final class ExtensionPopupWindow: NSObject, WKWebExtensionWindow {
+    unowned let owner: Extensions
+    weak var tab: Tab?
+    weak var returnTo: Tab?
+    let type: WKWebExtension.WindowType
+    let opened = Date()
+    /// Where it asked to be. Kept, and given back, as a window's would be.
+    private var asked: CGRect
+
+    init(owner: Extensions, tab: Tab, returnTo: Tab?, type: WKWebExtension.WindowType, frame: CGRect) {
+        self.owner = owner
+        self.tab = tab
+        self.returnTo = returnTo
+        self.type = type
+        self.asked = frame
+    }
+
+    func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] { tab.map { [owner.adapter(for: $0)] } ?? [] }
+    func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? { tab.map(owner.adapter(for:)) }
+    func windowType(for context: WKWebExtensionContext) -> WKWebExtension.WindowType { type }
+    func windowState(for context: WKWebExtensionContext) -> WKWebExtension.WindowState { .normal }
+    func isPrivate(for context: WKWebExtensionContext) -> Bool { false }
+
+    func frame(for context: WKWebExtensionContext) -> CGRect {
+        let whole = owner.window.frame(for: context)
+        guard !asked.isNull, !whole.isNull else { return whole }
+        // Chrome fills in what it wasn't told from the window it opened over.
+        return CGRect(
+            x: asked.origin.x.isNaN ? whole.minX : asked.origin.x,
+            y: asked.origin.y.isNaN ? whole.minY : asked.origin.y,
+            width: asked.width.isNaN || asked.width <= 0 ? whole.width : asked.width,
+            height: asked.height.isNaN || asked.height <= 0 ? whole.height : asked.height
+        )
+    }
+
+    func screenFrame(for context: WKWebExtensionContext) -> CGRect { owner.window.screenFrame(for: context) }
+
+    func setFrame(_ frame: CGRect, for context: WKWebExtensionContext) async throws { asked = frame }
+
+    func focus(for context: WKWebExtensionContext) async throws {
+        try await owner.window.focus(for: context)
+        if let tab { owner.browser?.select(tab) }
+    }
+
+    func close(for context: WKWebExtensionContext) async throws {
+        guard let tab, let browser = owner.browser else { return }
+        if browser.activeID == tab.id, let back = returnTo, browser.tabs.contains(where: { $0.id == back.id }) {
+            browser.select(back)
+        }
+        browser.close(tab)
     }
 }
 
