@@ -164,20 +164,29 @@ extension Bench {
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             ready(tab)
             let to = request["url"] as? String ?? ""
-            switch to {
-            case "back": tab.back()
-            case "forward": tab.forward()
-            case "reload": tab.reload()
-            // Past every cache: what a developer means after changing a file.
-            case "hard": tab.web.reloadFromOrigin()
-            default:
-                guard let url = Address.url(from: to), Bench.web(url) else { answer(["error": "a.navigate needs a web address, back, forward, reload or hard"]); return }
-                tab.go(to: url)
+            var url: URL?
+            if !["back", "forward", "reload", "hard"].contains(to) {
+                guard let web = Address.url(from: to), Bench.web(web) else { answer(["error": "a.navigate needs a web address, back, forward, reload or hard"]); return }
+                url = web
             }
-            // A beat for the load to start, so the wait sees it.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                self?.wait(for: tab, until: Date().addingTimeInterval(request["seconds"] as? Double ?? 20)) { out in
-                    answer(self?.decorated(out, tab) ?? out)
+            let limit = Date().addingTimeInterval(request["seconds"] as? Double ?? 20)
+            // The page there now is marked, in Search's world, so the new one
+            // is known by not having the mark — even one that loads before
+            // anyone sees it loading, as a page from this Mac does.
+            tab.web.evaluateJavaScript("window.__claudeOld = 1", in: nil, in: Web.world) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    switch to {
+                    case "back": tab.back()
+                    case "forward": tab.forward()
+                    case "reload": tab.reload()
+                    // This site's caches emptied first, service workers'
+                    // included: what a developer means after changing a file (⇧⌘R).
+                    case "hard": tab.reloadEmptied()
+                    default: if let url { tab.go(to: url) }
+                    }
+                    self?.arrived(tab, within: to == "hard" ? 5 : 1.5) {
+                        self?.wait(for: tab, until: limit) { out in answer(self?.decorated(out, tab) ?? out) }
+                    }
                 }
             }
 
@@ -472,6 +481,23 @@ extension Bench {
                 answer(self.decorated(out, tab))
             }
         }
+    }
+
+    /// Once a new page has begun in the tab — it is loading, or it is a
+    /// document without the mark a.navigate left — or the time is up, for a
+    /// move within the page, which starts nothing.
+    private func arrived(_ tab: Tab, within seconds: Double, _ then: @escaping () -> Void) {
+        let started = Date()
+        func look() {
+            guard !tab.loading, Date().timeIntervalSince(started) < seconds else { then(); return }
+            tab.web.evaluateJavaScript("!window.__claudeOld", in: nil, in: Web.world) { result in
+                MainActor.assumeIsolated {
+                    if case .success(let fresh) = result, fresh as? Bool == true { then(); return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { look() }
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { look() }
     }
 
     private func forget(_ tab: Tab) {
