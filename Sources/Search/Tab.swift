@@ -328,6 +328,10 @@ final class Tab: ObservableObject, Identifiable {
     /// WebKit keeps each kind of view to its own pages, so the tab has to be
     /// swapped for one built for the address (see Browser.replace).
     var onCross: ((Tab, URL) -> Void)?
+    /// The page took itself from one address to another without loading
+    /// anything — YouTube from one video to the next, a thread opened on X.
+    /// A visit all the same, which no load finishing will ever report.
+    var onMovedInPlace: ((Tab, _ from: URL, _ to: URL) -> Void)?
     /// The extension whose store page has its own "Add to Search" button in
     /// place — so the bar at the bottom of the window doesn't offer it twice.
     @Published var storePlaced: String?
@@ -359,6 +363,11 @@ final class Tab: ObservableObject, Identifiable {
     /// The tab a link opened this one from. Others opened from it after this
     /// one line up under it in the order they came (Browser.slot).
     var parent: Tab.ID?
+    /// A window a page opened at a size of its own, or without a toolbar:
+    /// a pop-up, not a link. It is named by its site, never by its title — a
+    /// page that opens one can call it anything, "Sign in with Google" over
+    /// somebody else's address included.
+    var popup = false
 
     /// One letter, when the tab has been pinned. A pinned tab keeps its place
     /// at the head of the row and gives up its title for that letter — which
@@ -410,6 +419,9 @@ final class Tab: ObservableObject, Identifiable {
     /// can't find your way back to.
     var label: String {
         if let name, !name.isEmpty { return name }
+        if popup, let host = address?.host(), !host.isEmpty {
+            return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        }
         if !title.isEmpty { return title }
         if let address { return Address.pretty(address) }
         return "New Tab"
@@ -496,8 +508,13 @@ final class Tab: ObservableObject, Identifiable {
                     // back, and vanished from the session altogether.
                     guard fresh.absoluteString != "about:blank" else { return }
                     let moved = fresh.host() != self.address?.host()
+                    let before = self.address
                     self.address = fresh
                     if moved { self.adoptIcon() }
+                    // With no load under way, the page moved itself: pushState
+                    // or replaceState, back or forward within it, or a link to
+                    // #somewhere in it.
+                    if let before, self.built?.isLoading == false { self.onMovedInPlace?(self, before, fresh) }
                 }
             },
             web.observe(\.estimatedProgress, options: [.new]) { [weak self] _, _ in

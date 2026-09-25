@@ -51,13 +51,15 @@ struct Words {
 
     var isEmpty: Bool { all.isEmpty }
 
+    /// Nothing but single letters. The address field takes a letter alone as
+    /// the start of an address, not a word: every title has some word
+    /// beginning with it.
+    var isLetters: Bool { !all.contains { $0.count > 1 } }
+
     /// How `text` (see `fold`) holds every word, if it does. A word of one or
-    /// two letters only counts at the start of a word: "x" found inside every
-    /// name with an x in it answers nothing. A single letter on its own is
-    /// the start of an address, and only addresses answer it — every title
-    /// and path has a word beginning with it somewhere.
+    /// two bytes only counts at the start of a word: "x" found inside every
+    /// name with an x in it answers nothing.
     func fit(in text: [UInt8]) -> Fit? {
-        guard all.contains(where: { $0.count > 1 }) else { return nil }
         var fit = Fit.starts
         for word in all {
             switch Words.find(word, in: text) {
@@ -98,7 +100,7 @@ struct Words {
                 while from < hay.count,
                       let hit = memmem(base + from, hay.count - from, sought, needle.count) {
                     let at = base.distance(to: UnsafeRawPointer(hit))
-                    if at == 0 || !isWordByte(text[at - 1]) { return .starts }
+                    if at == 0 || !isWordByte(hay[at - 1]) { return .starts }
                     found = .inside
                     from = at + 1
                 }
@@ -393,7 +395,7 @@ final class History: ObservableObject {
         let host = key[..<(key.firstIndex(of: "/") ?? key.endIndex)]
         // "hub" finding github.com, once the "git" has been skipped.
         if let dot = host.firstIndex(of: "."), host[host.index(after: dot)...].hasPrefix(needle) { return 3 }
-        let fit = words.fit(in: text)
+        let fit = words.isLetters ? nil : words.fit(in: text)
         if fit == .starts { return 2.5 }
         // Only from two letters up. A single letter matching anywhere inside
         // a name turns "x" into example.com and netflix.com, which is not what
@@ -455,12 +457,21 @@ final class History: ObservableObject {
         }
         // Keys written by an older Search can meet under the new rule:
         // they are merged, never trusted to be unique.
-        var moved = false
-        let kept = list.map { saved in
+        var rekeyed = false
+        let entries = list.map { saved in
             var visit = saved
             // Never a front door: its count is the whole site's, and it stays
-            // the site's whichever address it last went to.
-            guard visit.key.contains("/"), let url = URL(string: visit.url) else { return (visit.key, visit) }
+            // the site's whichever address it last went to. 1.0.3 moved one
+            // last seen with a query under it (google.com?pli=1); it goes back.
+            if !visit.key.contains("/") {
+                let door = String(visit.key.prefix { $0 != "?" })
+                if door != visit.key {
+                    visit.key = door
+                    rekeyed = true
+                }
+                return (visit.key, visit)
+            }
+            guard let url = URL(string: visit.url) else { return (visit.key, visit) }
             let key = History.key(for: url)
             if key != visit.key {
                 // Kept before the query counted, every video of a site or
@@ -469,16 +480,16 @@ final class History: ObservableObject {
                 // the rest can't be told apart any more.
                 if key.contains("?"), !visit.key.contains("?") { visit.count = 1 }
                 visit.key = key
-                moved = true
+                rekeyed = true
             }
             return (visit.key, visit)
         }
-        visits = Dictionary(kept, uniquingKeysWith: { a, b in
+        visits = Dictionary(entries, uniquingKeysWith: { a, b in
             var newer = a.last >= b.last ? a : b
             newer.count = a.count + b.count
             return newer
         })
-        if moved { save() }
+        if rekeyed { save() }
     }
 
     /// Coalesced: a busy minute of browsing writes the file once, not thirty

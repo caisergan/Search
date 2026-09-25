@@ -1691,6 +1691,15 @@ final class Browser: NSObject, ObservableObject {
         activeID = active ?? row.first?.id
     }
 
+    /// Where a new tab goes: beside the tab you are on — but never among the
+    /// pins, which a new tab isn't one of: from a pin, it comes first after
+    /// them. A link from another app, with a pin in front, landed between two
+    /// (#219).
+    func placeForNew() -> Int {
+        guard let here = tabs.firstIndex(where: { $0.id == activeID }) else { return tabs.count }
+        return max(here + 1, pinnedCount)
+    }
+
     /// A tab made outside the row — a peek being kept — put in it at `index`.
     func insert(_ tab: Tab, at index: Int) {
         tabs.insert(tab, at: min(max(0, index), tabs.count))
@@ -1804,6 +1813,15 @@ final class Browser: NSObject, ObservableObject {
         // From a private tab, the new one is private too, as for ⌘-click.
         tab.onMiddleClick = { [weak self] tab, url in self?.open(url, foreground: false, from: tab) }
         tab.onCross = { [weak self] tab, url in self?.replace(tab, going: url) }
+        // A page reached without a load is kept like one reached with it, or
+        // the video you went on to from another is nowhere in the history.
+        // Only when it is another page: a #section of the same one isn't.
+        // The title may still be the last page's; it is put right as the
+        // page sets its own (see retitle).
+        tab.onMovedInPlace = { [weak self] tab, from, to in
+            guard let self, !tab.shy, !tab.bench, History.key(for: from) != History.key(for: to) else { return }
+            history.record(to, title: tab.title)
+        }
 
         // The caret in a sign-in box: the accounts kept for this site hang
         // from the box, and go when the caret does. Nothing is filled on
@@ -1992,7 +2010,7 @@ final class Browser: NSObject, ObservableObject {
             .filter { tab in
                 guard !words.isEmpty else { return true }
                 let address = tab.address.map { Address.pretty($0) } ?? ""
-                return words.fit(in: Words.fold(tab.label + " " + address)) != nil
+                return !words.isLetters && words.fit(in: Words.fold(tab.label + " " + address)) != nil
             }
             .sorted { $0.touched > $1.touched }
             .prefix(words.isEmpty ? 6 : 3)
@@ -2300,6 +2318,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // did nothing at all. Each tab gets a controller of its own.
         configuration.userContentController = WKUserContentController()
         let tab = Tab(shy: tab(for: webView)?.shy ?? false, configuration: configuration)
+        tab.popup = windowFeatures.width != nil || windowFeatures.height != nil
+            || windowFeatures.toolbarsVisibility?.boolValue == false
         prepare(tab)
         // Under the tab it came from, not at the end of the row.
         tabs.insert(tab, at: slot(under: from))
