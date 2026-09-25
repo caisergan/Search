@@ -25,6 +25,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Bitwarden saves passkeys. Its prompt to save one opens as a tab that stands for a window of its own, as Chrome's pop-up window does: WebKit told Bitwarden the pop-up was the browser's own window, so it couldn't find the prompt again, left it open once the passkey was saved, and never heard when it was closed by hand while the site waited. An extension also finds its popup page opened in a tab by the name it gave it, where Search showed the copy it loads it from, and a test world reports its window's place and size to extensions as the real one does.
 - A window a page opens at a size of its own, a sign-in window for one, is named in the tabs by its site rather than by its title, which the page chooses: one called "Sign in with Google" from another address no longer passes for Google's. A plain link opened in a new tab keeps its title, and a name you gave a tab stays first.
 - A link from another app, or one opened from a pinned tab, comes first after the pins instead of landing between two of them. ([#219](https://github.com/driceroland/Search/issues/219))
 - The shortcuts card lists ⇧⌘C, Copy Address, which only the Tabs menu showed. Thanks [@merttopuz](https://github.com/merttopuz) ([#182](https://github.com/driceroland/Search/pull/182)), and [@olllayor](https://github.com/olllayor) for asking ([#176](https://github.com/driceroland/Search/issues/176))
