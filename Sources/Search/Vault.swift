@@ -133,10 +133,13 @@ enum Vault {
         guard let host = row[kSecAttrServer as String] as? String,
               let user = row[kSecAttrAccount as String] as? String
         else { return nil }
-        // The keychain has no "last used" of its own; it rides in the comment.
-        let used = (row[kSecAttrComment as String] as? String)
-            .flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
-        let clear = (row[kSecAttrProtocol as String] as? String) == (kSecAttrProtocolHTTP as String)
+        // The keychain has no "last used" of its own: it is in the settings
+        // (see `touch`), or, for an item saved before, in the comment.
+        let id = Login(host: host, user: user, password: "").id
+        let touched = Store.settings.dictionary(forKey: usedKey) as? [String: Double] ?? [:]
+        let used = (touched[id] ?? (row[kSecAttrComment as String] as? String).flatMap(Double.init))
+            .map(Date.init(timeIntervalSince1970:))
+        let clear = (row[kSecAttrProtocol as String] as? String) == (kSecAttrProtocolHTTP as String) || touched["http\u{1}" + id] != nil
         return Login(host: host, user: user, password: "", used: used, clear: clear)
     }
 
@@ -178,19 +181,21 @@ enum Vault {
     }
 
     /// It was just used to sign in, over http or https. Lists put it first
-    /// from now on, and it is offered where it was last used. Only those are
-    /// written; the secret is left alone, never read to be put back.
+    /// from now on, and it is offered where it was last used.
+    ///
+    /// Kept in the settings, not written onto the keychain item: an item
+    /// saved by another build of Search — one signed differently, an older
+    /// one, one brought in from Chrome — lets this one change it only after
+    /// asking for the Mac's password, and asked again at every sign-in,
+    /// "Always Allow" or not. Nothing here needs the keychain.
     static func touch(_ login: Login) {
-        SecItemUpdate([
-            kSecClass as String: kSecClassInternetPassword,
-            kSecAttrServer as String: login.host,
-            kSecAttrAccount as String: login.user,
-            kSecAttrLabel as String: label,
-        ] as CFDictionary, [
-            kSecAttrComment as String: String(Date().timeIntervalSince1970),
-            kSecAttrProtocol as String: login.clear ? kSecAttrProtocolHTTP : kSecAttrProtocolHTTPS,
-        ] as CFDictionary)
+        var used = Store.settings.dictionary(forKey: usedKey) as? [String: Double] ?? [:]
+        used[login.id] = Date().timeIntervalSince1970
+        if login.clear { used["http\u{1}" + login.id] = 1 } else { used["http\u{1}" + login.id] = nil }
+        Store.settings.set(used, forKey: usedKey)
     }
+
+    private static let usedKey = "passwords.used"
 
     static func forget(host: String, user: String) {
         SecItemDelete([
