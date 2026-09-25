@@ -126,7 +126,7 @@ struct Keys: Hashable, Codable {
 enum Command: String, CaseIterable, Identifiable {
     case newTab, newPrivateTab, reopenTab, openAddress, closeTab, duplicateTab
     case back, forward, nextTab, previousTab, searchTabs
-    case reload, readingMode, floatVideo, stopSound, print
+    case reload, hardReload, readingMode, floatVideo, stopSound, print
     case find, findNext, findPrevious
     case copyAddress, pasteAndGo, addBookmark
     case sidebar, foldSidebar
@@ -157,7 +157,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .newTab, .newPrivateTab, .reopenTab, .openAddress, .closeTab, .duplicateTab,
              .nextTab, .previousTab, .searchTabs:
             return .tabs
-        case .back, .forward, .reload, .readingMode, .floatVideo, .stopSound, .print,
+        case .back, .forward, .reload, .hardReload, .readingMode, .floatVideo, .stopSound, .print,
              .copyAddress, .pasteAndGo, .addBookmark:
             return .page
         case .find, .findNext, .findPrevious, .hideElements, .undoHide, .hiddenOnSite:
@@ -185,6 +185,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .previousTab: return "Previous tab"
         case .searchTabs: return "Search tabs"
         case .reload: return "Reload page"
+        case .hardReload: return "Empty cache and reload"
         case .readingMode: return "Reading mode"
         case .floatVideo: return "Float video"
         case .stopSound: return "Stop sound in tab"
@@ -227,7 +228,9 @@ enum Command: String, CaseIterable, Identifiable {
         case .previousTab: return Keys("[", shift: true)
         case .searchTabs: return Keys("k")
         case .reload: return Keys("r")
-        case .readingMode: return Keys("r", shift: true)
+        case .hardReload: return Keys("r", shift: true)
+        // ⇧⌘R until the hard reload took it, as Chrome has it.
+        case .readingMode: return Keys("r", option: true)
         case .floatVideo: return Keys("p", shift: true)
         case .stopSound: return Keys("m", shift: true)
         case .print: return Keys("p")

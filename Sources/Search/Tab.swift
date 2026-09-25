@@ -1061,6 +1061,26 @@ final class Tab: ObservableObject, Identifiable {
             web.reloadFromOrigin()
         }
     }
+    /// A reload with this site's cache emptied first — what Chrome calls
+    /// Empty Cache and Hard Reload — for a site that keeps serving an old
+    /// version even to a reload that asks the server again, usually through
+    /// what a service worker cached. Only the site's caches go: its
+    /// cookies, sign-ins and stored data stay.
+    func reloadEmptied() {
+        guard !wake() else { return }
+        guard let host = (built?.url ?? address)?.host(), !host.isEmpty else {
+            reload()
+            return
+        }
+        let site = Vault.registrable(host)
+        let store = web.configuration.websiteDataStore
+        let caches: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeFetchCache]
+        Task {
+            let records = await store.dataRecords(ofTypes: caches).filter { $0.displayName == site }
+            await store.removeData(ofTypes: caches, for: records)
+            reload()
+        }
+    }
     func stop() { web.stopLoading() }
     /// Straight through, every time. A page that has to be fetched again is
     /// fetched again — nothing is kept behind to make that look otherwise.
