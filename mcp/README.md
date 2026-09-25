@@ -23,18 +23,54 @@ screenshots.
 
 | Tool | What it does |
 |---|---|
-| `tabs_context` | Lists the tabs: which one is in front and which ones Claude opened |
-| `tabs_create`, `tabs_close`, `tab_show` | Open a tab of Claude's, close it, or bring it to the front |
-| `navigate` | Go to a URL, or back, forward, reload, and wait for the page to load |
-| `read_page` | Lists what can be used on the page, one element per line with a ref and its place on screen |
+| `tabs_context` | Lists the tabs Claude may use: the ones it opened, and yours if allowed |
+| `tabs_create`, `tabs_close`, `tab_show` | Open a tab of Claude's at any size, close it, or bring it to the front |
+| `navigate` | Go to a URL, or back, forward, reload, `hard` (past the cache), and wait for the page to load |
+| `resize_page` | Give a tab of Claude's another viewport size: a phone's (with its user agent), a tablet's, a wide screen's |
+| `read_page` | Lists what can be used on the page, one element per line with a ref and its place on screen. Same-site frames and shadow DOM included |
 | `find` | Finds elements by their words |
 | `get_page_text` | The page's text, or the text under one ref |
-| `computer` | Clicks, types, presses keys, scrolls, hovers, waits, takes a screenshot |
+| `computer` | Clicks, drags, types, presses keys, scrolls, hovers, waits, takes a screenshot of the page or of one element |
 | `form_input` | Sets a field, select or checkbox directly |
-| `wait_for` | Waits until a selector matches or some text is on the page |
-| `javascript_tool` | Runs JavaScript and returns the result, awaiting promises |
-| `read_console_messages`, `read_network_requests` | What the page logged and what it loaded |
+| `upload_file` | Puts files from the Mac into a file field, or drops them on a drop zone |
+| `wait_for` | Waits for a selector, some text, or the page to go quiet (no fetch or XHR open) |
+| `handle_dialog` | Sets how the next confirm, prompt or login is answered, or lists what was asked |
+| `javascript_tool` | Runs JavaScript in the page and returns the result, awaiting promises |
+| `read_console_messages` | Console output, uncaught errors, failed files and CSP blocks |
+| `read_network_requests` | Every file, fetch and XHR, with status, time and failures |
 | `batch` | Several steps in one call |
+
+## Building web pages with it
+
+- **From the first line.** Claude's own tabs and any page served from this Mac
+  (localhost, 127.x, *.local, *.test) have their console, errors and requests
+  recorded from the start of the page. Other pages are recorded from the
+  first time Claude asks.
+- **Nothing blocks.** An alert, confirm, prompt, login or file chooser in a
+  tab of Claude's is answered on the spot and reported with the next result.
+  It would otherwise open on a window nobody sees and hold the page forever.
+  A pop-up the page opens becomes a tab of Claude's too.
+- **Any size.** `resize_page` 390×844 with `mobile: true` shows the phone
+  layout.
+- **Fresh after a change.** `navigate` with `hard` reloads past the cache.
+
+## Safety
+
+- Claude reaches only web pages. It never reaches a private tab, an
+  extension's page (a password manager's vault is one) or a `file:` address.
+- Your tabs are off-limits until you turn on "Let Claude use your tabs".
+  Until then Claude can't even see their addresses. Turning off "Let a script
+  drive Search" turns it off too.
+- Keys Claude presses never reach Search itself. A key the page doesn't use
+  stops there instead of going to your window. ⌘ keys are sent to the page as
+  its own events, so ⌘W can't close your tab and ⌘Q can't quit.
+- A `<select>` is set with `form_input`, never clicked open: its menu would
+  hold the whole app. For the same reason, a right-click is sent to the page
+  as events.
+- `javascript_tool` runs in the page's own world only, never in Search's.
+  Code that throws is reported, not run a second time.
+- Any program running as you can use the socket while "Let a script drive
+  Search" is on. Keep it off when you aren't using Claude with Search.
 
 ## How it's faster than a Chrome extension
 

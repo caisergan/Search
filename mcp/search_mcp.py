@@ -17,9 +17,13 @@ SEARCH_WORLD=test drives a SEARCH_PROBE run instead of your browser.
 
 import base64
 import json
+import mimetypes
 import os
+import re
 import socket
+import subprocess
 import sys
+import time
 
 WORLD = os.environ.get("SEARCH_WORLD", "").strip().lower()
 FOLDER = os.path.expanduser(f"~/Library/Application Support/Search ({WORLD})" if WORLD else "~/Library/Application Support/Search")
@@ -34,15 +38,31 @@ class Refused(Exception):
     pass
 
 
-def ask(request, timeout=130):
+def connect(timeout):
+    """The socket, with Search opened in the background first if it is closed."""
+    for attempt in range(2):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect(SOCKET)
+            return s
+        except (FileNotFoundError, ConnectionRefusedError):
+            s.close()
+            running = subprocess.run(["pgrep", "-x", "Search"], capture_output=True).returncode == 0
+            if attempt or WORLD or running:
+                break
+            subprocess.run(["open", "-g", "-b", "com.officecommun.search"], capture_output=True)
+            for _ in range(40):
+                time.sleep(0.25)
+                if os.path.exists(SOCKET):
+                    break
+    raise Refused("Search isn't listening. Open Search and turn on Settings › General › "
+                  "“Let a script drive Search”.")
+
+
+def ask(request, timeout=180):
     """One request, one answer, over the socket."""
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(timeout)
-    try:
-        s.connect(SOCKET)
-    except (FileNotFoundError, ConnectionRefusedError):
-        raise Refused("Search isn't listening. Open Search and turn on Settings › General › "
-                      "“Let a script drive Search”.")
+    s = connect(timeout)
     try:
         s.sendall((json.dumps(request) + "\n").encode())
         chunks = []
@@ -56,7 +76,12 @@ def ask(request, timeout=130):
     line = b"".join(chunks).split(b"\n", 1)[0]
     answer = json.loads(line or b"{}")
     if "error" in answer:
-        raise Refused(str(answer["error"]))
+        error = str(answer["error"])
+        # A tab gone since — closed, or Search started again: the next call
+        # without a tabId goes to the one in front, or asks.
+        if error.startswith("no tab") and current["id"] and request.get("id") == current["id"]:
+            current["id"] = None
+        raise Refused(error)
     return answer
 
 
@@ -97,9 +122,16 @@ TOOLS = [
     },
     {
         "name": "tabs_create",
-        "description": "Open a new tab of Claude's own at a URL and wait for it to load. It opens at the end of the row with a flask, out of the user's way. show: true brings it to the front (needs “Let Claude use your tabs”).",
+        "description": "Open a new tab of Claude's own at a URL (localhost works) and wait for it to load. It opens at the end of the row with a flask, out of the user's way, 1280×800 unless width and height say otherwise. show: true brings it to the front (needs “Let Claude use your tabs”).",
         "inputSchema": {"type": "object", "properties": {
-            "url": {"type": "string"}, "show": {"type": "boolean"}}, "required": ["url"]},
+            "url": {"type": "string"}, "show": {"type": "boolean"},
+            "width": {"type": "number"}, "height": {"type": "number"}}, "required": ["url"]},
+    },
+    {
+        "name": "resize_page",
+        "description": "Give a tab of Claude's another viewport size, to check a layout: e.g. 390×844 with mobile: true for a phone (also sends an iPhone user agent), 820×1180 for a tablet, 1920×1080. Not for a tab shown in the user's window.",
+        "inputSchema": {"type": "object", "properties": {
+            "tabId": TAB, "width": {"type": "number"}, "height": {"type": "number"}, "mobile": {"type": "boolean"}}, "required": ["width", "height"]},
     },
     {
         "name": "tabs_close",
@@ -113,9 +145,9 @@ TOOLS = [
     },
     {
         "name": "navigate",
-        "description": "Go to a URL in a tab, or back, forward, reload; waits for the page to load.",
+        "description": "Go to a URL in a tab, or back, forward, reload, or hard (reload past every cache — after changing a file); waits for the page to load.",
         "inputSchema": {"type": "object", "properties": {
-            "tabId": TAB, "url": {"type": "string", "description": "A URL, or back, forward, reload."}}, "required": ["url"]},
+            "tabId": TAB, "url": {"type": "string", "description": "A URL, or back, forward, reload, hard."}}, "required": ["url"]},
     },
     {
         "name": "read_page",
@@ -139,8 +171,9 @@ TOOLS = [
         "name": "computer",
         "description": (
             "Use the page with real mouse and keyboard events, as a person would. Actions:\n"
-            "- screenshot: a JPEG of what is on screen; 1 pixel = 1 CSS pixel, so its coordinates are the ones to click.\n"
-            "- left_click, double_click, triple_click, right_click, hover: at ref (preferred — scrolled into view first) or coordinate [x, y]. modifiers: e.g. \"cmd\" or \"shift+cmd\".\n"
+            "- screenshot: a JPEG of what is on screen; 1 pixel = 1 CSS pixel, so its coordinates are the ones to click. With ref: just that element.\n"
+            "- left_click, double_click, triple_click, right_click, hover: at ref (preferred — scrolled into view first) or coordinate [x, y]. modifiers: e.g. \"cmd\" or \"shift+cmd\". A click that loads a page answers once it has loaded. A select can't be clicked: use form_input.\n"
+            "- left_click_drag: from ref or coordinate to to_ref or to_coordinate — a slider, a sortable list, a canvas, HTML drag and drop.\n"
             "- type: text into the focused field (ref: click that field first). Inserted in one go, like Chrome's; keys: true presses a key per character instead.\n"
             "- key: space-separated chords, e.g. \"Enter\", \"cmd+a Backspace\", \"shift+Tab\", \"ArrowDown ArrowDown Enter\". repeat: how many times.\n"
             "- scroll: scroll_direction up/down/left/right, scroll_amount in ticks of 100px (default 3), at ref or coordinate (scrolls what is under it) or the page.\n"
@@ -149,9 +182,11 @@ TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {
             "tabId": TAB,
-            "action": {"type": "string", "enum": ["screenshot", "left_click", "double_click", "triple_click", "right_click", "hover", "type", "key", "scroll", "scroll_to", "wait"]},
+            "action": {"type": "string", "enum": ["screenshot", "left_click", "double_click", "triple_click", "right_click", "hover", "left_click_drag", "type", "key", "scroll", "scroll_to", "wait"]},
             "ref": REF,
             "coordinate": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+            "to_ref": REF,
+            "to_coordinate": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
             "text": {"type": "string", "description": "For type: the text. For key: the chords."},
             "keys": {"type": "boolean"},
             "modifiers": {"type": "string"},
@@ -168,35 +203,47 @@ TOOLS = [
             "tabId": TAB, "ref": REF, "value": {}}, "required": ["ref", "value"]},
     },
     {
-        "name": "wait_for",
-        "description": "Wait until a CSS selector matches or some text is on the page (default up to 10 s).",
+        "name": "upload_file",
+        "description": "Put files from this Mac into a file field, or drop them on a drop zone (ref). paths: absolute paths. Up to 24 MB in all.",
         "inputSchema": {"type": "object", "properties": {
-            "tabId": TAB, "selector": {"type": "string"}, "text": {"type": "string"}, "seconds": {"type": "number"}}},
+            "tabId": TAB, "ref": REF, "paths": {"type": "array", "items": {"type": "string"}}}, "required": ["ref", "paths"]},
+    },
+    {
+        "name": "wait_for",
+        "description": "Wait until a CSS selector matches, some text is on the page, or (idle: true) the page has loaded and has no fetch or XHR open for half a second. Default up to 10 s.",
+        "inputSchema": {"type": "object", "properties": {
+            "tabId": TAB, "selector": {"type": "string"}, "text": {"type": "string"}, "idle": {"type": "boolean"}, "seconds": {"type": "number"}}},
+    },
+    {
+        "name": "handle_dialog",
+        "description": "Alerts, confirms, prompts, logins and file choosers in Claude's tabs never block the page: they are answered at once and reported with the next result (\"dialogs\"). By default an alert is closed, a confirm is OK, a prompt takes its default, a login and an untrusted certificate are refused. Call this before the action to answer the next one differently: accept false for Cancel, text for a prompt's answer, or \"name:password\" for a login. Without accept/text it just returns what was asked since the last result.",
+        "inputSchema": {"type": "object", "properties": {
+            "tabId": TAB, "accept": {"type": "boolean"}, "text": {"type": "string"}}},
     },
     {
         "name": "javascript_tool",
-        "description": "Run JavaScript in the page and get its value back: an expression, or a function body that returns. Promises are awaited. world: page (default, the page's own globals) or search (an isolated world the page can't see).",
+        "description": "Run JavaScript in the page, with the page's own globals, and get its value back: an expression, or a function body that returns. Promises are awaited. An error is reported, never run twice.",
         "inputSchema": {"type": "object", "properties": {
-            "tabId": TAB, "code": {"type": "string"}, "world": {"type": "string", "enum": ["page", "search"]}}, "required": ["code"]},
+            "tabId": TAB, "code": {"type": "string"}}, "required": ["code"]},
     },
     {
         "name": "read_console_messages",
-        "description": "Console messages and uncaught errors on the page. Listening starts at the first call on a page: call once before doing what you want to watch. pattern: a regex to keep only matching lines. onlyErrors: errors and exceptions only. clear: empty the buffer after reading.",
+        "description": "Console messages, uncaught errors and rejections, files that failed to load and blocked content. Claude's own tabs and pages from this Mac (localhost, *.local, *.test) are heard from the first line of the page; any other page from the first call on it. pattern: a regex to keep only matching lines. onlyErrors: errors and exceptions only. clear: empty the buffer after reading.",
         "inputSchema": {"type": "object", "properties": {
             "tabId": TAB, "pattern": {"type": "string"}, "onlyErrors": {"type": "boolean"}, "clear": {"type": "boolean"}}},
     },
     {
         "name": "read_network_requests",
-        "description": "What the page loaded — the document and each resource, with type, duration, size and status where known — from the page's own timing records. pattern: a regex on the URL.",
-        "inputSchema": {"type": "object", "properties": {"tabId": TAB, "pattern": {"type": "string"}}},
+        "description": "What the page loaded and asked for: the document, each file, and every fetch and XHR with its method, status, time and failure. Heard from the first line in Claude's tabs and localhost pages. pattern: a regex on the URL. onlyFailed: 4xx, 5xx and failures only. clear: forget what was listed.",
+        "inputSchema": {"type": "object", "properties": {"tabId": TAB, "pattern": {"type": "string"}, "onlyFailed": {"type": "boolean"}, "clear": {"type": "boolean"}}},
     },
     {
         "name": "batch",
         "description": (
             "Several steps in one call, in order, stopping at the first error (keepGoing: true to go on). "
             "Each step is {\"do\": ..., ...} with the same fields as the tools: "
-            "read, find, text, click (ref|coordinate, button: left|double|triple|right), hover, type (text, ref?, keys?), "
-            "key (keys), fill (ref, value), scroll (dx, dy, ref?|coordinate?), navigate (url), wait (selector|text, seconds), js (code). "
+            "read, find, text, click (ref|coordinate, button: left|double|triple|right), hover, drag (ref|coordinate, toRef|toX,toY), type (text, ref?, keys?), "
+            "key (keys), fill (ref, value), scroll (dx, dy, ref?|coordinate?), navigate (url), wait (selector|text|idle, seconds), js (code). "
             "Example: [{\"do\":\"click\",\"ref\":\"r3\"},{\"do\":\"type\",\"text\":\"hello\"},{\"do\":\"key\",\"keys\":\"Enter\"},{\"do\":\"wait\",\"text\":\"Results\"},{\"do\":\"read\"}]"
         ),
         "inputSchema": {"type": "object", "properties": {
@@ -213,11 +260,10 @@ def step(s):
         s["x"], s["y"] = s.pop("coordinate")
     if verb == "key" and "text" in s and "keys" not in s:
         s["keys"] = s.pop("text")
-    if verb == "js" and "world" in s and s["world"] != "search":
-        s.pop("world")
+    s.pop("world", None)
     names = {"read": "a.read", "find": "a.find", "text": "a.text", "click": "a.click", "hover": "a.hover", "type": "a.type",
              "key": "a.key", "fill": "a.fill", "scroll": "a.scroll", "navigate": "a.navigate", "wait": "a.wait", "js": "a.js",
-             "focus": "a.focus"}
+             "focus": "a.focus", "drag": "a.drag"}
     if verb not in names:
         raise Refused(f"batch: unknown step “{verb}”")
     s["do"] = names[verb]
@@ -225,7 +271,19 @@ def step(s):
 
 
 def said(verb, answer):
-    """A bench answer as a few lines for Claude."""
+    """A bench answer as a few lines for Claude, with what the page did meanwhile."""
+    out = plain(verb, answer)
+    extra = []
+    for d in answer.get("dialogs") or []:
+        how = "accepted" if d.get("accepted") else "refused"
+        extra.append(f"the page asked ({d.get('kind')}): {d.get('message')} — {how}" + (f", answered “{d['answered']}”" if d.get("answered") else ""))
+    for t in answer.get("opened") or []:
+        extra.append(f"the page opened a new tab of Claude's: {t}")
+    return out + ("\n" + "\n".join(extra) if extra else "")
+
+
+def plain(verb, answer):
+    answer = {k: v for k, v in answer.items() if k not in ("dialogs", "opened", "tab")}
     if verb == "a.read":
         return answer.get("page", "")
     if verb == "a.find":
@@ -242,7 +300,7 @@ def said(verb, answer):
         if answer.get("timeout"):
             out += "\n(still loading)"
         return out
-    return json.dumps({k: v for k, v in answer.items() if k not in ("tab",)}, ensure_ascii=False)
+    return json.dumps(answer, ensure_ascii=False)
 
 
 def call(name, args):
@@ -253,7 +311,10 @@ def call(name, args):
         return [text("\n".join(lines) + note)]
 
     if name == "tabs_create":
-        a = ask({"do": "a.open", "url": args["url"], "show": bool(args.get("show"))})
+        req = {"do": "a.open", "url": args["url"], "show": bool(args.get("show"))}
+        if args.get("width") and args.get("height"):
+            req["width"], req["height"] = float(args["width"]), float(args["height"])
+        a = ask(req)
         current["id"] = a.get("id")
         return [text(said("a.open", a))]
 
@@ -265,6 +326,37 @@ def call(name, args):
         if current["id"] == tab:
             current["id"] = None
         return [text(f"closed {a.get('closed')}")]
+
+    if name == "resize_page":
+        req = with_tab({"do": "a.resize", "width": float(args["width"]), "height": float(args["height"])}, args)
+        if "mobile" in args:
+            req["mobile"] = bool(args["mobile"])
+        a = ask(req)
+        return [text(f"{a['width']}×{a['height']}" + (" as a phone" if a.get("mobile") else ""))]
+
+    if name == "upload_file":
+        files, total = [], 0
+        for path in args["paths"]:
+            path = os.path.expanduser(path)
+            with open(path, "rb") as f:
+                data = f.read()
+            total += len(data)
+            if total > 24_000_000:
+                raise Refused("more than 24 MB — upload fewer or smaller files")
+            files.append({"name": os.path.basename(path), "type": mimetypes.guess_type(path)[0] or "", "data": base64.b64encode(data).decode()})
+        a = ask(with_tab({"do": "a.upload", "ref": args["ref"], "files": files}, args))
+        return [text(f"{a.get('files')} file(s) " + ("put in the field" if a.get("into") == "field" else "dropped"))]
+
+    if name == "handle_dialog":
+        if "accept" in args or "text" in args:
+            req = with_tab({"do": "a.dialog", "accept": bool(args.get("accept", True))}, args)
+            if args.get("text") is not None:
+                req["text"] = str(args["text"])
+            ask(req)
+            return [text("the next dialog will be answered that way")]
+        a = ask(with_tab({"do": "a.dialogs"}, args))
+        lines = [f"{d.get('kind')}: {d.get('message')} — " + ("accepted" if d.get("accepted") else "refused") for d in a.get("dialogs", [])]
+        return [text("\n".join(lines) or "nothing was asked")]
 
     if name == "tab_show":
         a = ask(with_tab({"do": "a.show"}, args))
@@ -303,16 +395,13 @@ def call(name, args):
 
     if name == "wait_for":
         req = with_tab({"do": "a.wait", "seconds": float(args.get("seconds", 10))}, args)
-        for k in ("selector", "text"):
+        for k in ("selector", "text", "idle"):
             if args.get(k):
                 req[k] = args[k]
         return [text(said("a.wait", ask(req, timeout=float(args.get("seconds", 10)) + 15)))]
 
     if name == "javascript_tool":
-        req = with_tab({"do": "a.js", "code": args["code"]}, args)
-        if args.get("world") == "search":
-            req["world"] = "search"
-        return [text(said("a.js", ask(req)))]
+        return [text(said("a.js", ask(with_tab({"do": "a.js", "code": args["code"]}, args))))]
 
     if name == "read_console_messages":
         a = ask(with_tab({"do": "a.console", "clear": bool(args.get("clear"))}, args))
@@ -320,21 +409,27 @@ def call(name, args):
         if args.get("onlyErrors"):
             messages = [m for m in messages if m["level"] in ("error", "exception")]
         if args.get("pattern"):
-            import re
             rx = re.compile(args["pattern"])
             messages = [m for m in messages if rx.search(m["text"])]
         lines = [f"[{m['level']}] {m['text']}" for m in messages[-200:]]
-        return [text((f"listening since {a.get('since')}\n" if a.get("since", "").startswith("now") else "") + ("\n".join(lines) or "no messages"))]
+        head = "listening from now on — what the page said before this call was not heard\n" if a.get("since") == "now" else ""
+        return [text(head + ("\n".join(lines) or "no messages"))]
 
     if name == "read_network_requests":
-        a = ask(with_tab({"do": "a.network"}, args))
+        a = ask(with_tab({"do": "a.network", "clear": bool(args.get("clear"))}, args))
         reqs = a.get("requests", [])
         if args.get("pattern"):
-            import re
             rx = re.compile(args["pattern"])
-            reqs = [r for r in reqs if rx.search(r["url"])]
-        lines = [f"{r.get('status', '')} {r['type']} {r['ms']}ms {r.get('bytes', '')} {r['url']}".strip() for r in reqs[-200:]]
-        return [text("\n".join(lines) or "no requests")]
+            reqs = [r for r in reqs if rx.search(r.get("url", ""))]
+        if args.get("onlyFailed"):
+            reqs = [r for r in reqs if r.get("failed") or (r.get("status") or 0) >= 400]
+        def row(r):
+            status = r.get("failed") and f"FAILED ({r['failed']})" or str(r.get("status", "—"))
+            size = f" {r['bytes']}B" if r.get("bytes") else ""
+            ms = f" {r['ms']}ms" if r.get("ms") is not None else ""
+            return f"{status} {r.get('method', 'GET')} {r.get('type', '')}{ms}{size} {r.get('url', '')}"
+        head = "listening from now on — only files the page loaded are listed from before\n" if a.get("since") == "now" else ""
+        return [text(head + ("\n".join(row(r) for r in reqs[-200:]) or "no requests"))]
 
     if name == "batch":
         steps = [step(s) for s in args["steps"]]
@@ -356,10 +451,16 @@ def call(name, args):
         if action == "screenshot":
             req["do"] = "a.shot"
             a = ask(req)
-            return [
-                {"type": "image", "data": a["jpeg"], "mimeType": "image/jpeg"},
-                text(f"{a['width']}×{a['height']} — coordinates on this picture are the ones to click"),
-            ]
+            where = f"{a['width']}×{a['height']}"
+            where += f" — the element, from ({a['left']}, {a['top']}) on the page" if args.get("ref") else " — coordinates on this picture are the ones to click"
+            return [{"type": "image", "data": a["jpeg"], "mimeType": "image/jpeg"}, text(where)]
+        if action == "left_click_drag":
+            req["do"] = "a.drag"
+            if args.get("to_ref"):
+                req["toRef"] = args["to_ref"]
+            if args.get("to_coordinate"):
+                req["toX"], req["toY"] = float(args["to_coordinate"][0]), float(args["to_coordinate"][1])
+            return [text(said("a.drag", ask(req)))]
         if action in ("left_click", "double_click", "triple_click", "right_click"):
             req["do"] = "a.click"
             req["button"] = {"left_click": "left", "double_click": "double", "triple_click": "triple", "right_click": "right"}[action]
@@ -406,6 +507,9 @@ def send(message):
 
 
 def main():
+    # UTF-8 both ways, whatever the locale Claude Code starts this in.
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -426,7 +530,9 @@ def main():
                     "instructions": (
                         "Claude in Search: use the Search browser on this Mac. Start with tabs_context. "
                         "Prefer read_page/find and refs over screenshots: they are exact and take milliseconds. "
-                        "Use batch to do several steps in one call."
+                        "Use batch to do several steps in one call. For web development: pages on localhost keep their console "
+                        "and requests from the first line (read_console_messages, read_network_requests); navigate with url "
+                        "\"hard\" after changing files; resize_page for phones; dialogs never block."
                     ),
                 }
             elif method == "tools/list":

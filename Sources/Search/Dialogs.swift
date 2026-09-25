@@ -18,6 +18,7 @@ extension Browser {
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping () -> Void
     ) {
+        if claudeAnswers(webView, "alert", message) != nil { completionHandler(); return }
         let alert = Dialogs.alert(from: frame, saying: message)
         alert.addButton(withTitle: "OK")
         Dialogs.show(alert, over: webView) { _ in completionHandler() }
@@ -29,6 +30,7 @@ extension Browser {
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping (Bool) -> Void
     ) {
+        if let claude = claudeAnswers(webView, "confirm", message) { completionHandler(claude.accept); return }
         let alert = Dialogs.alert(from: frame, saying: message)
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
@@ -44,6 +46,10 @@ extension Browser {
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping (String?) -> Void
     ) {
+        if let claude = claudeAnswers(webView, "prompt", prompt) {
+            completionHandler(claude.accept ? (claude.text ?? defaultText ?? "") : nil)
+            return
+        }
         let alert = Dialogs.alert(from: frame, saying: prompt)
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
@@ -64,6 +70,12 @@ extension Browser {
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping ([URL]?) -> Void
     ) {
+        // A file for a page of Claude's goes in with a.upload; the chooser
+        // would open on a window nobody sees.
+        if claudeAnswers(webView, "file chooser", "the page opened a file chooser — use upload on its field instead") != nil {
+            completionHandler(nil)
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = parameters.allowsDirectories
@@ -124,6 +136,11 @@ extension Browser {
             completionHandler(.useCredential, URLCredential(trust: trust))
             return
         }
+        // Never taken on trust for Claude: its tab goes back, and it is told.
+        if claudeAnswers(webView, "certificate", "\(host) can't prove who it is — its certificate isn't trusted; the page was not loaded") != nil {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
         // A picture, a script, a font from a site with a bad certificate is
         // simply not loaded. Only the page you asked for is worth a question.
         guard let tab = tab(for: webView),
@@ -160,6 +177,17 @@ extension Browser {
             return
         }
         let space = challenge.protectionSpace
+        // Claude signs in only with a name and password it was given for this
+        // (a.dialog with text "name:password"); otherwise it is cancelled.
+        if let claude = claudeAnswers(webView, "login", "\(space.host) asks for a name and a password" + (space.realm.map { " (“\($0)”)" } ?? "")) {
+            let parts = (claude.text ?? "").split(separator: ":", maxSplits: 1).map(String.init)
+            if claude.accept, parts.count == 2 {
+                completionHandler(.useCredential, URLCredential(user: parts[0], password: parts[1], persistence: .forSession))
+            } else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+            }
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "\(space.host) asks you to sign in"
         alert.informativeText = space.realm.map { "“\($0)”" } ?? "The site wants a name and a password."

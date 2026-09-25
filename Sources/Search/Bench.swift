@@ -70,25 +70,31 @@ final class Bench {
     /// nothing of yours, and scripts set them up with a defaults write.
     @MainActor
     enum Consent {
-        private static var query: [String: Any] {
-            [kSecClass as String: kSecClassGenericPassword,
-             kSecUseDataProtectionKeychain as String: true,
-             kSecAttrService as String: "com.officecommun.search.bench",
-             kSecAttrAccount as String: Store.world.map { "consent (\($0))" } ?? "consent"]
+        /// `what`: which switch — the bench's own (""), or "claude" for
+        /// Claude's use of your tabs (see Agent.swift), which a script able to
+        /// write the defaults must not be able to turn on either.
+        private static func query(_ what: String) -> [String: Any] {
+            let account = what.isEmpty ? "consent" : "consent \(what)"
+            return [kSecClass as String: kSecClassGenericPassword,
+                    kSecUseDataProtectionKeychain as String: true,
+                    kSecAttrService as String: "com.officecommun.search.bench",
+                    kSecAttrAccount as String: Store.world.map { "\(account) (\($0))" } ?? account]
         }
 
         /// The mark is there — or there is nowhere to keep one: a copy built
         /// without Search's provisioning profile has no access group, and
         /// keeps the switch as it always was.
-        static var given: Bool {
-            var asked = query
+        static var given: Bool { given("") }
+
+        static func given(_ what: String) -> Bool {
+            var asked = query(what)
             asked[kSecReturnAttributes as String] = true
             let status = SecItemCopyMatching(asked as CFDictionary, nil)
             return status == errSecSuccess || status == errSecMissingEntitlement
         }
 
-        static func grant() {
-            var item = query
+        static func grant(_ what: String = "") {
+            var item = query(what)
             item[kSecValueData as String] = Data("on".utf8)
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let status = SecItemAdd(item as CFDictionary, nil)
@@ -97,8 +103,8 @@ final class Bench {
             }
         }
 
-        static func revoke() {
-            SecItemDelete(query as CFDictionary)
+        static func revoke(_ what: String = "") {
+            SecItemDelete(query(what) as CFDictionary)
         }
     }
 
@@ -157,6 +163,8 @@ final class Bench {
         clients.values.forEach { $0.drop() }
         clients = [:]
         running = false
+        rooms.values.forEach { $0.close() }
+        rooms = [:]
         // The tabs a script left open go with it.
         if let browser {
             for tab in browser.tabs where tab.bench { browser.close(tab) }
@@ -216,7 +224,8 @@ final class Bench {
             }
             bytes.append(contentsOf: chunk[0..<count])
             // A line that never ends is not a request.
-            if bytes.count > 4_000_000 {
+            // Files Claude uploads come this way, as base64: room for 24 MB.
+            if bytes.count > 32_000_000 {
                 say(["error": "request too long"])
                 return
             }
@@ -1542,23 +1551,35 @@ final class Bench {
     // MARK: - the room off screen
 
     private var room: NSWindow?
+    /// A room of its own for each tab Claude gave a size of its own (see
+    /// Agent.swift), so that the others keep theirs.
+    var rooms: [Tab.ID: NSWindow] = [:]
 
     /// A page nobody is looking at has to be somewhere to be laid out at all.
     /// The stage takes it back the moment you pick its tab, and it comes
     /// here again when the bench next needs it.
     func house(_ tab: Tab, any: Bool = false) {
         guard tab.bench || any, tab.web.window == nil else { return }
+        if let size = Agent.sizes[tab.id] {
+            let window = rooms[tab.id] ?? makeRoom(size: size)
+            rooms[tab.id] = window
+            window.setContentSize(size)
+            tab.web.frame = NSRect(origin: .zero, size: size)
+            tab.web.autoresizingMask = [.width, .height]
+            window.contentView?.addSubview(tab.web)
+            return
+        }
         let window = room ?? makeRoom()
         tab.web.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         tab.web.autoresizingMask = [.width, .height]
         window.contentView?.addSubview(tab.web)
     }
 
-    private func makeRoom() -> NSWindow {
+    private func makeRoom(size: NSSize? = nil) -> NSWindow {
         // Off every screen, and never key or main: it exists so that a web
         // view has a window, and for nothing else.
         let window = NSWindow(
-            contentRect: NSRect(x: -20000, y: -20000, width: 1280, height: 800),
+            contentRect: NSRect(x: -20000, y: -20000, width: size?.width ?? 1280, height: size?.height ?? 800),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -1569,7 +1590,7 @@ final class Bench {
         window.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
         window.hasShadow = false
         window.orderBack(nil)
-        room = window
+        if size == nil { room = window }
         return window
     }
 

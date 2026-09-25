@@ -251,7 +251,7 @@ struct SettingsPanel: View {
             }
             if prefs.bench {
                 Rule()
-                Line("Let Claude use your tabs", "Claude, through the script, can read, click and type in the tab in front and your other tabs, not only the ones it opens. Nothing leaves this Mac but what Claude reads") {
+                Line("Let Claude use your tabs", "Claude, through the script, can read, click and type in the tab in front and your other tabs, not only the ones it opens — never a private tab or an extension's page") {
                     Switch(on: $prefs.claudeTabs)
                 }
             }

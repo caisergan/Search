@@ -2317,6 +2317,20 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // right-click on a picture on X, after following a link out of it,
         // did nothing at all. Each tab gets a controller of its own.
         configuration.userContentController = WKUserContentController()
+        // From a tab of Claude's: Claude's too, beside it, out of your way
+        // and not in front (see Agent.swift).
+        if let opener = tab(for: webView), opener.bench {
+            let tab = Tab(bench: true, configuration: configuration)
+            prepare(tab)
+            tabs.append(tab)
+            tab.opener = opener.id
+            tab.parent = opener.id
+            Agent.popups.append((opener.id, tab.id))
+            if let url = action.request.url { tab.setAddressOptimistically(url) }
+            let web = tab.web
+            Bench.shared.house(tab)
+            return web
+        }
         let tab = Tab(shy: tab(for: webView)?.shy ?? false, configuration: configuration)
         tab.popup = windowFeatures.width != nil || windowFeatures.height != nil
             || windowFeatures.toolbarsVisibility?.boolValue == false

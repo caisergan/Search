@@ -167,12 +167,20 @@ final class Preferences: ObservableObject {
         didSet {
             store.set(bench, forKey: "bench")
             bench ? Bench.Consent.grant() : Bench.Consent.revoke()
+            // Off with it, so that it is never found on later, unasked.
+            if !bench, claudeTabs { claudeTabs = false }
         }
     }
     /// Claude, over the bench, may read and use your own tabs as well as the
-    /// ones it opened itself (see Agent.swift). Off unless asked for.
+    /// ones it opened itself (see Agent.swift). Off unless asked for, and
+    /// kept like the bench's switch: with a mark in the keychain, without
+    /// which the setting is put back to off at launch. A test world has
+    /// nobody's tabs, and has it on unless set.
     @Published var claudeTabs: Bool {
-        didSet { store.set(claudeTabs, forKey: "claude.tabs") }
+        didSet {
+            store.set(claudeTabs, forKey: "claude.tabs")
+            claudeTabs ? Bench.Consent.grant("claude") : Bench.Consent.revoke("claude")
+        }
     }
     /// The setting said on at launch with no mark from the switch behind it,
     /// and was put back to off.
@@ -411,7 +419,10 @@ final class Preferences: ObservableObject {
             benchRefused = true
             store.set(false, forKey: "bench")
         }
-        claudeTabs = store.bool(forKey: "claude.tabs")
+        let claude = store.object(forKey: "claude.tabs") as? Bool ?? Store.testing
+        let claudeAllowed = claude && allowed && (Store.testing || Bench.Consent.given("claude"))
+        claudeTabs = claudeAllowed
+        if claude, !claudeAllowed { store.set(false, forKey: "claude.tabs") }
         let chosen = store.string(forKey: "look").flatMap(Look.init) ?? .system
         look = chosen
         // Before the first window, and not deferred: the window that is about

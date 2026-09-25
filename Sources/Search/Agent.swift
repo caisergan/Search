@@ -13,38 +13,57 @@ import WebKit
 // handed to the page's view, which a page can't tell from a hand's, where
 // element.click() is ignored by half the sign-in forms around; a screenshot
 // is a JPEG the size of the page's own CSS pixels, so a point on it is a
-// point on the page; and `a.batch` runs several steps in one request.
+// point on the page; a click that loads a page answers once it has; and
+// `a.batch` runs several steps in one request.
+//
+// And for building web pages with it: Claude's own tabs, and any page served
+// from this Mac (localhost, *.local, *.test), keep their console, their
+// errors and their requests from the first line of the page; a tab of
+// Claude's can be any size, a phone's included; and nothing a page does can
+// stop it — an alert, a confirm, a login prompt or a file chooser in a tab of
+// Claude's is answered here instead of on a window nobody sees, where it
+// would hold the page for good, and a pop-up it opens is Claude's too.
 //
 // The refs and the reading live in Search's own world (Web.world): the page
 // sees none of it. Only what has to happen in the page's world does — its
-// own JavaScript, and the console, which is listened to from the first time
-// it is asked for.
+// own JavaScript, and the console and requests, listened to there.
 //
 // Whose tabs: the ones Claude opened (the bench's, with the flask) always;
 // yours, the one in front by default, only with Settings › General › "Let
-// Claude use your tabs" on.
+// Claude use your tabs" on — and never a private one, nor an extension's
+// page (a password manager's vault is one), nor a file. Claude opens and goes
+// to web pages only. What it is told on a page is a page's to say: nothing
+// here lets a page reach Search's own world, where its handlers are.
 
 @MainActor
 extension Bench {
     /// How long a verb may take before the bench answers for it.
     static func agentPatience(_ verb: String, _ request: [String: Any]) -> Double? {
         switch verb {
-        case "a.wait", "a.navigate": return (request["seconds"] as? Double ?? 20) + 5
-        case "a.batch": return 120
+        case "a.wait", "a.navigate", "a.open": return (request["seconds"] as? Double ?? 20) + 5
+        case "a.batch": return 170
         default: return verb.hasPrefix("a.") ? 30 : nil
         }
     }
 
+    /// Whether Claude may use a tab at all.
+    private func reachable(_ tab: Tab, in browser: Browser) -> Bool {
+        guard tab.bench || (browser.prefs.claudeTabs && !tab.shy) else { return false }
+        return tab.address.map(Bench.web) ?? true
+    }
+
+    /// Only web pages: never an extension's page or a file.
+    static func web(_ url: URL) -> Bool {
+        ["http", "https", "about", "data", "blob"].contains(url.scheme?.lowercased() ?? "")
+    }
+
     /// The tab a request is for. Named by the first characters of its id;
-    /// unnamed, the one in front. Claude's own tabs always answer; yours only
-    /// with the switch on.
+    /// unnamed, the one in front.
     private func agentTab(_ request: [String: Any], in browser: Browser) -> Tab? {
-        let yours = browser.prefs.claudeTabs || Store.testing
         guard let ref = (request["id"] as? String)?.lowercased(), !ref.isEmpty else {
-            guard let tab = browser.active, yours || tab.bench else { return nil }
-            return tab
+            return browser.active.flatMap { reachable($0, in: browser) ? $0 : nil }
         }
-        return browser.tabs.first { ($0.bench || yours) && $0.id.uuidString.lowercased().hasPrefix(ref) }
+        return browser.tabs.first { $0.id.uuidString.lowercased().hasPrefix(ref) && reachable($0, in: browser) }
     }
 
     /// Ready to be read or used: awake, and in a window so it is laid out.
@@ -53,31 +72,66 @@ extension Bench {
         if tab.web.window == nil { house(tab, any: true) }
     }
 
+    /// In the page's world or Search's, with what comes back as a dictionary.
+    private func run(_ body: String, _ arguments: [String: Any], on tab: Tab, in world: WKContentWorld, _ then: @escaping (Result<[String: Any], Agent.Failure>) -> Void) {
+        tab.web.callAsyncJavaScript(body, arguments: arguments, in: nil, in: world) { result in
+            MainActor.assumeIsolated {
+                switch result {
+                case .success(let value): then(.success((value as? [String: Any]) ?? ["value": Bench.plain(value)]))
+                case .failure(let error): then(.failure(Agent.Failure(said: Agent.said(error))))
+                }
+            }
+        }
+    }
+
+    /// Search's side of the page (Agent.page) asked one thing.
+    private func page(_ verb: String, _ request: [String: Any], on tab: Tab, _ then: @escaping (Result<[String: Any], Agent.Failure>) -> Void) {
+        var arguments: [String: Any] = ["verb": verb]
+        for key in ["filter", "ref", "query", "value", "dx", "dy", "x", "y", "max", "selector", "files", "toRef", "toX", "toY"] {
+            if let value = request[key] { arguments[key] = value }
+        }
+        run(Agent.page, ["args": arguments], on: tab, in: Web.world, then)
+    }
+
     func agent(_ verb: String, _ request: [String: Any], browser: Browser, _ answer: @escaping ([String: Any]) -> Void) {
-        let noTab: [String: Any] = ["error": browser.prefs.claudeTabs || Store.testing
-            ? "no tab “\(request["id"] as? String ?? "")” — see a.tabs"
+        let noTab: [String: Any] = ["error": browser.prefs.claudeTabs
+            ? "no tab “\(request["id"] as? String ?? "")” Claude can use — see a.tabs (private tabs and extensions' pages are never Claude's)"
             : "no tab — Claude can use only the tabs it opened; Settings › General › “Let Claude use your tabs” lets it use yours"]
+        let reply: (Result<[String: Any], Agent.Failure>) -> Void = { result in
+            switch result {
+            case .success(let out): answer(out)
+            case .failure(let error): answer(["error": error.said])
+            }
+        }
 
         switch verb {
         case "a.tabs":
-            answer(["tabs": browser.tabs.map(describe), "yours": browser.prefs.claudeTabs || Store.testing])
+            // Only what Claude may use: with the switch off, your tabs'
+            // addresses and titles are not its to see either.
+            let seen = browser.tabs.filter { reachable($0, in: browser) }
+            answer(["tabs": seen.map(describe), "yours": browser.prefs.claudeTabs, "others": browser.tabs.count - seen.count, "keysStopped": Agent.stopped])
 
         case "a.open":
-            guard let url = (request["url"] as? String).flatMap(Address.url(from:)) else {
-                answer(["error": "a.open needs a url"])
+            guard let url = (request["url"] as? String).flatMap(Address.url(from:)), Bench.web(url) else {
+                answer(["error": "a.open needs a web address"])
                 return
             }
             let tab = browser.benchOpen(url)
-            if request["show"] as? Bool == true, browser.prefs.claudeTabs || Store.testing { browser.select(tab) } else { house(tab) }
+            if let size = Agent.size(request) { Agent.sizes[tab.id] = size }
+            if request["show"] as? Bool == true, browser.prefs.claudeTabs { browser.select(tab) } else { house(tab) }
             if request["wait"] as? Bool == false { answer(describe(tab)); return }
-            wait(for: tab, until: Date().addingTimeInterval(request["seconds"] as? Double ?? 20), answer)
+            wait(for: tab, until: Date().addingTimeInterval(request["seconds"] as? Double ?? 20)) { [weak self] out in
+                answer(self?.decorated(out, tab) ?? out)
+            }
 
         case "a.show":
-            guard browser.prefs.claudeTabs || Store.testing else {
+            guard browser.prefs.claudeTabs else {
                 answer(["error": "showing a tab takes your window — only with “Let Claude use your tabs” on"])
                 return
             }
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
+            // In your window, at your window's size.
+            tab.web.autoresizingMask = [.width, .height]
             browser.select(tab)
             answer(describe(tab))
 
@@ -85,7 +139,26 @@ extension Bench {
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             guard tab.bench else { answer(["error": "Claude closes only the tabs it opened"]); return }
             browser.close(tab)
+            forget(tab)
             answer(["closed": Bench.short(tab)])
+
+        case "a.resize":
+            // A tab of Claude's at any size: a phone's, a tablet's, a wide
+            // screen's. Yours take the size of your window.
+            guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
+            guard tab.bench else { answer(["error": "only Claude's own tabs can be resized — yours follow your window"]); return }
+            guard let size = Agent.size(request) else { answer(["error": "a.resize needs width and height, 200 to 4000"]); return }
+            guard tab.id != browser.activeID else { answer(["error": "the tab is in front, at your window's size — resize a tab that isn't shown"]); return }
+            Agent.sizes[tab.id] = size
+            if let mobile = request["mobile"] as? Bool { tab.web.customUserAgent = mobile ? Agent.phone : nil }
+            tab.web.removeFromSuperview()
+            ready(tab)
+            // A beat for the page to lay itself out at its new size.
+            tab.web.evaluateJavaScript("0") { _, _ in
+                MainActor.assumeIsolated {
+                    answer(["ok": true, "width": Int(size.width), "height": Int(size.height), "mobile": !(tab.web.customUserAgent ?? "").isEmpty])
+                }
+            }
 
         case "a.navigate":
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
@@ -95,13 +168,17 @@ extension Bench {
             case "back": tab.back()
             case "forward": tab.forward()
             case "reload": tab.reload()
+            // Past every cache: what a developer means after changing a file.
+            case "hard": tab.web.reloadFromOrigin()
             default:
-                guard let url = Address.url(from: to) else { answer(["error": "a.navigate needs a url, back, forward or reload"]); return }
+                guard let url = Address.url(from: to), Bench.web(url) else { answer(["error": "a.navigate needs a web address, back, forward, reload or hard"]); return }
                 tab.go(to: url)
             }
             // A beat for the load to start, so the wait sees it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                self?.wait(for: tab, until: Date().addingTimeInterval(request["seconds"] as? Double ?? 20), answer)
+                self?.wait(for: tab, until: Date().addingTimeInterval(request["seconds"] as? Double ?? 20)) { out in
+                    answer(self?.decorated(out, tab) ?? out)
+                }
             }
 
         case "a.wait":
@@ -110,55 +187,69 @@ extension Bench {
             let limit = Date().addingTimeInterval(request["seconds"] as? Double ?? 10)
             let selector = request["selector"] as? String
             let text = request["text"] as? String
-            guard selector != nil || text != nil else { wait(for: tab, until: limit, answer); return }
+            let idle = request["idle"] as? Bool == true
+            guard selector != nil || text != nil || idle else {
+                wait(for: tab, until: limit) { [weak self] out in answer(self?.decorated(out, tab) ?? out) }
+                return
+            }
+            var quiet: Date?
             func poll() {
-                tab.web.callAsyncJavaScript(Agent.present, arguments: ["selector": selector ?? "", "text": text ?? ""], in: nil, in: Web.world) { result in
+                let body = idle ? Agent.idle : Agent.present
+                tab.web.callAsyncJavaScript(body, arguments: ["selector": selector ?? "", "text": text ?? ""], in: nil, in: idle ? .page : Web.world) { result in
                     MainActor.assumeIsolated {
-                        if case .success(let value) = result, value as? Bool == true { answer(["ok": true]); return }
-                        guard Date() < limit else { answer(["error": "not there after the wait", "timeout": true]); return }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { poll() }
+                        switch result {
+                        case .success(let value) where value as? Bool == true:
+                            // Idle is idle for half a second, not between two requests.
+                            guard idle else { answer(["ok": true]); return }
+                            if let since = quiet, Date().timeIntervalSince(since) >= 0.5 { answer(["ok": true, "idle": true]); return }
+                            if quiet == nil { quiet = Date() }
+                        // A selector that can't be read never will be.
+                        case .failure(let error) where Agent.said(error).contains("SyntaxError"): answer(["error": Agent.said(error)]); return
+                        default: quiet = nil
+                        }
+                        guard Date() < limit else { answer(["error": idle ? "the page kept loading or fetching for the whole wait" : "not there after the wait", "timeout": true]); return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { poll() }
                     }
                 }
             }
             poll()
 
-        case "a.read", "a.find", "a.text", "a.fill", "a.scroll", "a.point", "a.focus":
+        case "a.read", "a.find", "a.text", "a.fill", "a.scroll", "a.focus", "a.upload":
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             ready(tab)
-            var arguments: [String: Any] = ["verb": verb]
-            for key in ["filter", "ref", "query", "value", "dx", "dy", "x", "y", "max", "selector"] {
-                if let value = request[key] { arguments[key] = value }
-            }
-            tab.web.callAsyncJavaScript(Agent.page, arguments: ["args": arguments], in: nil, in: Web.world) { result in
-                MainActor.assumeIsolated {
-                    switch result {
-                    case .success(let value):
-                        var out = (value as? [String: Any]) ?? ["value": Bench.plain(value)]
-                        if verb == "a.read" || verb == "a.text" { out["tab"] = Bench.short(tab) }
-                        answer(out)
-                    case .failure(let error): answer(["error": Agent.said(error)])
-                    }
+            page(verb, request, on: tab) { result in
+                if case .success(var out) = result, verb == "a.read" || verb == "a.text" {
+                    out["tab"] = Bench.short(tab)
+                    answer(out)
+                    return
                 }
+                reply(result)
             }
 
         case "a.click", "a.hover":
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             ready(tab)
-            point(on: tab, request) { [weak self] spot, said in
+            point(on: tab, request) { [weak self] spot, found in
                 guard let self else { return }
-                guard let spot else { answer(["error": said ?? "nowhere to click"]); return }
+                guard let spot else { answer(["error": found["error"] as? String ?? "nowhere to click"]); return }
                 if verb == "a.hover" {
                     self.mouse(tab.web, at: spot, kinds: [.mouseMoved], clicks: 1, mods: [])
-                    answer(["ok": true, "at": [Int(spot.x), Int(spot.y)]])
+                    answer(["ok": true, "at": found["at"] ?? []])
+                    return
+                }
+                // A select's list is AppKit's menu, which holds the whole app
+                // until someone picks from it: chosen with a.fill instead.
+                if let options = found["select"] as? [String] {
+                    answer(["error": "that is a select — choose with form_input (ref \(found["selectRef"] ?? "?")) and one of: " + options.joined(separator: " | ")])
                     return
                 }
                 let button = request["button"] as? String ?? "left"
                 let mods = Agent.flags(request["mods"])
                 if button == "right" {
-                    // A real right-click opens the menu modally and holds the whole
-                    // app until someone closes it: the page hears the event instead.
-                    tab.web.callAsyncJavaScript(Agent.contextMenu, arguments: ["x": spot.x, "y": spot.y], in: nil, in: .page) { _ in
-                        MainActor.assumeIsolated { answer(["ok": true, "at": [Int(spot.x), Int(spot.y)]]) }
+                    // A real right-click opens a menu the same way: the page
+                    // hears the events instead.
+                    self.run(Agent.contextMenu, ["x": found["x"] ?? 0, "y": found["y"] ?? 0], on: tab, in: .page) { _ in
+                        answer(["ok": true, "at": found["at"] ?? []])
                     }
                     return
                 }
@@ -167,9 +258,43 @@ extension Bench {
                 for n in 1...count {
                     self.mouse(tab.web, at: spot, kinds: [.leftMouseDown, .leftMouseUp], clicks: n, mods: mods)
                 }
-                var out: [String: Any] = ["ok": true, "at": [Int(spot.x), Int(spot.y)]]
-                if let said { out["note"] = said }
+                var out: [String: Any] = ["ok": true, "at": found["at"] ?? []]
+                if let note = found["note"] as? String { out["note"] = note }
                 self.settled(tab, out, answer)
+            }
+
+        case "a.drag":
+            guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
+            ready(tab)
+            var to: [String: Any] = [:]
+            if let ref = request["toRef"] { to["ref"] = ref }
+            if let x = request["toX"], let y = request["toY"] { to["x"] = x; to["y"] = y }
+            guard !to.isEmpty else { answer(["error": "a.drag needs where to: toRef, or toX and toY"]); return }
+            point(on: tab, request) { [weak self] start, from in
+                guard let self, let start else { answer(["error": from["error"] as? String ?? "nowhere to start"]); return }
+                self.point(on: tab, to) { end, onto in
+                    guard let end else { answer(["error": onto["error"] as? String ?? "nowhere to drop"]); return }
+                    // What the page lets be dragged the HTML way — a link, a
+                    // picture, anything draggable — would start AppKit's own
+                    // drag, which follows the real pointer and drops wherever
+                    // it is, in any app. The page is told the drag instead.
+                    if from["draggable"] as? Bool == true {
+                        let arguments: [String: Any] = ["x": from["x"] ?? 0, "y": from["y"] ?? 0, "toX": onto["x"] ?? 0, "toY": onto["y"] ?? 0]
+                        self.page("a.dnd", arguments, on: tab) { result in
+                            if case .success(let out) = result { self.settled(tab, out, answer) } else { reply(result) }
+                        }
+                        return
+                    }
+                    let steps = 12
+                    self.mouse(tab.web, at: start, kinds: [.mouseMoved, .leftMouseDown], clicks: 1, mods: [])
+                    for n in 1...steps {
+                        let t = CGFloat(n) / CGFloat(steps)
+                        let spot = NSPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
+                        self.mouse(tab.web, at: spot, kinds: [.leftMouseDragged], clicks: 1, mods: [])
+                    }
+                    self.mouse(tab.web, at: end, kinds: [.leftMouseUp], clicks: 1, mods: [])
+                    self.settled(tab, ["ok": true, "from": from["at"] ?? [], "to": onto["at"] ?? []], answer)
+                }
             }
 
         case "a.type":
@@ -177,15 +302,21 @@ extension Bench {
             guard let text = request["text"] as? String else { answer(["error": "a.type needs text"]); return }
             ready(tab)
             let keys = request["keys"] as? Bool == true
-            let go = { [weak self] in
-                self?.typeText(text, into: tab.web, keys: keys) { answer(["ok": true, "typed": text.count]) }
+            let go = { [weak self] (note: Any?) in
+                guard let self else { return }
+                self.typeText(text, into: tab.web, keys: keys) {
+                    var out: [String: Any] = ["ok": true, "typed": text.count]
+                    if let note { out["note"] = note }
+                    self.settled(tab, out, answer)
+                }
             }
-            guard request["ref"] != nil || request["selector"] != nil else { go(); return }
+            guard request["ref"] != nil || request["selector"] != nil || request["x"] != nil else { go(nil); return }
             // Into a field: clicked first, as a hand would, so the page sees focus.
-            point(on: tab, request) { [weak self] spot, said in
-                guard let self, let spot else { answer(["error": said ?? "no field"]); return }
+            point(on: tab, request) { [weak self] spot, found in
+                guard let self, let spot else { answer(["error": found["error"] as? String ?? "no field"]); return }
+                if found["select"] != nil { answer(["error": "that is a select — choose with form_input"]); return }
                 self.mouse(tab.web, at: spot, kinds: [.leftMouseDown, .leftMouseUp], clicks: 1, mods: [])
-                go()
+                go(found["note"] as? String)
             }
 
         case "a.key":
@@ -196,26 +327,58 @@ extension Bench {
             let unknown = chords.filter { Agent.chord($0) == nil }
             guard unknown.isEmpty else { answer(["error": "unknown keys: " + unknown.joined(separator: ", ")]); return }
             let times = max(1, min(100, request["repeat"] as? Int ?? 1))
-            pressAll(Array(repeating: chords, count: times).flatMap { $0 }, on: tab.web) { [weak self] in self?.settled(tab, ["ok": true], answer) }
+            page("a.active", [:], on: tab) { [weak self] focused in
+                guard let self else { return }
+                // Space, Enter or an arrow on a select opens its menu, which
+                // holds the app like a click on it does.
+                if case .success(let out) = focused, out["select"] as? Bool == true,
+                   chords.contains(where: { ["space", "enter", "return", "arrowup", "arrowdown", "up", "down"].contains($0.lowercased()) }) {
+                    answer(["error": "a select has the focus — choose with form_input (ref \(out["ref"] ?? "?"))"])
+                    return
+                }
+                self.pressAll(Array(repeating: chords, count: times).flatMap { $0 }, on: tab.web) { self.settled(tab, ["ok": true], answer) }
+            }
 
         case "a.shot":
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             ready(tab)
-            picture(tab.web, quality: request["quality"] as? Double ?? 0.6, answer)
+            let quality = request["quality"] as? Double ?? 0.6
+            guard request["ref"] != nil || request["selector"] != nil else {
+                picture(tab.web, of: nil, quality: quality, answer)
+                return
+            }
+            page("a.rect", request, on: tab) { [weak self] result in
+                switch result {
+                case .success(let out):
+                    guard let x = out["x"] as? Double, let y = out["y"] as? Double, let w = out["width"] as? Double, let h = out["height"] as? Double
+                    else { answer(["error": "no picture of that"]); return }
+                    self?.picture(tab.web, of: CGRect(x: x, y: y, width: w, height: h), quality: quality, answer)
+                case .failure(let error): answer(["error": error.said])
+                }
+            }
 
         case "a.js":
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             guard let code = request["code"] as? String else { answer(["error": "a.js needs code"]); return }
             ready(tab)
-            let world: WKContentWorld = request["world"] as? String == "search" ? Web.world : .page
-            // An expression's value, or a body that returns one — awaited either way.
-            tab.web.callAsyncJavaScript("return (\n" + code + "\n)", arguments: [:], in: nil, in: world) { result in
+            // In the page's world only: Search's own has its handlers in it.
+            // An expression's value, or a body that returns one — awaited
+            // either way. The expression is tried first, and what it throws
+            // is caught and told: only code that isn't an expression at all,
+            // and so never ran, is run again as a body. Run twice, a click or
+            // a request in code that then threw would have happened twice.
+            let expression = "try { return await (\n" + code + "\n); } catch (e) { return { \(Agent.threw): String(e && e.stack ? e.name + ': ' + e.message : e) }; }"
+            tab.web.callAsyncJavaScript(expression, arguments: [:], in: nil, in: .page) { [weak self] result in
                 MainActor.assumeIsolated {
-                    if case .success(let value) = result { answer(["value": Bench.plain(value)]); return }
-                    tab.web.callAsyncJavaScript(code, arguments: [:], in: nil, in: world) { again in
+                    if case .success(let value) = result {
+                        if let thrown = (value as? [String: Any])?[Agent.threw] { answer(["error": thrown]); return }
+                        answer(self?.decorated(["value": Bench.plain(value)], tab) ?? [:])
+                        return
+                    }
+                    tab.web.callAsyncJavaScript(code, arguments: [:], in: nil, in: .page) { again in
                         MainActor.assumeIsolated {
                             switch again {
-                            case .success(let value): answer(["value": Bench.plain(value)])
+                            case .success(let value): answer(self?.decorated(["value": Bench.plain(value)], tab) ?? [:])
                             case .failure(let error): answer(["error": Agent.said(error)])
                             }
                         }
@@ -226,31 +389,30 @@ extension Bench {
         case "a.console":
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             ready(tab)
-            tab.web.callAsyncJavaScript(Agent.console, arguments: ["clear": request["clear"] as? Bool ?? false], in: nil, in: .page) { result in
-                MainActor.assumeIsolated {
-                    switch result {
-                    case .success(let value): answer((value as? [String: Any]) ?? [:])
-                    case .failure(let error): answer(["error": Agent.said(error)])
-                    }
-                }
-            }
+            run(Agent.console, ["clear": request["clear"] as? Bool ?? false], on: tab, in: .page, reply)
 
         case "a.network":
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             ready(tab)
-            tab.web.callAsyncJavaScript(Agent.network, arguments: [:], in: nil, in: Web.world) { result in
-                MainActor.assumeIsolated {
-                    switch result {
-                    case .success(let value): answer(["requests": Bench.plain(value)])
-                    case .failure(let error): answer(["error": Agent.said(error)])
-                    }
-                }
-            }
+            run(Agent.network, ["clear": request["clear"] as? Bool ?? false], on: tab, in: .page, reply)
+
+        case "a.dialog":
+            // How the next confirm, prompt or login in this tab of Claude's is
+            // answered. Until told, a confirm is OK, a prompt takes what it
+            // offers, a login is cancelled.
+            guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
+            guard tab.bench else { answer(["error": "a dialog in your tab is yours to answer, on your screen"]); return }
+            Agent.next[tab.id] = Agent.Answer(accept: request["accept"] as? Bool ?? true, text: request["text"] as? String)
+            answer(["ok": true])
+
+        case "a.dialogs":
+            guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
+            answer(["dialogs": Agent.asked.removeValue(forKey: tab.id) ?? []])
 
         case "a.batch":
             guard let steps = request["steps"] as? [[String: Any]], !steps.isEmpty else { answer(["error": "a.batch needs steps"]); return }
             var results: [[String: Any]] = []
-            func run(_ index: Int) {
+            func next(_ index: Int) {
                 guard index < steps.count else { answer(["results": results]); return }
                 var step = steps[index]
                 if step["id"] == nil, let id = request["id"] { step["id"] = id }
@@ -266,17 +428,31 @@ extension Bench {
                         answer(["results": results, "stopped": index])
                         return
                     }
-                    run(index + 1)
+                    next(index + 1)
                 }
             }
-            run(0)
+            next(0)
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "a.tabs", "a.open", "a.show", "a.close", "a.navigate", "a.wait", "a.read", "a.find", "a.text", "a.click", "a.hover",
-                "a.type", "a.key", "a.fill", "a.scroll", "a.focus", "a.point", "a.shot", "a.js", "a.console", "a.network", "a.batch",
+                "a.tabs", "a.open", "a.show", "a.close", "a.resize", "a.navigate", "a.wait", "a.read", "a.find", "a.text", "a.click",
+                "a.hover", "a.drag", "a.type", "a.key", "a.fill", "a.upload", "a.scroll", "a.focus", "a.shot", "a.js", "a.console",
+                "a.network", "a.dialog", "a.dialogs", "a.batch",
             ]])
         }
+    }
+
+    /// What happened in the tab meanwhile, told with the answer: a dialog a
+    /// page put up, a tab it opened.
+    private func decorated(_ out: [String: Any], _ tab: Tab) -> [String: Any] {
+        var out = out
+        if let asked = Agent.asked.removeValue(forKey: tab.id), !asked.isEmpty { out["dialogs"] = asked }
+        let opened = Agent.popups.filter { $0.from == tab.id }
+        if !opened.isEmpty {
+            Agent.popups.removeAll { $0.from == tab.id }
+            out["opened"] = opened.map { String($0.to.uuidString.prefix(8)).lowercased() }
+        }
+        return out
     }
 
     /// After a click or a key: a beat for what it set off, and if that was a
@@ -288,45 +464,44 @@ extension Bench {
             var out = out
             guard tab.loading else {
                 if tab.address != before { out["url"] = tab.address?.absoluteString ?? "" }
-                answer(out)
+                answer(decorated(out, tab))
                 return
             }
             wait(for: tab, until: Date().addingTimeInterval(15)) { page in
                 out["navigated"] = ["url": page["url"] ?? "", "title": page["title"] ?? "", "timeout": page["timeout"] ?? false]
-                answer(out)
+                answer(self.decorated(out, tab))
             }
         }
+    }
+
+    private func forget(_ tab: Tab) {
+        Agent.sizes[tab.id] = nil
+        Agent.next[tab.id] = nil
+        Agent.asked[tab.id] = nil
+        rooms.removeValue(forKey: tab.id)?.close()
     }
 
     // MARK: - pointing
 
     /// Where to act, in the view's own points: a ref or selector's middle,
     /// scrolled into view first, or x and y on the page as a screenshot
-    /// shows it.
-    private func point(on tab: Tab, _ request: [String: Any], _ then: @escaping (NSPoint?, String?) -> Void) {
+    /// shows it — with what is there, as the page's side found it.
+    private func point(on tab: Tab, _ request: [String: Any], _ then: @escaping (NSPoint?, [String: Any]) -> Void) {
         let web = tab.web
         let scale = web.pageZoom * web.magnification
-        func spot(_ x: Double, _ y: Double) -> NSPoint {
-            let local = NSPoint(x: x * scale, y: y * scale)
-            return web.isFlipped ? local : NSPoint(x: local.x, y: web.bounds.height - local.y)
-        }
-        if let x = request["x"] as? Double, let y = request["y"] as? Double {
-            then(spot(x, y), nil)
+        let at = request["ref"] == nil && request["selector"] == nil
+        guard !at || (request["x"] != nil && request["y"] != nil) else {
+            then(nil, ["error": "needs a ref, or x and y"])
             return
         }
-        var arguments: [String: Any] = ["verb": "a.point"]
-        if let ref = request["ref"] { arguments["ref"] = ref }
-        if let selector = request["selector"] { arguments["selector"] = selector }
-        web.callAsyncJavaScript(Agent.page, arguments: ["args": arguments], in: nil, in: Web.world) { result in
-            MainActor.assumeIsolated {
-                switch result {
-                case .success(let value):
-                    guard let out = value as? [String: Any] else { then(nil, "no answer"); return }
-                    if let error = out["error"] as? String { then(nil, error); return }
-                    guard let x = out["x"] as? Double, let y = out["y"] as? Double else { then(nil, "no place"); return }
-                    then(spot(x, y), out["note"] as? String)
-                case .failure(let error): then(nil, Agent.said(error))
-                }
+        page(at ? "a.at" : "a.point", request, on: tab) { result in
+            switch result {
+            case .success(var out):
+                guard let x = out["x"] as? Double, let y = out["y"] as? Double else { then(nil, ["error": "no place"]); return }
+                out["at"] = [Int(x.rounded()), Int(y.rounded())]
+                let local = NSPoint(x: x * scale, y: y * scale)
+                then(web.isFlipped ? local : NSPoint(x: local.x, y: web.bounds.height - local.y), out)
+            case .failure(let error): then(nil, ["error": error.said])
             }
         }
     }
@@ -339,13 +514,14 @@ extension Bench {
                 with: type, location: location, modifierFlags: mods,
                 timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil,
-                eventNumber: 0, clickCount: clicks, pressure: type == .leftMouseDown ? 1 : 0
+                eventNumber: 0, clickCount: clicks, pressure: type == .leftMouseUp || type == .mouseMoved ? 0 : 1
             ) else { continue }
             switch type {
             case .leftMouseDown:
                 window.makeFirstResponder(web)
                 web.mouseDown(with: event)
             case .leftMouseUp: web.mouseUp(with: event)
+            case .leftMouseDragged: web.mouseDragged(with: event)
             default: web.mouseMoved(with: event)
             }
         }
@@ -362,10 +538,10 @@ extension Bench {
         guard keys else {
             // Lines as Enter, so a form or a chat sees them as a hand's.
             let lines = text.components(separatedBy: "\n")
-            var steps: [() -> Void] = []
+            var steps: [Step] = []
             for (n, line) in lines.enumerated() {
-                if n > 0 { steps.append { _ = self.send(Agent.chord("Enter")!, to: web) } }
-                if !line.isEmpty { steps.append { web.insertText(line) } }
+                if n > 0 { steps.append { next in self.send(Agent.chord("Enter")!, to: web, next) } }
+                if !line.isEmpty { steps.append { next in web.insertText(line); next() } }
             }
             settle(steps, on: web, done)
             return
@@ -374,32 +550,57 @@ extension Bench {
             if character == "\n" { return Agent.chord("Enter")! }
             if character == "\t" { return Agent.chord("Tab")! }
             let chars = String(character)
-            return Agent.Chord(code: Bench.keyCode(for: character), chars: chars, ignoring: chars.lowercased(), mods: character.isUppercase ? [.shift] : [])
+            return Agent.Chord(name: chars, code: Agent.code(for: character), chars: chars, ignoring: chars.lowercased(), mods: character.isUppercase ? [.shift] : [])
         }
-        settle(chords.map { chord in { _ = self.send(chord, to: web) } }, on: web, done)
+        settle(chords.map { chord in { next in self.send(chord, to: web, next) } }, on: web, done)
     }
 
     /// Chords — "Enter", "cmd+a", "shift+Tab" — pressed one after another.
     private func pressAll(_ chords: [String], on web: WKWebView, _ done: @escaping () -> Void) {
         web.window?.makeFirstResponder(web)
-        settle(chords.compactMap(Agent.chord).map { chord in { _ = self.send(chord, to: web) } }, on: web, done)
+        settle(chords.compactMap(Agent.chord).map { chord in { next in self.send(chord, to: web, next) } }, on: web, done)
     }
+
+    typealias Step = (@escaping () -> Void) -> Void
 
     /// Steps that each hand the page something, run one at a time: the next
     /// only once the page has done with the last. WebKit queues key events
     /// and sends each after the one before is handled, while an edit command
     /// or a script goes at once — ⌘A after typing selected the half typed so
     /// far. A script's round trip behind each step keeps them in order.
-    private func settle(_ steps: [() -> Void], on web: WKWebView, _ done: @escaping () -> Void) {
+    private func settle(_ steps: [Step], on web: WKWebView, _ done: @escaping () -> Void) {
         guard let first = steps.first else { done(); return }
-        first()
-        web.evaluateJavaScript("0") { [weak self] _, _ in
-            MainActor.assumeIsolated { self?.settle(Array(steps.dropFirst()), on: web, done) }
+        first {
+            web.evaluateJavaScript("0") { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.settle(Array(steps.dropFirst()), on: web, done) }
+            }
         }
     }
 
-    private func send(_ chord: Agent.Chord, to web: WKWebView) -> Bool {
+    /// One chord, pressed on the page.
+    ///
+    /// Never a key with ⌘ as a real key event: WebKit takes those as the
+    /// app's key equivalents, and whatever the page doesn't use runs the
+    /// app's menu — ⌘W sent to a tab of Claude's closed the tab you were
+    /// looking at. The page is told the key as its own event instead, and
+    /// the edit menu's ones — ⌘A, ⌘C, ⌘V, ⌘X, ⌘Z — are done as the
+    /// commands, on this view only, unless the page took the key itself.
+    private func send(_ chord: Agent.Chord, to web: WKWebView, _ done: @escaping () -> Void) {
+        if chord.mods.contains(.command) {
+            let dom = Agent.dom(chord)
+            web.callAsyncJavaScript(Agent.synthetic, arguments: dom, in: nil, in: .page) { result in
+                MainActor.assumeIsolated {
+                    let taken = (try? result.get()) as? Bool == false
+                    if !taken, let command = Agent.editing(chord.ignoring, shift: chord.mods.contains(.shift)) {
+                        web.tryToPerform(command, with: nil)
+                    }
+                    done()
+                }
+            }
+            return
+        }
         let number = web.window?.windowNumber ?? 0
+        Agent.guardKeys()
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             guard let event = NSEvent.keyEvent(
                 with: type, location: .zero, modifierFlags: chord.mods,
@@ -408,32 +609,30 @@ extension Bench {
                 characters: chord.chars, charactersIgnoringModifiers: chord.ignoring,
                 isARepeat: false, keyCode: chord.code
             ) else { continue }
-            if type == .keyDown {
-                // The page hears the key first, as it does a hand's: ⌘K in
-                // Slack, ⌘Enter in a composer. The editing ones — ⌘A, ⌘C,
-                // ⌘V, ⌘X, ⌘Z — are menu commands in a Mac app, which a key
-                // handed straight to the view never reaches: they are sent
-                // as the commands too.
-                web.keyDown(with: event)
-                if chord.mods.contains(.command), let command = Agent.editing(chord.ignoring, shift: chord.mods.contains(.shift)) {
-                    web.tryToPerform(command, with: nil)
-                }
-            } else {
-                web.keyUp(with: event)
-            }
+            Agent.sent.append(event)
+            if Agent.sent.count > 64 { Agent.sent.removeFirst(Agent.sent.count - 64) }
+            if type == .keyDown { web.keyDown(with: event) } else { web.keyUp(with: event) }
         }
-        return true
+        done()
     }
 
     // MARK: - looking
 
     /// The page as it is on screen, one pixel per CSS pixel: a point on the
-    /// picture is a point for `a.click`.
-    private func picture(_ web: WKWebView, quality: Double, _ answer: @escaping ([String: Any]) -> Void) {
+    /// picture is a point for `a.click`. `rect`, in the page's CSS pixels,
+    /// for one element's part of it.
+    private func picture(_ web: WKWebView, of rect: CGRect?, quality: Double, _ answer: @escaping ([String: Any]) -> Void) {
         let scale = web.pageZoom * web.magnification
-        let size = NSSize(width: (web.bounds.width / scale).rounded(), height: (web.bounds.height / scale).rounded())
+        let whole = CGRect(x: 0, y: 0, width: web.bounds.width / scale, height: web.bounds.height / scale)
+        let area = (rect ?? whole).intersection(whole)
+        guard !area.isNull, area.width >= 1, area.height >= 1 else { answer(["error": "that is not on screen — scroll to it first"]); return }
+        let size = NSSize(width: area.width.rounded(), height: area.height.rounded())
         let shot = WKSnapshotConfiguration()
         shot.afterScreenUpdates = true
+        if rect != nil {
+            let y = web.isFlipped ? area.minY * scale : web.bounds.height - area.maxY * scale
+            shot.rect = CGRect(x: area.minX * scale, y: y, width: area.width * scale, height: area.height * scale)
+        }
         shot.snapshotWidth = NSNumber(value: Double(size.width))
         web.takeSnapshot(with: shot) { image, error in
             MainActor.assumeIsolated {
@@ -457,15 +656,88 @@ extension Bench {
                     answer(["error": "no picture"])
                     return
                 }
-                answer(["jpeg": jpeg.base64EncodedString(), "width": Int(size.width), "height": Int(size.height)])
+                answer(["jpeg": jpeg.base64EncodedString(), "width": Int(size.width), "height": Int(size.height),
+                        "left": Int(area.minX), "top": Int(area.minY)])
             }
         }
+    }
+}
+
+// MARK: - what a page in Claude's tab asks
+
+extension Browser {
+    /// A page in one of Claude's tabs asked something — an alert, a confirm,
+    /// a prompt, a login, a file. Answered here, and told to Claude with its
+    /// next answer: a sheet on a window nobody sees would hold the page for
+    /// good. Nil for your own tabs, which ask you as they always did.
+    func claudeAnswers(_ webView: WKWebView, _ kind: String, _ message: String) -> Agent.Answer? {
+        guard let tab = tab(for: webView), tab.bench else { return nil }
+        let answer = Agent.next.removeValue(forKey: tab.id) ?? Agent.Answer(accept: kind != "login" && kind != "certificate", text: nil)
+        var entry: [String: Any] = ["kind": kind, "message": message, "accepted": answer.accept]
+        if let text = answer.text, kind == "prompt" { entry["answered"] = text }
+        Agent.asked[tab.id, default: []].append(entry)
+        return answer
     }
 }
 
 /// The page-side half, and the names of keys.
 @MainActor
 enum Agent {
+    struct Answer {
+        let accept: Bool
+        let text: String?
+    }
+
+    struct Failure: Error {
+        let said: String
+    }
+
+    /// How the next dialog in a tab of Claude's is answered, when told.
+    static var next: [Tab.ID: Answer] = [:]
+    /// What pages in Claude's tabs asked, until Claude has been told.
+    static var asked: [Tab.ID: [[String: Any]]] = [:]
+    /// Tabs Claude's tabs opened, until Claude has been told.
+    static var popups: [(from: Tab.ID, to: Tab.ID)] = []
+    /// The size a tab of Claude's was given, when not the usual.
+    static var sizes: [Tab.ID: NSSize] = [:]
+
+    /// The keys Claude pressed, lately. A key a page doesn't use, WebKit
+    /// sends on through the app — NSApp.sendEvent — which hands it to the
+    /// window in front, whatever window the page is in: a key Claude pressed
+    /// in a tab of its own was typed into your address field, and ⌘W would
+    /// have closed your tab. So none of them goes past the page: seen coming
+    /// back through the app, it stops there.
+    static var sent: [NSEvent] = []
+    /// How many were stopped on their way back, for the bench.
+    static var stopped = 0
+    private static var watching: Any?
+
+    static func guardKeys() {
+        guard watching == nil else { return }
+        watching = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+            // A local monitor runs on the main thread, as the app's events do.
+            nonisolated(unsafe) let seen = event
+            let ours = MainActor.assumeIsolated { () -> Bool in
+                guard let at = sent.firstIndex(where: { PageView.same($0, seen) }) else { return false }
+                sent.remove(at: at)
+                stopped += 1
+                return true
+            }
+            return ours ? nil : event
+        }
+    }
+
+    static let phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+
+    static func size(_ request: [String: Any]) -> NSSize? {
+        guard let w = request["width"] as? Double, let h = request["height"] as? Double,
+              (200...4000).contains(w), (200...4000).contains(h) else { return nil }
+        return NSSize(width: w.rounded(), height: h.rounded())
+    }
+
+    /// The key an expression's error comes back under.
+    static let threw = "__searchThrew"
+
     static func said(_ error: Error) -> String {
         let info = (error as NSError).userInfo
         return (info["WKJavaScriptExceptionMessage"] as? String) ?? error.localizedDescription
@@ -498,6 +770,7 @@ enum Agent {
     }
 
     struct Chord {
+        let name: String
         let code: UInt16
         let chars: String
         let ignoring: String
@@ -506,8 +779,13 @@ enum Agent {
 
     /// "cmd+shift+z", "Enter", "a" as a key and the keys held with it.
     static func chord(_ text: String) -> Chord? {
-        let parts = text.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
-        guard let name = parts.last, !name.isEmpty else { return text == "+" ? chord("shift+=") : nil }
+        var parts = text.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
+        // "+" and "cmd++": the plus is the key.
+        if parts.count >= 2, parts[parts.count - 1].isEmpty, parts[parts.count - 2].isEmpty {
+            parts.removeLast(2)
+            parts.append("+")
+        }
+        guard let name = parts.last, !name.isEmpty else { return nil }
         var mods: NSEvent.ModifierFlags = []
         for part in parts.dropLast() {
             switch part.lowercased() {
@@ -519,7 +797,9 @@ enum Agent {
             }
         }
         guard let (code, chars) = key(name) else { return nil }
-        return Chord(code: code, chars: chars, ignoring: mods.contains(.shift) ? chars.uppercased() : chars.lowercased(), mods: mods)
+        // A character typed with shift on a US keyboard says so, as a hand's does.
+        if chars.count == 1, let c = chars.first, c.isUppercase || "!@#$%^&*()_+{}|:\"<>?~".contains(c) { mods.insert(.shift) }
+        return Chord(name: name, code: code, chars: chars, ignoring: mods.contains(.shift) ? chars.uppercased() : chars.lowercased(), mods: mods)
     }
 
     /// A key's code on a US keyboard and the characters it sends.
@@ -540,16 +820,81 @@ enum Agent {
         case "end": return (119, fn(NSEndFunctionKey))
         case "pageup": return (116, fn(NSPageUpFunctionKey))
         case "pagedown": return (121, fn(NSPageDownFunctionKey))
+        case "f1": return (122, fn(NSF1FunctionKey))
+        case "f2": return (120, fn(NSF2FunctionKey))
+        case "f3": return (99, fn(NSF3FunctionKey))
+        case "f4": return (118, fn(NSF4FunctionKey))
+        case "f5": return (96, fn(NSF5FunctionKey))
+        case "f6": return (97, fn(NSF6FunctionKey))
+        case "f7": return (98, fn(NSF7FunctionKey))
+        case "f8": return (100, fn(NSF8FunctionKey))
+        case "f9": return (101, fn(NSF9FunctionKey))
+        case "f10": return (109, fn(NSF10FunctionKey))
+        case "f11": return (103, fn(NSF11FunctionKey))
+        case "f12": return (111, fn(NSF12FunctionKey))
+        case "+": return (24, "+")
         default:
             guard name.count == 1, let character = name.first else { return nil }
-            return (Bench.keyCode(for: character), name)
+            return (code(for: character), name)
         }
     }
+
+    /// The key that types a character on a US keyboard, shifted or not —
+    /// letters, digits and punctuation; any other character goes as a key
+    /// no keyboard has, so a page never takes ş for the space bar.
+    static func code(for character: Character) -> UInt16 {
+        let row = "asdfhgzxcv\u{0}bqweryt123465=97-80]ou[ip\u{0}lj'k;\\,/nm."
+        let lower = Character(character.lowercased())
+        let shifted: [Character: Character] = ["!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9", ")": "0",
+                                               "_": "-", "+": "=", "{": "[", "}": "]", "|": "\\", ":": ";", "\"": "'", "<": ",", ">": ".", "?": "/", "~": "`"]
+        let key = shifted[lower] ?? lower
+        if key == "`" { return 50 }
+        if key == " " { return 49 }
+        if let at = row.firstIndex(of: key), key != "\u{0}" { return UInt16(row.distance(from: row.startIndex, to: at)) }
+        return 0xFF
+    }
+
+    /// A chord as the page's KeyboardEvent names it.
+    static func dom(_ chord: Chord) -> [String: Any] {
+        let named: [String: String] = ["enter": "Enter", "return": "Enter", "tab": "Tab", "space": " ", "backspace": "Backspace",
+                                       "escape": "Escape", "esc": "Escape", "delete": "Delete", "arrowleft": "ArrowLeft", "left": "ArrowLeft",
+                                       "arrowright": "ArrowRight", "right": "ArrowRight", "arrowdown": "ArrowDown", "down": "ArrowDown",
+                                       "arrowup": "ArrowUp", "up": "ArrowUp", "home": "Home", "end": "End", "pageup": "PageUp", "pagedown": "PageDown"]
+        let lower = chord.name.lowercased()
+        var key = named[lower] ?? (lower.hasPrefix("f") && lower.count > 1 && Int(lower.dropFirst()) != nil ? lower.uppercased() : chord.name)
+        var code = key == " " ? "Space" : key
+        if chord.name.count == 1, let c = chord.name.first {
+            key = chord.mods.contains(.shift) ? chord.name.uppercased() : chord.name.lowercased()
+            if c.isLetter, c.isASCII { code = "Key" + chord.name.uppercased() }
+            else if c.isNumber, c.isASCII { code = "Digit" + chord.name }
+            else { code = "" }
+        }
+        return ["key": key, "code": code, "meta": chord.mods.contains(.command), "ctrl": chord.mods.contains(.control),
+                "alt": chord.mods.contains(.option), "shift": chord.mods.contains(.shift)]
+    }
+
+    /// A key told to the page as its own events, on what has the focus —
+    /// through frames from the same site. False when the page took it.
+    static let synthetic = #"""
+    var t = document.activeElement;
+    while (t && (t.tagName === 'IFRAME' || t.tagName === 'FRAME')) { try { t = t.contentDocument.activeElement; } catch (e) { break; } }
+    t = t || document.body || document.documentElement;
+    var o = { key: key, code: code, bubbles: true, cancelable: true, composed: true, metaKey: meta, ctrlKey: ctrl, altKey: alt, shiftKey: shift };
+    var kept = t.dispatchEvent(new KeyboardEvent('keydown', o));
+    t.dispatchEvent(new KeyboardEvent('keyup', o));
+    return kept;
+    """#
 
     /// True once the selector matches, or the text is on the page.
     static let present = #"""
     if (selector) return !!document.querySelector(selector);
     return !!(document.body && document.body.innerText.indexOf(text) >= 0);
+    """#
+
+    /// True while the page has loaded and has no request of its own open.
+    static let idle = #"""
+    var box = window[Symbol.for('search.claude')];
+    return document.readyState === 'complete' && (!box || box.inflight <= 0);
     """#
 
     /// A right-click, told to the page as its events.
@@ -565,50 +910,125 @@ enum Agent {
     return true;
     """#
 
-    /// The console, listened to from the first time it is asked for, in the
-    /// page's world, under a symbol nothing of the page's names.
-    static let console = #"""
-    var K = Symbol.for('search.claude.console');
-    var fresh = !window[K];
-    if (fresh) {
-      var buf = [];
-      Object.defineProperty(window, K, { value: buf });
-      var put = function (level, parts) {
-        var text = Array.prototype.map.call(parts, function (x) {
-          if (typeof x === 'string') return x;
-          if (x instanceof Error) return x.name + ': ' + x.message;
-          try { return JSON.stringify(x); } catch (e) { return String(x); }
-        }).join(' ');
-        buf.push({ level: level, time: Date.now(), text: text.slice(0, 2000) });
-        if (buf.length > 1000) buf.shift();
-      };
-      ['log', 'info', 'warn', 'error', 'debug'].forEach(function (level) {
+    /// What listens, in the page's own world, to what a page says and asks
+    /// for: the console, uncaught errors and rejections, files that fail to
+    /// load, blocked content, and every fetch and XMLHttpRequest with its
+    /// status and time. Put in at the start of each page in Claude's tabs,
+    /// and of each page from this Mac (`always` false: it checks the host);
+    /// in any other page the first time it is asked for. Under a symbol
+    /// nothing of the page's names, once per page.
+    static let hook = #"""
+    function (always, since) {
+      var K = Symbol.for('search.claude');
+      if (window[K]) return window[K];
+      if (!always) {
+        var h = location.hostname;
+        if (!(h === 'localhost' || h === '0.0.0.0' || h === '[::1]' || /^127\./.test(h) || /\.(localhost|local|test)$/.test(h))) return null;
+      }
+      var box = { log: [], net: [], inflight: 0, since: since };
+      Object.defineProperty(window, K, { value: box });
+      function keep(list, item, max) { list.push(item); if (list.length > max) list.shift(); }
+      function show(x) {
+        if (typeof x === 'string') return x;
+        if (x instanceof Error) return x.stack && x.stack.indexOf(x.message) >= 0 ? x.name + ': ' + x.message + '\n' + x.stack : x.name + ': ' + x.message + (x.stack ? '\n' + x.stack : '');
+        try { var s = JSON.stringify(x); return s === undefined ? String(x) : s; } catch (e) { return String(x); }
+      }
+      function say(level, parts) {
+        keep(box.log, { level: level, time: Date.now(), text: Array.prototype.map.call(parts, show).join(' ').slice(0, 4000) }, 1000);
+      }
+      ['log', 'info', 'warn', 'error', 'debug', 'trace'].forEach(function (level) {
         var original = console[level];
-        console[level] = function () { try { put(level, arguments); } catch (e) {} return original.apply(this, arguments); };
+        if (typeof original !== 'function') return;
+        console[level] = function () { try { say(level, arguments); } catch (e) {} return original.apply(this, arguments); };
       });
-      window.addEventListener('error', function (e) { put('exception', [(e.message || 'error') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0)]); });
-      window.addEventListener('unhandledrejection', function (e) { put('exception', ['unhandled: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)]); });
+      addEventListener('error', function (e) {
+        var t = e.target;
+        if (t && t !== window && t.tagName) {
+          var src = t.currentSrc || t.src || t.href || '';
+          keep(box.net, { method: 'GET', url: String(src), type: t.tagName.toLowerCase(), failed: 'did not load', time: Date.now() }, 500);
+          say('error', ['Failed to load ' + t.tagName.toLowerCase() + ': ' + src]);
+          return;
+        }
+        say('exception', [e.error ? show(e.error) : (e.message || 'error') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0) + ':' + (e.colno || 0)]);
+      }, true);
+      addEventListener('unhandledrejection', function (e) { say('exception', ['Unhandled rejection: ' + show(e.reason)]); });
+      addEventListener('securitypolicyviolation', function (e) { say('error', ['Content Security Policy blocked ' + (e.blockedURI || 'inline') + ' (' + e.violatedDirective + ')']); });
+      function where(url) { try { return new URL(url, location.href).href; } catch (e) { return String(url); } }
+      var fetch0 = window.fetch;
+      if (typeof fetch0 === 'function') {
+        window.fetch = function (input, init) {
+          var entry = { method: String((init && init.method) || (input && input.method) || 'GET').toUpperCase(),
+                        url: where(typeof input === 'string' || input instanceof URL ? input : input && input.url), type: 'fetch', time: Date.now() };
+          var t0 = performance.now();
+          var p;
+          try { p = fetch0.apply(this, arguments); } catch (e) { entry.failed = String(e); keep(box.net, entry, 500); throw e; }
+          box.inflight++;
+          return p.then(function (r) {
+            entry.status = r.status; entry.ms = Math.round(performance.now() - t0); box.inflight--; keep(box.net, entry, 500); return r;
+          }, function (err) {
+            entry.failed = String(err && err.message || err); entry.ms = Math.round(performance.now() - t0); box.inflight--; keep(box.net, entry, 500); throw err;
+          });
+        };
+      }
+      var X = window.XMLHttpRequest && XMLHttpRequest.prototype;
+      if (X) {
+        var open0 = X.open, send0 = X.send, calls = new WeakMap();
+        X.open = function (method, url) { calls.set(this, { method: String(method).toUpperCase(), url: where(url), type: 'xhr' }); return open0.apply(this, arguments); };
+        X.send = function () {
+          var entry = calls.get(this), xhr = this;
+          if (entry) {
+            entry.time = Date.now();
+            var t0 = performance.now();
+            box.inflight++;
+            xhr.addEventListener('loadend', function () {
+              entry.status = xhr.status;
+              if (!xhr.status) entry.failed = 'network error, blocked or aborted';
+              entry.ms = Math.round(performance.now() - t0);
+              box.inflight--;
+              keep(box.net, entry, 500);
+            });
+          }
+          return send0.apply(this, arguments);
+        };
+      }
+      return box;
     }
-    var out = window[K].slice();
-    if (clear) window[K].length = 0;
-    return { listening: true, since: fresh ? 'now — what was said before this first call was not heard' : 'the first call on this page', messages: out };
     """#
 
-    /// What the page has fetched, as the page's own timing records it.
-    static let network = #"""
-    var list = performance.getEntriesByType('navigation').concat(performance.getEntriesByType('resource'));
-    return list.slice(-300).map(function (e) {
-      var r = { url: e.name, type: e.initiatorType || e.entryType, ms: Math.round(e.duration), start: Math.round(e.startTime) };
+    /// The hook put in at the start of a page.
+    static func hookAtStart(always: Bool) -> String { "(" + hook + ")(\(always), 'start');" }
+
+    /// The console, as `hook` heard it.
+    static let console = "var box = (" + hook + ")(true, 'now');\n" + #"""
+    var out = box.log.slice();
+    if (clear) box.log.length = 0;
+    return { since: box.since, messages: out };
+    """#
+
+    /// What the page asked for, as `hook` heard it, and what it loaded, as
+    /// its own timing records it.
+    static let network = "var box = (" + hook + ")(true, 'now');\n" + #"""
+    var seen = {};
+    var out = box.net.map(function (e) { seen[e.url] = true; return e; });
+    performance.getEntriesByType('navigation').concat(performance.getEntriesByType('resource')).forEach(function (e) {
+      if (seen[e.name] && (e.initiatorType === 'fetch' || e.initiatorType === 'xmlhttprequest')) return;
+      var r = { method: 'GET', url: e.name, type: e.initiatorType || e.entryType, ms: Math.round(e.duration), time: Math.round(performance.timeOrigin + e.startTime) };
       if (e.responseStatus) r.status = e.responseStatus;
       if (e.transferSize) r.bytes = e.transferSize;
-      return r;
+      out.push(r);
     });
+    out.sort(function (a, b) { return (a.time || 0) - (b.time || 0); });
+    if (clear) { box.net.length = 0; performance.clearResourceTimings(); }
+    return { since: box.since, requests: out.slice(-400) };
     """#
 
     /// Reading, finding, filling, scrolling and pointing, in Search's world.
     /// Refs are kept here, per element, for as long as the element lives.
+    /// Frames from the same site are read as part of the page; a frame from
+    /// another site is listed with where it is, for a screenshot and a click.
     static let page = #"""
     var S = window.__claude || (window.__claude = { byId: new Map(), ids: new WeakMap(), next: 1 });
+    if (S.byId.size > 5000) S.byId.forEach(function (w, id) { if (!w.deref()) S.byId.delete(id); });
     function refOf(el) {
       var id = S.ids.get(el);
       if (!id) { id = 'r' + (S.next++); S.ids.set(el, id); S.byId.set(id, new WeakRef(el)); }
@@ -630,12 +1050,55 @@ enum Agent {
       throw new Error('needs a ref or a selector');
     }
     function clean(s, n) { s = (s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+    function win(el) { return (el.ownerDocument && el.ownerDocument.defaultView) || window; }
+    function frameDoc(f) { try { var d = f.contentDocument; return d && d.documentElement ? d : null; } catch (e) { return null; } }
+    // Where an element of a frame from the same site is on the top page.
+    function box(el) {
+      var r = el.getBoundingClientRect(), x = 0, y = 0, w = win(el);
+      try {
+        while (w && w !== window && w.frameElement) {
+          var f = w.frameElement, fr = f.getBoundingClientRect();
+          x += fr.left + f.clientLeft; y += fr.top + f.clientTop;
+          w = win(f);
+        }
+      } catch (e) {}
+      return { left: r.left + x, top: r.top + y, right: r.right + x, bottom: r.bottom + y, width: r.width, height: r.height };
+    }
     function visible(el, r) {
       if (!r.width && !r.height) return false;
-      var st = getComputedStyle(el);
+      var st = win(el).getComputedStyle(el);
       return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
     }
-    var INPUT_ROLE = { checkbox: 'checkbox', radio: 'radio', range: 'slider', button: 'button', submit: 'button', reset: 'button', image: 'button', file: 'button', color: 'button' };
+    // What is under a point of the top page, through frames from the same site.
+    function hitAt(x, y) {
+      var h = document.elementFromPoint(x, y), ox = 0, oy = 0;
+      while (h && (h.tagName === 'IFRAME' || h.tagName === 'FRAME')) {
+        var d = frameDoc(h);
+        if (!d) break;
+        var r = h.getBoundingClientRect();
+        ox += r.left + h.clientLeft; oy += r.top + h.clientTop;
+        var inner = d.elementFromPoint(x - ox, y - oy);
+        if (!inner) break;
+        h = inner;
+      }
+      return h;
+    }
+    function deepActive() {
+      var a = document.activeElement;
+      while (a && (a.tagName === 'IFRAME' || a.tagName === 'FRAME')) { var d = frameDoc(a); if (!d) break; a = d.activeElement; }
+      return a;
+    }
+    function selectOf(el) { return el ? (el.tagName === 'SELECT' ? el : (el.closest && el.closest('select'))) : null; }
+    function draggableOf(el) {
+      for (var n = el; n && n.nodeType === 1; n = n.parentElement) {
+        var d = n.getAttribute('draggable');
+        if (d === 'true') return n;
+        if (d === 'false') return null;
+        if ((n.tagName === 'A' && n.hasAttribute('href')) || n.tagName === 'IMG') return n;
+      }
+      return null;
+    }
+    var INPUT_ROLE = { checkbox: 'checkbox', radio: 'radio', range: 'slider', button: 'button', submit: 'button', reset: 'button', image: 'button', file: 'file', color: 'button' };
     function role(el) {
       var r = el.getAttribute('role');
       if (r) return r.split(' ')[0];
@@ -647,24 +1110,28 @@ enum Agent {
       if (t === 'TEXTAREA') return 'textbox';
       if (/^H[1-6]$/.test(t)) return 'heading';
       if (t === 'IMG') return el.alt ? 'img' : null;
-      if (t === 'IFRAME') return 'iframe';
       if (t === 'DIALOG') return 'dialog';
       if (el.isContentEditable && (!el.parentElement || !el.parentElement.isContentEditable)) return 'textbox';
       if (el.hasAttribute('onclick') || (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1')) return 'clickable';
       return null;
     }
-    var ACTIVE = { link: 1, button: 1, textbox: 1, searchbox: 1, checkbox: 1, radio: 1, slider: 1, combobox: 1, clickable: 1, tab: 1, menuitem: 1, option: 1, switch: 1, menuitemcheckbox: 1, menuitemradio: 1, spinbutton: 1, treeitem: 1, listbox: 1 };
+    var ACTIVE = { link: 1, button: 1, textbox: 1, searchbox: 1, checkbox: 1, radio: 1, slider: 1, combobox: 1, clickable: 1, tab: 1, menuitem: 1, option: 1, switch: 1, menuitemcheckbox: 1, menuitemradio: 1, spinbutton: 1, treeitem: 1, listbox: 1, file: 1 };
     function name(el) {
       var l = el.getAttribute('aria-label');
       if (l) return clean(l, 100);
       var by = el.getAttribute('aria-labelledby');
-      if (by) { var t = by.split(' ').map(function (i) { var n = document.getElementById(i); return n ? n.innerText : ''; }).join(' '); if (t.trim()) return clean(t, 100); }
+      if (by) { var t = by.split(' ').map(function (i) { var n = el.ownerDocument.getElementById(i); return n ? n.innerText : ''; }).join(' '); if (t.trim()) return clean(t, 100); }
       if (el.labels && el.labels.length) return clean(Array.prototype.map.call(el.labels, function (x) { return x.innerText; }).join(' '), 100);
       if (el.tagName === 'IMG') return clean(el.alt, 100);
       if (el.tagName === 'INPUT' && /^(submit|button|reset)$/i.test(el.type)) return clean(el.value, 100);
       var text = clean(el.innerText || el.textContent, 100);
       if (text) return text;
-      return clean(el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (el.querySelector && el.querySelector('img[alt]') ? el.querySelector('img[alt]').alt : ''), 100);
+      var img = el.querySelector && el.querySelector('img[alt]');
+      return clean(el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (img ? img.alt : ''), 100);
+    }
+    function place(r) {
+      var inView = r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+      return inView ? ' @' + Math.round(r.left + r.width / 2) + ',' + Math.round(r.top + r.height / 2) : ' (offscreen)';
     }
     function line(el, r, rl) {
       var s = '[' + refOf(el) + '] ' + rl;
@@ -675,49 +1142,68 @@ enum Agent {
         var ty = el.type;
         if (ty === 'password') s += el.value ? ' value=•••' : '';
         else if (ty === 'checkbox' || ty === 'radio') s += el.checked ? ' checked' : '';
+        else if (ty === 'file') s += el.files && el.files.length ? ' files=' + Array.prototype.map.call(el.files, function (f) { return f.name; }).join(',') : '';
         else if (el.tagName === 'SELECT') s += ' value="' + clean(el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '', 60) + '"';
         else if (el.value && clean(el.value, 100) !== n) s += ' value="' + clean(el.value, 80) + '"';
         if (el.placeholder && n !== clean(el.placeholder, 100)) s += ' placeholder="' + clean(el.placeholder, 60) + '"';
-        if (ty && ty !== 'text' && el.tagName === 'INPUT' && ty !== 'checkbox' && ty !== 'radio') s += ' type=' + ty;
+        if (ty && el.tagName === 'INPUT' && ['text', 'checkbox', 'radio', 'file'].indexOf(ty) < 0) s += ' type=' + ty;
+        if (el.required) s += ' required';
+        if (el.validity && !el.validity.valid && (el.value || el.checked)) s += ' invalid';
       }
       if (el.getAttribute('aria-expanded')) s += ' expanded=' + el.getAttribute('aria-expanded');
       if (el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-current')) s += ' current';
+      if (el.getAttribute('aria-invalid') === 'true') s += ' invalid';
       if (el.disabled || el.getAttribute('aria-disabled') === 'true') s += ' disabled';
-      if (document.activeElement === el) s += ' focused';
+      if (el.ownerDocument.activeElement === el) s += ' focused';
       if (rl === 'link') { var h = el.getAttribute('href') || ''; if (h && h.indexOf('javascript:') !== 0) s += ' → ' + clean(h, 80); }
-      var inView = r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
-      s += inView ? ' @' + Math.round(r.left + r.width / 2) + ',' + Math.round(r.top + r.height / 2) : ' (offscreen)';
-      return s;
+      if (win(el) !== window) s += ' (in a frame)';
+      return s + place(r);
     }
+    // Every element under root, into shadow roots and frames from the same
+    // site; each() returning false skips what is under that element.
     function walk(root, each) {
       var stack = [root];
       while (stack.length) {
         var node = stack.pop();
-        var kids = node.shadowRoot ? node.shadowRoot.children : node.children;
-        if (node.nodeType === 1 && node !== root) { if (each(node) === false) continue; }
-        if (kids) for (var i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
-        if (node.shadowRoot && node.children) for (var j = node.children.length - 1; j >= 0; j--) stack.push(node.children[j]);
+        if (node !== root && each(node) === false) continue;
+        if (node.tagName === 'IFRAME' || node.tagName === 'FRAME') {
+          var d = frameDoc(node);
+          if (d) stack.push(d.documentElement);
+          continue;
+        }
+        var kids = node.children;
+        if (kids) for (var j = kids.length - 1; j >= 0; j--) stack.push(kids[j]);
+        if (node.shadowRoot) for (var i = node.shadowRoot.children.length - 1; i >= 0; i--) stack.push(node.shadowRoot.children[i]);
       }
     }
     function header() {
       return document.title + ' — ' + location.href + '\nviewport ' + innerWidth + '×' + innerHeight + ', scrolled ' + Math.round(scrollY) + ' of ' + Math.max(0, document.documentElement.scrollHeight - innerHeight);
     }
+    var SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, svg: 1, HEAD: 1 };
 
     var verb = args.verb;
     if (verb === 'a.read') {
       var all = args.filter === 'all';
       var max = args.max || (all ? 600 : 400);
       var root = args.ref ? byRef(args.ref) : document.documentElement;
-      var out = [], count = 0, frames = 0, cut = false;
+      var out = [], count = 0, cut = false;
       walk(root, function (el) {
         var t = el.tagName;
-        if (t === 'SCRIPT' || t === 'STYLE' || t === 'NOSCRIPT' || t === 'TEMPLATE' || t === 'SVG') return false;
+        if (SKIP[t]) return false;
         if (el.getAttribute('aria-hidden') === 'true') return false;
+        if (t === 'IFRAME' || t === 'FRAME') {
+          var fr = box(el);
+          if (!visible(el, fr)) return false;
+          if (frameDoc(el)) return;
+          if (count >= max) { cut = true; return false; }
+          out.push('[' + refOf(el) + '] frame from another site ' + clean(el.src, 80) + ' — not readable here; a screenshot shows it and clicks at its points reach it' + place(fr));
+          count++;
+          return false;
+        }
         var rl = role(el);
         if (!rl) return;
-        if (rl === 'iframe') { frames++; return false; }
-        if (!all && !ACTIVE[rl] && rl !== 'heading' && rl !== 'dialog') return;
-        var r = el.getBoundingClientRect();
+        if (!all && !ACTIVE[rl] && rl !== 'heading' && rl !== 'dialog' && rl !== 'alert') return;
+        var r = box(el);
         if (!visible(el, r)) return false;
         if (count >= max) { cut = true; return false; }
         out.push(line(el, r, rl));
@@ -726,7 +1212,6 @@ enum Agent {
       });
       var text = header() + '\n' + out.join('\n');
       if (cut) text += '\n… more than ' + max + ' — read a part with ref, or use find';
-      if (frames) text += '\n(' + frames + ' frame' + (frames > 1 ? 's' : '') + ' not read)';
       return { page: text, count: count };
     }
     if (verb === 'a.find') {
@@ -735,7 +1220,7 @@ enum Agent {
       var hits = [];
       walk(document.documentElement, function (el) {
         var t = el.tagName;
-        if (t === 'SCRIPT' || t === 'STYLE' || t === 'NOSCRIPT' || t === 'TEMPLATE') return false;
+        if (SKIP[t]) return false;
         var rl = role(el);
         var own = rl ? (name(el) + ' ' + (el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('title') || '') + ' ' + rl + ' ' + (el.id || '') + ' ' + (el.getAttribute('name') || '')) : '';
         if (!own) {
@@ -747,9 +1232,9 @@ enum Agent {
         var low = own.toLowerCase();
         var score = q.reduce(function (s, w) { return s + (low.indexOf(w) >= 0 ? 1 : 0); }, 0);
         if (!score) return;
-        var r = el.getBoundingClientRect();
+        var r = box(el);
         if (!visible(el, r)) return;
-        hits.push({ score: score + (ACTIVE[rl] ? 0.5 : 0), line: rl === 'text' ? '[' + refOf(el) + '] text "' + clean(own, 120) + '"' + (r.bottom > 0 && r.top < innerHeight ? ' @' + Math.round(r.left + r.width / 2) + ',' + Math.round(r.top + r.height / 2) : ' (offscreen)') : line(el, r, rl) });
+        hits.push({ score: score + (ACTIVE[rl] ? 0.5 : 0), line: rl === 'text' ? '[' + refOf(el) + '] text "' + clean(own, 120) + '"' + place(r) : line(el, r, rl) });
       });
       hits.sort(function (a, b) { return b.score - a.score; });
       return { found: hits.slice(0, args.max || 20).map(function (h) { return h.line; }), total: hits.length };
@@ -760,18 +1245,54 @@ enum Agent {
       var limit = args.max || 60000;
       return { title: document.title, url: location.href, text: txt.length > limit ? txt.slice(0, limit) : txt, truncated: txt.length > limit };
     }
-    if (verb === 'a.point' || verb === 'a.focus') {
-      var el = target();
-      el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-      if (verb === 'a.focus') { el.focus(); return { ok: true }; }
-      var r = el.getBoundingClientRect();
-      if (!r.width && !r.height) throw new Error('ref ' + (args.ref || args.selector) + ' has no size — hidden?');
-      var x = r.left + r.width / 2, y = r.top + r.height / 2;
-      var hit = document.elementFromPoint(x, y), note = null;
-      if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
+    if (verb === 'a.active') {
+      var a = deepActive();
+      var sel = selectOf(a);
+      return { select: !!sel, ref: sel ? refOf(sel) : (a && a !== document.body ? refOf(a) : null) };
+    }
+    if (verb === 'a.point' || verb === 'a.focus' || verb === 'a.at' || verb === 'a.rect') {
+      var el = null, x, y;
+      if (verb === 'a.at') {
+        x = Number(args.x); y = Number(args.y);
+        if (!(x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight)) throw new Error('(' + x + ', ' + y + ') is outside the page\'s ' + innerWidth + '×' + innerHeight + ' — scroll first');
+      } else {
+        el = target();
+        el.scrollIntoView({ block: verb === 'a.rect' ? 'nearest' : 'center', inline: 'nearest', behavior: 'instant' });
+        if (verb === 'a.focus') { el.focus(); return { ok: true }; }
+        var r = box(el);
+        if (!r.width && !r.height) throw new Error((args.ref || args.selector) + ' has no size — hidden?');
+        if (verb === 'a.rect') return { x: r.left, y: r.top, width: r.width, height: r.height };
+        x = r.left + r.width / 2; y = r.top + r.height / 2;
+      }
+      var hit = hitAt(x, y), note = null;
+      if (el && hit && hit !== el && !el.contains(hit) && !hit.contains(el)) {
         note = 'covered by ' + hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') + ' "' + clean(hit.innerText, 40) + '" — clicked there anyway';
       }
-      return { x: x, y: y, note: note };
+      var at = el || hit;
+      var sel = selectOf(at);
+      var drag = at ? draggableOf(at) : null;
+      var out = { x: x, y: y, note: note, draggable: !!drag, tag: at ? at.tagName.toLowerCase() : null };
+      if (sel) { out.select = Array.prototype.map.call(sel.options, function (o) { return clean(o.text, 40); }).slice(0, 40); out.selectRef = refOf(sel); }
+      return out;
+    }
+    if (verb === 'a.dnd') {
+      // A drag the HTML way, told to the page: dragstart on what is dragged,
+      // dragenter, dragover and drop on what is under the end, dragend.
+      var from = hitAt(Number(args.x), Number(args.y)), onto = hitAt(Number(args.toX), Number(args.toY));
+      if (!from || !onto) throw new Error('nothing there to drag or drop on');
+      var source = draggableOf(from) || from;
+      var dt = new DataTransfer();
+      function fire(el, type, px, py) {
+        var ev = new DragEvent(type, { bubbles: true, cancelable: true, clientX: px, clientY: py, dataTransfer: dt });
+        return el.dispatchEvent(ev);
+      }
+      fire(source, 'dragstart', args.x, args.y);
+      fire(onto, 'dragenter', args.toX, args.toY);
+      var over = fire(onto, 'dragover', args.toX, args.toY);
+      var dropped = !over;
+      if (dropped) fire(onto, 'drop', args.toX, args.toY);
+      fire(source, 'dragend', args.toX, args.toY);
+      return { ok: true, dropped: dropped, note: dropped ? null : 'the target did not take the drop (no dragover handler called preventDefault)' };
     }
     if (verb === 'a.fill') {
       var el = target();
@@ -779,19 +1300,26 @@ enum Agent {
       el.focus();
       var v = args.value;
       if (el.tagName === 'SELECT') {
-        var opt = Array.prototype.find.call(el.options, function (o) { return o.value === String(v) || o.text.trim() === String(v); });
-        if (!opt) throw new Error('no option ' + v + ' — there are: ' + Array.prototype.map.call(el.options, function (o) { return o.text.trim(); }).slice(0, 30).join(' | '));
-        el.value = opt.value;
+        var want = [].concat(v).map(String);
+        var found = 0;
+        Array.prototype.forEach.call(el.options, function (o) {
+          var hit = want.indexOf(o.value) >= 0 || want.indexOf(o.text.trim()) >= 0;
+          if (el.multiple) o.selected = hit; else if (hit && !found) el.value = o.value;
+          if (hit) found++;
+        });
+        if (!found) throw new Error('no option ' + v + ' — there are: ' + Array.prototype.map.call(el.options, function (o) { return o.text.trim(); }).slice(0, 30).join(' | '));
       } else if (el.type === 'checkbox' || el.type === 'radio') {
-        var want = v === true || v === 'true' || v === 'on' || v === 1;
-        if (el.checked !== want) el.click();
+        var on = v === true || v === 'true' || v === 'on' || v === 1;
+        if (el.checked !== on) el.click();
         return { ok: true, checked: el.checked };
+      } else if (el.type === 'file') {
+        throw new Error('a file field: use upload');
       } else if (el.isContentEditable) {
         el.textContent = String(v);
         el.dispatchEvent(new InputEvent('input', { bubbles: true, data: String(v), inputType: 'insertText' }));
         return { ok: true };
       } else {
-        var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        var proto = el.tagName === 'TEXTAREA' ? win(el).HTMLTextAreaElement.prototype : win(el).HTMLInputElement.prototype;
         var d = Object.getOwnPropertyDescriptor(proto, 'value');
         if (d && d.set) d.set.call(el, String(v)); else el.value = String(v);
         el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -799,22 +1327,46 @@ enum Agent {
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return { ok: true };
     }
+    if (verb === 'a.upload') {
+      // Files into a file field, or dropped on a drop zone, as the page would
+      // get them from the chooser or from a drag.
+      var el = target();
+      var input = el.tagName === 'INPUT' && el.type === 'file' ? el : (el.querySelector && el.querySelector('input[type=file]'));
+      var dt = new DataTransfer();
+      (args.files || []).forEach(function (f) {
+        var bin = atob(f.data), bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        dt.items.add(new File([bytes], f.name, { type: f.type || '', lastModified: Date.now() }));
+      });
+      if (!dt.files.length) throw new Error('upload needs files');
+      if (input) {
+        input.files = dt.files;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return { ok: true, files: input.files.length, into: 'field' };
+      }
+      var r = box(el), px = r.left + r.width / 2, py = r.top + r.height / 2;
+      ['dragenter', 'dragover', 'drop'].forEach(function (type) {
+        el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: px, clientY: py, dataTransfer: dt }));
+      });
+      return { ok: true, files: dt.files.length, into: 'drop' };
+    }
     if (verb === 'a.scroll') {
       var dx = Number(args.dx || 0), dy = Number(args.dy || 0);
-      if (args.ref || args.selector) {
-        var el = target();
-        if (!dx && !dy) { el.scrollIntoView({ block: 'center', behavior: 'instant' }); return { ok: true, scrolled: 'into view' }; }
-        var box = el;
-        while (box && box !== document.body && !(box.scrollHeight > box.clientHeight + 1 || box.scrollWidth > box.clientWidth + 1)) box = box.parentElement;
-        (box && box !== document.body ? box : window).scrollBy({ left: dx, top: dy, behavior: 'instant' });
-      } else if (args.x != null && args.y != null) {
-        var box = document.elementFromPoint(Number(args.x), Number(args.y));
-        while (box && box !== document.body && !(box.scrollHeight > box.clientHeight + 1 || box.scrollWidth > box.clientWidth + 1)) box = box.parentElement;
-        (box && box !== document.body && box !== document.documentElement ? box : window).scrollBy({ left: dx, top: dy, behavior: 'instant' });
-      } else {
-        window.scrollBy({ left: dx, top: dy, behavior: 'instant' });
+      function scroller(n) {
+        while (n && n !== document.body && n !== document.documentElement) {
+          var st = win(n).getComputedStyle(n);
+          if ((n.scrollHeight > n.clientHeight + 1 && /(auto|scroll|overlay)/.test(st.overflowY)) || (n.scrollWidth > n.clientWidth + 1 && /(auto|scroll|overlay)/.test(st.overflowX))) return n;
+          n = n.parentElement || (win(n).frameElement);
+        }
+        return null;
       }
-      return { ok: true, scrollY: Math.round(scrollY), height: document.documentElement.scrollHeight };
+      var at = args.ref || args.selector ? target() : (args.x != null && args.y != null ? hitAt(Number(args.x), Number(args.y)) : null);
+      if (at && !dx && !dy) { at.scrollIntoView({ block: 'center', behavior: 'instant' }); return { ok: true, scrolled: 'into view' }; }
+      var s = at ? scroller(at) : null;
+      (s || (at ? win(at) : window)).scrollBy({ left: dx, top: dy, behavior: 'instant' });
+      return s ? { ok: true, scrolled: 'inside ' + s.tagName.toLowerCase(), top: Math.round(s.scrollTop), of: s.scrollHeight - s.clientHeight }
+               : { ok: true, scrollY: Math.round(scrollY), of: Math.max(0, document.documentElement.scrollHeight - innerHeight) };
     }
     throw new Error('unknown verb ' + verb);
     """#
