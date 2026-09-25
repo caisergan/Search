@@ -182,10 +182,15 @@ final class StageView: NSView {
         // ours: a page may be somewhere else on purpose. Except the Web
         // Inspector docked beside the page: WebKit puts it here, next to the
         // web view, and shrinks the page to make room. Taken out on the next
-        // resize, it left the page shrunk beside nothing (#91).
+        // resize, it left the page shrunk beside nothing (#91). A page let go
+        // of waits backstage, still laid out, rather than in no window.
         let docked = inspecting
+        // The browser's own stage sets the size every waiting page is laid
+        // out at; a little window's is its own.
+        if window != nil, window === Links.window { Backstage.match(bounds.size) }
         for view in subviews where view !== wanted && !(docked && Self.isInspector(view)) {
             view.removeFromSuperview()
+            if let page = view as? PageView { Backstage.park(page) }
         }
 
         guard let wanted, window != nil else { return }
