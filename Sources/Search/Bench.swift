@@ -268,7 +268,8 @@ final class Bench {
             answered = true
             given(reply)
         }
-        let patience = (request["do"] as? String) == "wait" ? (request["seconds"] as? Double ?? 30) + 5 : 25
+        let patience = (request["do"] as? String) == "wait" ? (request["seconds"] as? Double ?? 30) + 5
+            : Bench.agentPatience(request["do"] as? String ?? "", request) ?? 25
         DispatchQueue.main.asyncAfter(deadline: .now() + patience) { answer(["error": "no answer within \(Int(patience)) s"]) }
         guard let browser else {
             answer(["error": "no browser"])
@@ -1339,6 +1340,9 @@ final class Bench {
             }
             extensionCommand(verb, request, browser: browser, answer)
 
+        case _ where verb.hasPrefix("a."):
+            agent(verb, request, browser: browser, answer)
+
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
                 "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "pin", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "fold", "consent", "site", "little", "ui",
@@ -1463,11 +1467,11 @@ final class Bench {
         return browser.tabs.first { (Store.testing || $0.bench) && $0.id.uuidString.lowercased().hasPrefix(ref) }
     }
 
-    private func missing(_ request: [String: Any]) -> [String: Any] {
+    func missing(_ request: [String: Any]) -> [String: Any] {
         ["error": "no tab “\(request["id"] as? String ?? "")” — see tabs"]
     }
 
-    private func describe(_ tab: Tab) -> [String: Any] {
+    func describe(_ tab: Tab) -> [String: Any] {
         [
             "id": Bench.short(tab),
             "url": tab.address?.absoluteString ?? "",
@@ -1513,7 +1517,7 @@ final class Bench {
     }
 
     /// Once the page has stopped loading, or the time is up.
-    private func wait(for tab: Tab, until limit: Date, _ answer: @escaping ([String: Any]) -> Void) {
+    func wait(for tab: Tab, until limit: Date, _ answer: @escaping ([String: Any]) -> Void) {
         if !tab.loading, tab.address != nil, tab.failure == nil || true {
             // A beat for the document's own scripts to settle.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -1542,8 +1546,8 @@ final class Bench {
     /// A page nobody is looking at has to be somewhere to be laid out at all.
     /// The stage takes it back the moment you pick its tab, and it comes
     /// here again when the bench next needs it.
-    private func house(_ tab: Tab) {
-        guard tab.bench, tab.web.window == nil else { return }
+    func house(_ tab: Tab, any: Bool = false) {
+        guard tab.bench || any, tab.web.window == nil else { return }
         let window = room ?? makeRoom()
         tab.web.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         tab.web.autoresizingMask = [.width, .height]
@@ -1599,7 +1603,7 @@ final class Bench {
     // MARK: - page-side helpers
 
     /// A JavaScript value the way JSON can carry it.
-    private static func plain(_ value: Any?) -> Any {
+    static func plain(_ value: Any?) -> Any {
         guard let value else { return NSNull() }
         if JSONSerialization.isValidJSONObject(["v": value]) { return value }
         return String(describing: value)

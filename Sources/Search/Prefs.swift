@@ -169,6 +169,11 @@ final class Preferences: ObservableObject {
             bench ? Bench.Consent.grant() : Bench.Consent.revoke()
         }
     }
+    /// Claude, over the bench, may read and use your own tabs as well as the
+    /// ones it opened itself (see Agent.swift). Off unless asked for.
+    @Published var claudeTabs: Bool {
+        didSet { store.set(claudeTabs, forKey: "claude.tabs") }
+    }
     /// The setting said on at launch with no mark from the switch behind it,
     /// and was put back to off.
     private(set) var benchRefused = false
@@ -406,6 +411,7 @@ final class Preferences: ObservableObject {
             benchRefused = true
             store.set(false, forKey: "bench")
         }
+        claudeTabs = store.bool(forKey: "claude.tabs")
         let chosen = store.string(forKey: "look").flatMap(Look.init) ?? .system
         look = chosen
         // Before the first window, and not deferred: the window that is about
