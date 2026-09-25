@@ -156,6 +156,24 @@ enum ZoomSpot: String, CaseIterable, Identifiable {
     }
 }
 
+/// Where ⌘T puts the tab it makes: at the end of the row unless asked for
+/// somewhere else. Never among the pinned ones — the top is the first place
+/// after them.
+enum NewTabSpot: String, CaseIterable, Identifiable {
+    case top, bottom, under, over
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .top: return "At the top"
+        case .bottom: return "At the bottom"
+        case .under: return "Under the current tab"
+        case .over: return "Over the current tab"
+        }
+    }
+}
+
 @MainActor
 final class Preferences: ObservableObject {
     private let store = Store.settings
@@ -222,6 +240,10 @@ final class Preferences: ObservableObject {
     /// empty tab; the tab is made when you go somewhere. Off unless asked for.
     @Published var newTabOver: Bool {
         didSet { store.set(newTabOver, forKey: "newtab.over") }
+    }
+    /// The bottom, where it always went, unless changed.
+    @Published var newTabSpot: NewTabSpot {
+        didSet { store.set(newTabSpot.rawValue, forKey: "newtab.spot") }
     }
     /// How wide the column is. Pulled by its edge, and remembered.
     @Published var sideWidth: CGFloat {
@@ -425,6 +447,7 @@ final class Preferences: ObservableObject {
         sideReveal = store.string(forKey: "sidebar.reveal").flatMap(Reveal.init) ?? .human
         newTabInFoot = store.bool(forKey: "sidebar.newtab.foot")
         newTabOver = store.bool(forKey: "newtab.over")
+        newTabSpot = store.string(forKey: "newtab.spot").flatMap(NewTabSpot.init) ?? .bottom
         let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)
         sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
