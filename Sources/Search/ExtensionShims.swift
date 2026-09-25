@@ -221,6 +221,12 @@ enum ExtensionShims {
       // (There, Search's passkey patch holds navigator.credentials.)
       const ours = (() => { try { return !!(chrome && chrome.runtime && chrome.runtime.id); } catch (e) { return false; } })();
       if (!ours || root.__searchShim) return;
+      // WebKit has no `Symbol.dispose` yet. tslib's helper for `using` throws
+      // "Symbol.dispose is not defined" without it, and Bitwarden's login
+      // stopped there (25 Sep 2026). Defined before the extension's own code
+      // runs, and only where missing, so WebKit's own wins once it comes.
+      if (!Symbol.dispose) Object.defineProperty(Symbol, "dispose", { value: Symbol("Symbol.dispose") });
+      if (!Symbol.asyncDispose) Object.defineProperty(Symbol, "asyncDispose", { value: Symbol("Symbol.asyncDispose") });
       // WebKit reverted `requestIdleCallback` after a page-load regression
       // (bug 287681), leaving Proton Pass's form detection without it.
       const nativeIdle = typeof root.requestIdleCallback === "function"
