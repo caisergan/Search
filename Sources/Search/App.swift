@@ -84,6 +84,8 @@ struct SearchApp: App {
                 Divider()
                 Button("Reload Page") { browser.reload() }
                     .keyboardShortcut(shortcuts.menu(.reload))
+                Button("Empty Cache and Reload") { browser.reloadEmptied() }
+                    .keyboardShortcut(shortcuts.menu(.hardReload))
                 Button("Reading Mode") { browser.toggleReader() }
                     .keyboardShortcut(shortcuts.menu(.readingMode))
                 Button("Float Video") { browser.toggleFloat() }
@@ -1105,6 +1107,7 @@ struct ContentView: View {
                 browser.summon()
             }
         case .reload: browser.reload()
+        case .hardReload: browser.reloadEmptied()
         case .readingMode: browser.toggleReader()
         case .floatVideo: browser.toggleFloat()
         case .stopSound: browser.pauseMedia()
