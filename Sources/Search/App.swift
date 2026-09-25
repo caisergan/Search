@@ -84,6 +84,8 @@ struct SearchApp: App {
                 Divider()
                 Button("Reload Page") { browser.reload() }
                     .keyboardShortcut(shortcuts.menu(.reload))
+                Button("Empty Cache and Reload") { browser.reloadEmptied() }
+                    .keyboardShortcut(shortcuts.menu(.hardReload))
                 Button("Reading Mode") { browser.toggleReader() }
                     .keyboardShortcut(shortcuts.menu(.readingMode))
                 Button("Float Video") { browser.toggleFloat() }
@@ -152,6 +154,28 @@ struct SearchApp: App {
                     .disabled(browser.active?.isBlank ?? true)
                 Button("Paste and Go") { browser.pasteAndGo() }
                     .keyboardShortcut(shortcuts.menu(.pasteAndGo))
+                // The browsers Import.swift reads, both ways (see Transfer.swift).
+                Menu("Transfer Tabs") {
+                    Menu("Bring Tabs from") {
+                        ForEach(Chromium.sessions) { source in
+                            Button(source.name) { browser.bringTabs(from: source) }
+                        }
+                    }
+                    .disabled(Chromium.sessions.isEmpty)
+                    Divider()
+                    Menu("Send This Tab to") {
+                        ForEach(Chromium.apps, id: \.source.id) { app in
+                            Button(app.source.name) { browser.sendTabs(to: app.app, named: app.source.name, all: false) }
+                        }
+                    }
+                    .disabled(Chromium.apps.isEmpty || browser.active?.isBlank != false || browser.active?.shy == true)
+                    Menu("Send All Tabs to") {
+                        ForEach(Chromium.apps, id: \.source.id) { app in
+                            Button(app.source.name) { browser.sendTabs(to: app.app, named: app.source.name, all: true) }
+                        }
+                    }
+                    .disabled(Chromium.apps.isEmpty)
+                }
                 Divider()
                 Button("Close Other Tabs") { if let tab = browser.active { browser.closeOthers(but: tab) } }
                     .disabled(browser.tabs.count < 2)
@@ -1083,6 +1107,7 @@ struct ContentView: View {
                 browser.summon()
             }
         case .reload: browser.reload()
+        case .hardReload: browser.reloadEmptied()
         case .readingMode: browser.toggleReader()
         case .floatVideo: browser.toggleFloat()
         case .stopSound: browser.pauseMedia()

@@ -356,6 +356,17 @@ struct SettingsPanel: View {
                 Segmented(options: Glyph.allCases.map { ($0, $0.title) }, selection: $prefs.glyph)
             }
             Rule()
+            Line("Open new tabs", "Where ⌘T puts a new tab in the row. Pinned tabs stay first") {
+                Picker("", selection: $prefs.newTabSpot) {
+                    ForEach(NewTabSpot.allCases) { spot in
+                        Text(spot.title).tag(spot)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            Rule()
             Line("Open new tabs over the page", "⌘T brings the address field up over the page you're on. The tab opens when you go somewhere; esc leaves you where you were.") {
                 Switch(on: $prefs.newTabOver)
             }

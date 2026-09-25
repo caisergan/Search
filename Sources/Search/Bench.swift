@@ -778,6 +778,32 @@ final class Bench {
                     "firstFolder": folder?.items.prefix(4).map(\.title) ?? [],
                     "active": browser.active?.address?.absoluteString ?? ""])
 
+        case "transfer":
+            // Tabs › Transfer Tabs, as the menu bar has it: each submenu and
+            // what it offers, and — "bring": NAME — that browser's item
+            // picked as a click would, then the row as it came out. Only on
+            // a SEARCH_PROBE run: it adds tabs.
+            guard Store.testing else { answer(["error": "transfer only works on a --test run — it would add tabs to your row"]); return }
+            guard let tabsMenu = NSApp.mainMenu?.items.first(where: { $0.title == "Tabs" })?.submenu,
+                  let transfer = tabsMenu.items.first(where: { $0.title == "Transfer Tabs" })?.submenu
+            else { answer(["error": "no Transfer Tabs menu"]); return }
+            var offered: [String: Any] = [:]
+            for item in transfer.items where item.submenu != nil {
+                offered[item.title] = ["enabled": item.isEnabled, "items": item.submenu?.items.map(\.title) ?? []]
+            }
+            if let name = request["bring"] as? String {
+                guard let bring = transfer.items.first(where: { $0.title == "Bring Tabs from" })?.submenu,
+                      let index = bring.items.firstIndex(where: { $0.title == name })
+                else { answer(["error": "no \(name) under Bring Tabs from", "menu": offered]); return }
+                bring.performActionForItem(at: index)
+            }
+            DispatchQueue.main.async {
+                answer(["menu": offered, "said": browser.announcement ?? "",
+                        "active": browser.active?.address?.absoluteString ?? "",
+                        "row": browser.tabs.map { ["url": $0.address?.absoluteString ?? "", "title": $0.title,
+                                                   "place": "\($0.place)", "asleep": $0.asleep] }])
+            }
+
         case "keyeq":
             // A ⌘ shortcut pressed while the page has the keyboard, put
             // through the app's key handling and then to the page's view, as

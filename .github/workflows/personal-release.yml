@@ -1,0 +1,112 @@
+# Builds the personal DMG and publishes it as a GitHub release whenever the
+# version moves on the `personal` branch — a bump of VERSION there, or a merge
+# of an upstream release that bumps it.
+#
+# Each build is tagged v<VERSION>-personal.<N>, N counting up from 1 for every
+# build of the same version, so a manual re-run (Actions › Personal release ›
+# Run workflow) makes personal.2, personal.3 and so on. Untick "publish" there
+# to build the DMG as a workflow artifact only, with no tag and no release.
+#
+# No Developer ID lives here, so the app is ad-hoc signed and not notarised,
+# the same as the builds made by hand.
+name: Personal release
+
+on:
+  push:
+    branches: [personal]
+    paths: [VERSION]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Tag and publish a GitHub release (untick to only build)
+        type: boolean
+        default: true
+
+# One release at a time, so two pushes can't both claim the same build number.
+concurrency:
+  group: personal-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out the tag
+        id: tag
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          LAST="$(git tag -l "v$VERSION-personal.*" | sed "s/^v$VERSION-personal\.//" | sort -n | tail -1)"
+          BUILD=$(( ${LAST:-0} + 1 ))
+          PREVIOUS="$(git tag -l 'v*-personal.*' --sort=-creatordate | head -1)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION-personal.$BUILD" >> "$GITHUB_OUTPUT"
+          echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
+          echo "Building v$VERSION-personal.$BUILD (previous: ${PREVIOUS:-none})"
+
+      - name: Build
+        run: ./build.sh release dmg
+
+      - name: Name the files
+        id: files
+        run: |
+          DMG="Search-${{ steps.tag.outputs.version }}-personal.${{ steps.tag.outputs.build }}.dmg"
+          mkdir -p dist
+          cp build/Search.dmg "dist/$DMG"
+          (cd dist && shasum -a 256 "$DMG" > "$DMG.sha256")
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+          cat "dist/$DMG.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.tag.outputs.tag }}
+          path: dist/
+          retention-days: 14
+
+      - name: Publish the release
+        if: github.event_name == 'push' || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          BUILD: ${{ steps.tag.outputs.build }}
+          PREVIOUS: ${{ steps.tag.outputs.previous }}
+          DMG: ${{ steps.files.outputs.dmg }}
+        run: |
+          # What's new is the first paragraph of NOTES.md, as in the appcast.
+          NEWS="$(awk 'NF { printf "%s%s", (n++ ? " " : ""), $0; next } n { exit }' NOTES.md)"
+          CHANGES=""
+          [ -n "$PREVIOUS" ] && CHANGES="**Changes since $PREVIOUS:** https://github.com/$GITHUB_REPOSITORY/compare/$PREVIOUS...$TAG"
+          cat > notes.md <<NOTES
+          Personal build of Search $VERSION from the \`personal\` branch (\`${GITHUB_SHA::7}\`), built by GitHub Actions.
+
+          $NEWS
+
+          $CHANGES
+
+          **Apple Silicon only, macOS 14 or later.**
+
+          ### Installing
+
+          This build is ad-hoc signed and not notarized by Apple, so macOS blocks it the first time:
+
+          1. Open the DMG and drag **Search** to **Applications**.
+          2. Open Search once. When macOS says it can't be verified, click **Done**.
+          3. Go to **System Settings › Privacy & Security**, scroll down, and click **Open Anyway** next to Search.
+
+          Or, in Terminal: \`xattr -dr com.apple.quarantine /Applications/Search.app\`
+
+          Automatic updates don't work for this build. Install newer builds by hand.
+          NOTES
+          gh release create "$TAG" "dist/$DMG" "dist/$DMG.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "Search $VERSION (personal build $BUILD)" \
+            --notes-file notes.md

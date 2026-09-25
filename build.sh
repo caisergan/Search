@@ -3,7 +3,9 @@
 # asked, the disk image people install it from and the ZIP the updater
 # fetches.
 #
-#   ./build.sh                 debug-free release build, ad-hoc signed: runs here
+#   ./build.sh                 debug-free release build, signed with an Apple
+#                                Development certificate if there is one,
+#                                ad-hoc if not: runs here
 #   ./build.sh release dmg     + build/Search.dmg, build/Search.zip and
 #                                build/appcast.json, signed with Developer ID
 #                                if there is one in the keychain
@@ -142,6 +144,17 @@ PLIST
 # which the updater refuses to swap anything in under.
 IDENTITY="${SEARCH_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
   | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"' || true)}"
+# Without one, an Apple Development certificate — the one Xcode makes for any
+# Apple ID — before ad-hoc, for a build that stays on this Mac. The keychain
+# ties "Always Allow" on each saved password to the app's signature, and an
+# ad-hoc signature is a new app at every build: each one asked again, item by
+# item, at every sign-in. Signed by the same certificate, a new build is the
+# same app. It can't ship (Gatekeeper wants Developer ID), and the updater
+# never swaps anything in under it: an update is from another team.
+if [ -z "$IDENTITY" ] && [ "$STEP" != "ship" ] && [ "$STEP" != "dmg" ]; then
+  IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep -o '"Apple Development: [^"]*"' | head -1 | tr -d '"' || true)"
+fi
 # Passkeys need an entitlement Apple grants to browsers on request, and a
 # Developer ID provisioning profile that carries it. With the profile next to
 # this script, both go in; without it, the app is signed as before, because

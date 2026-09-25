@@ -1180,7 +1180,7 @@ final class Browser: NSObject, ObservableObject {
         }
         // An extension's new tab page, if one asked and you said yes.
         if #available(macOS 15.4, *), let page = Extensions.shared.newTabPage {
-            open(page, foreground: true)
+            open(page, foreground: true, at: newTabSlot())
             summoning = false
             rememberSession()
             return
@@ -1203,9 +1203,7 @@ final class Browser: NSObject, ObservableObject {
         // never gone to cleared away — a row of identical empty tabs is what
         // pressing ⌘T twice, or holding it, used to leave.
         if let blank = tabs.last(where: { $0.isBlank && !$0.bench && !$0.shy }) {
-            if let end = tabs.indices.last, tabs.firstIndex(where: { $0.id == blank.id }) != end {
-                move(blank, to: end)
-            }
+            bring(blank, to: newTabSlot())
             if activeID != blank.id { leaving() }
             activeID = blank.id
             summoning = false
@@ -1216,7 +1214,7 @@ final class Browser: NSObject, ObservableObject {
             return
         }
         let tab = Tab()
-        adopt(tab)
+        adopt(tab, at: newTabSlot())
         leaving()
         activeID = tab.id
         summoning = false
@@ -1416,13 +1414,14 @@ final class Browser: NSObject, ObservableObject {
     /// `from`: the tab it was opened out of. A private one's opens private,
     /// in the same store, as a link that asks for a new window already does.
     @discardableResult
-    func open(_ url: URL, foreground: Bool, atEnd: Bool = false, from source: Tab? = nil) -> Tab {
+    func open(_ url: URL, foreground: Bool, atEnd: Bool = false, at index: Int? = nil, from source: Tab? = nil) -> Tab {
         // An extension's own page is served only to a view built from that
         // extension's configuration.
         let url = Browser.page(url)
         let tab = tab(going: url, from: source)
-        tabs.insert(tab, at: atEnd ? tabs.count : slot(under: (source ?? active)?.id))
-        tab.parent = atEnd ? nil : source?.id
+        let placed = atEnd || index != nil
+        tabs.insert(tab, at: index.map { min(max(0, $0), tabs.count) } ?? (atEnd ? tabs.count : slot(under: (source ?? active)?.id)))
+        tab.parent = placed ? nil : source?.id
         tab.go(to: url)
         if foreground {
             leaving()
@@ -1612,9 +1611,7 @@ final class Browser: NSObject, ObservableObject {
         // Never two empty private tabs, as ⌘T never makes two empty ones:
         // one already open comes to the end of the row and is the one opened.
         if let blank = tabs.last(where: { $0.isBlank && $0.shy && !$0.bench }) {
-            if let end = tabs.indices.last, tabs.firstIndex(where: { $0.id == blank.id }) != end {
-                move(blank, to: end)
-            }
+            bring(blank, to: newTabSlot())
             if activeID != blank.id { leaving() }
             activeID = blank.id
             summoning = false
@@ -1624,7 +1621,7 @@ final class Browser: NSObject, ObservableObject {
             return
         }
         let tab = Tab(shy: true)
-        adopt(tab)
+        adopt(tab, at: newTabSlot())
         leaving()
         activeID = tab.id
         summoning = false
@@ -1638,6 +1635,67 @@ final class Browser: NSObject, ObservableObject {
     func duplicate() {
         guard let url = active?.address else { return }
         open(url, foreground: true, from: active)
+    }
+
+    // MARK: - transfer
+
+    /// Tabs › Transfer Tabs › Bring Tabs from. What the other browser has
+    /// open, asleep at the end of the row as the last session comes back:
+    /// its pinned tabs among the pinned ones here, and a page already open
+    /// here not opened twice. The first one brought is the one you land on.
+    func bringTabs(from source: Chromium.Source) {
+        var seen = Set(tabs.compactMap { $0.address?.absoluteString })
+        let found = Chromium.openTabs(in: source).filter { seen.insert($0.url.absoluteString).inserted }
+        guard !found.isEmpty else {
+            announce("No open tabs in \(source.name) to bring")
+            return
+        }
+        var first: Tab?
+        for page in found {
+            let tab = Tab()
+            prepare(tab)
+            tab.restore(url: page.url, title: page.title)
+            tab.kept = page.pinned
+            tabs.insert(tab, at: page.pinned ? block(.kept).upperBound : tabs.count)
+            first = first ?? tab
+        }
+        if let first {
+            leaving()
+            activeID = first.id
+            editing = false
+            typed = ""
+            first.wake()
+        }
+        rememberSession()
+        announce(found.count == 1 ? "1 tab from \(source.name)" : "\(found.count) tabs from \(source.name)")
+
+        let urls = found.map(\.url)
+        DispatchQueue.global(qos: .utility).async {
+            let icons = Chromium.icons(in: source, for: urls)
+            Task { @MainActor in
+                for (host, data) in icons { await Favicons.shared.adopt(data, for: host) }
+                self.objectWillChange.send()
+            }
+        }
+    }
+
+    /// Tabs › Transfer Tabs › Send … to. The pages, opened in the other
+    /// browser as new tabs; they stay open here too. A private tab is never
+    /// sent: over there it would be kept in the history it was kept out of.
+    func sendTabs(to app: URL, named name: String, all: Bool) {
+        let going = (all ? tabs : active.map { [$0] } ?? []).filter { !$0.shy }
+        let urls = going.compactMap(\.address).filter { $0.scheme == "http" || $0.scheme == "https" }
+        guard !urls.isEmpty else {
+            announce("Nothing here to send to \(name)")
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(urls, withApplicationAt: app, configuration: configuration) { _, error in
+            guard error != nil else { return }
+            Task { @MainActor in self.announce("\(name) didn't take the tabs") }
+        }
+        announce(urls.count == 1 ? "Sent to \(name)" : "\(urls.count) tabs sent to \(name)")
     }
 
     /// ⌘⇧V, when nothing is being typed. What is in the clipboard, if it is a
@@ -1706,10 +1764,34 @@ final class Browser: NSObject, ObservableObject {
         rememberSession()
     }
 
-    private func adopt(_ tab: Tab) {
+    private func adopt(_ tab: Tab, at index: Int? = nil) {
         prepare(tab)
-        tabs.append(tab)
+        tabs.insert(tab, at: index.map { min(max(0, $0), tabs.count) } ?? tabs.count)
         if activeID == nil { activeID = tab.id }
+    }
+
+    /// Where ⌘T's tab goes, by Settings: the top or bottom of the ordinary
+    /// tabs, or just under or over the one you are on. Never among the pins —
+    /// from a pinned tab, under and over both mean first after them.
+    func newTabSlot() -> Int {
+        let loose = block(.loose)
+        guard let here = tabs.firstIndex(where: { $0.id == activeID }) else {
+            return prefs.newTabSpot == .top ? loose.lowerBound : tabs.count
+        }
+        switch prefs.newTabSpot {
+        case .top: return loose.lowerBound
+        case .bottom: return tabs.count
+        case .under: return max(here + 1, loose.lowerBound)
+        case .over: return max(here, loose.lowerBound)
+        }
+    }
+
+    /// An empty tab already open, moved to where a new one would have gone.
+    /// `slot` counts the row with the tab still in it.
+    private func bring(_ tab: Tab, to slot: Int) {
+        guard let from = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        let to = min(slot > from ? slot - 1 : slot, tabs.count - 1)
+        if to != from { move(tab, to: to) }
     }
 
     /// Stepping away from a tab. A video you were watching does not stop
@@ -2135,7 +2217,7 @@ final class Browser: NSObject, ObservableObject {
     /// was raised for a new tab.
     private func go(to url: URL) {
         if opening, let here = active {
-            open(url, foreground: true, atEnd: true, from: here)
+            open(url, foreground: true, at: newTabSlot(), from: here)
             rememberSession()
         } else {
             (active ?? tabs.first)?.go(to: url)
@@ -2147,7 +2229,7 @@ final class Browser: NSObject, ObservableObject {
     func zoom(by factor: CGFloat) { active?.magnify(by: factor) }
     func resetZoom() { active?.resetZoom() }
 
-    /// ⌘⇧R. The article, and nothing that was arranged around it.
+    /// The article, and nothing that was arranged around it.
     func toggleReader() {
         guard let tab = active else { return }
         tab.toggleReader { [weak self] worked in
@@ -2157,6 +2239,7 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func reload() { active?.reload() }
+    func reloadEmptied() { active?.reloadEmptied() }
     func back() { active?.back() }
     func forward() { active?.forward() }
 }
