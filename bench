@@ -58,6 +58,8 @@
     ./bench keyeq CHARS CODE [shift]   test run: ⌘CHARS pressed while the page has the keyboard — who took it
     ./bench menu [open]                test run: the Bookmarks menu as it is about to open, and its first
                                        folder (open: its first bookmark picked)
+    ./bench transfer [NAME]            test run: Tabs › Transfer Tabs as the menu bar has it, and the row
+                                       (NAME: that browser picked under Bring Tabs from)
     ./bench bookmark URL [new]         test run: a bookmark picked from the list, timed until it loads
                                        (new: into a new tab, whose page isn't built yet)
     ./bench peek URL|close             test run: the peek panel over the tab in front, as a shift-click opens it
@@ -250,6 +252,9 @@ def main(argv):
     elif verb == "menu":
         if args not in ([], ["open"]): sys.exit("usage: bench menu [open]")
         request["open"] = args == ["open"]
+    elif verb == "transfer":
+        if len(args) > 1: sys.exit("usage: bench transfer [NAME]")
+        if args: request["bring"] = args[0]
     elif verb == "keyeq":
         if len(args) < 2 or any(a != "shift" for a in args[2:]): sys.exit("usage: bench keyeq CHARS CODE [shift]")
         request["chars"], request["code"], request["mods"] = args[0], int(args[1]), args[2:]

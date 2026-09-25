@@ -1640,6 +1640,67 @@ final class Browser: NSObject, ObservableObject {
         open(url, foreground: true, from: active)
     }
 
+    // MARK: - transfer
+
+    /// Tabs › Transfer Tabs › Bring Tabs from. What the other browser has
+    /// open, asleep at the end of the row as the last session comes back:
+    /// its pinned tabs among the pinned ones here, and a page already open
+    /// here not opened twice. The first one brought is the one you land on.
+    func bringTabs(from source: Chromium.Source) {
+        var seen = Set(tabs.compactMap { $0.address?.absoluteString })
+        let found = Chromium.openTabs(in: source).filter { seen.insert($0.url.absoluteString).inserted }
+        guard !found.isEmpty else {
+            announce("No open tabs in \(source.name) to bring")
+            return
+        }
+        var first: Tab?
+        for page in found {
+            let tab = Tab()
+            prepare(tab)
+            tab.restore(url: page.url, title: page.title)
+            tab.kept = page.pinned
+            tabs.insert(tab, at: page.pinned ? block(.kept).upperBound : tabs.count)
+            first = first ?? tab
+        }
+        if let first {
+            leaving()
+            activeID = first.id
+            editing = false
+            typed = ""
+            first.wake()
+        }
+        rememberSession()
+        announce(found.count == 1 ? "1 tab from \(source.name)" : "\(found.count) tabs from \(source.name)")
+
+        let urls = found.map(\.url)
+        DispatchQueue.global(qos: .utility).async {
+            let icons = Chromium.icons(in: source, for: urls)
+            Task { @MainActor in
+                for (host, data) in icons { await Favicons.shared.adopt(data, for: host) }
+                self.objectWillChange.send()
+            }
+        }
+    }
+
+    /// Tabs › Transfer Tabs › Send … to. The pages, opened in the other
+    /// browser as new tabs; they stay open here too. A private tab is never
+    /// sent: over there it would be kept in the history it was kept out of.
+    func sendTabs(to app: URL, named name: String, all: Bool) {
+        let going = (all ? tabs : active.map { [$0] } ?? []).filter { !$0.shy }
+        let urls = going.compactMap(\.address).filter { $0.scheme == "http" || $0.scheme == "https" }
+        guard !urls.isEmpty else {
+            announce("Nothing here to send to \(name)")
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(urls, withApplicationAt: app, configuration: configuration) { _, error in
+            guard error != nil else { return }
+            Task { @MainActor in self.announce("\(name) didn't take the tabs") }
+        }
+        announce(urls.count == 1 ? "Sent to \(name)" : "\(urls.count) tabs sent to \(name)")
+    }
+
     /// ⌘⇧V, when nothing is being typed. What is in the clipboard, if it is a
     /// place — or a search — in the tab you're on.
     func pasteAndGo() {
