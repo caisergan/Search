@@ -1249,8 +1249,10 @@ final class Browser: NSObject, ObservableObject {
         // it is never lifted and landed in the same breath.
         if floating == tab.id { land() }
         leaving()
+        active?.left()
         activeID = tab.id
         tab.touch()
+        tab.returned()
         // A tab brought back from last time, or waking from ⌘W while pinned,
         // opens the moment you look at it — and only if there was nothing to
         // wake is this the other case, one whose page quietly died while you

@@ -434,6 +434,68 @@ final class Tab: ObservableObject, Identifiable {
     /// coming back to a tab that slept starts from what you left, not white.
     @Published private(set) var cover: NSImage?
 
+    // MARK: - coming back to a tab
+
+    /// The page as it was last on screen, and when it left. A page out of the
+    /// window is given back its drawing: coming back to it after a while,
+    /// WebKit draws it again from nothing, and a heavy page was white for a
+    /// moment first. So it comes back as Safari's does, the picture over it
+    /// until the page itself is on screen.
+    private var lastSeen: NSImage?
+    private var leftAt: Date?
+    /// The few tabs holding such a picture, most recent last: each is a
+    /// screenful of pixels, kept for the tabs you go back to soonest.
+    private static var pictured: [WeakTab] = []
+    private struct WeakTab { weak var tab: Tab? }
+
+    /// Leaving the screen: the picture, taken from what is there now.
+    func left() {
+        guard let built, built.window != nil, !isBlank, pending == nil, cover == nil else { return }
+        leftAt = Date()
+        let shot = WKSnapshotConfiguration()
+        shot.afterScreenUpdates = false
+        built.takeSnapshot(with: shot) { [weak self] image, _ in
+            MainActor.assumeIsolated {
+                guard let self, let image, self.leftAt != nil else { return }
+                self.lastSeen = image
+                Tab.pictured.removeAll { $0.tab == nil || $0.tab === self }
+                Tab.pictured.append(WeakTab(tab: self))
+                while Tab.pictured.count > 4 { Tab.pictured.removeFirst().tab?.lastSeen = nil }
+            }
+        }
+    }
+
+    /// Back on screen after more than a moment away: the picture over the
+    /// page until WebKit has put the page itself on screen again.
+    func returned() {
+        let image = lastSeen, away = leftAt.map { Date().timeIntervalSince($0) } ?? 0
+        lastSeen = nil
+        leftAt = nil
+        Tab.pictured.removeAll { $0.tab == nil || $0.tab === self }
+        guard let image, away > 1, cover == nil, let built, !isBlank, pending == nil else { return }
+        cover = image
+        let started = CACurrentMediaTime()
+        let presented = NSSelectorFromString("_doAfterNextPresentationUpdate:")
+        let off: () -> Void = { [weak self] in
+            guard let self, self.cover === image else { return }
+            Tab.lastReturn = (away, (CACurrentMediaTime() - started) * 1000)
+            self.cover = nil
+        }
+        // Once the view is in the window, which the stage does a moment after
+        // the tab is chosen; the next frame WebKit presents from there is the page.
+        built.whenInWindow { [weak built] in
+            guard let built, built.responds(to: presented) else { return off() }
+            let block: @convention(block) () -> Void = { MainActor.assumeIsolated { off() } }
+            built.perform(presented, with: block)
+        }
+        // And never for long, whatever WebKit says or doesn't.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { off() }
+    }
+
+    /// The last coming-back, for the bench: how long away, and how many
+    /// milliseconds the picture was up.
+    static var lastReturn: (away: TimeInterval, shown: Double)?
+
     private var watch: [NSKeyValueObservation] = []
 
     /// A tab that has never been anywhere shows the address field instead of a
@@ -1268,6 +1330,22 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
 
 /// A web view that reads the two-finger swipe for itself.
 final class PageView: WKWebView {
+    /// Told once, the next time the view is in a window.
+    private var inWindow: [() -> Void] = []
+
+    func whenInWindow(_ then: @escaping () -> Void) {
+        if window != nil { return then() }
+        inWindow.append(then)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, !inWindow.isEmpty else { return }
+        let waiting = inWindow
+        inWindow = []
+        waiting.forEach { $0() }
+    }
+
     /// What extensions added to the right-click menu, at the end of it.
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)
