@@ -9,6 +9,8 @@ struct SearchApp: App {
     @StateObject private var browser = Browser()
     /// Links from other apps, and the Dock icon.
     @NSApplicationDelegateAdaptor(Links.self) private var links
+    /// The keys drawn beside the menus' commands, as Settings › Shortcuts has them.
+    @ObservedObject private var shortcuts = Shortcuts.shared
 
     var body: some Scene {
         Window("Search", id: "browser") {
@@ -21,15 +23,15 @@ struct SearchApp: App {
             // One window. Tabs are the only kind of "new" there is.
             CommandGroup(replacing: .newItem) {
                 Button("New Tab") { browser.newTab() }
-                    .keyboardShortcut("t")
+                    .keyboardShortcut(shortcuts.menu(.newTab))
                 Button("New Private Tab") { browser.newShyTab() }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.newPrivateTab))
                 Button("Reopen Closed Tab") { browser.reopen() }
-                    .keyboardShortcut("t", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.reopenTab))
                     .disabled(browser.ghosts.isEmpty)
                 Divider()
                 Button("Open Address…") { browser.edit() }
-                    .keyboardShortcut("l")
+                    .keyboardShortcut(shortcuts.menu(.openAddress))
                 Divider()
                 Button("Close Tab") {
                     if browser.glance != nil {
@@ -38,25 +40,25 @@ struct SearchApp: App {
                         browser.close(tab)
                     }
                 }
-                    .keyboardShortcut("w")
+                    .keyboardShortcut(shortcuts.menu(.closeTab))
             }
             CommandGroup(replacing: .printItem) {
                 Button("Share…") { browser.share() }
                     .disabled(browser.active?.isBlank ?? true)
                 Button("Print…") { browser.printPage() }
-                    .keyboardShortcut("p")
+                    .keyboardShortcut(shortcuts.menu(.print))
                     .disabled(browser.active?.isBlank ?? true)
             }
             CommandGroup(after: .pasteboard) {
                 Divider()
                 Button("Find on Page…") { browser.openFind() }
-                    .keyboardShortcut("f")
+                    .keyboardShortcut(shortcuts.menu(.find))
                     .disabled(browser.active?.isBlank ?? true)
                 Button("Find Next") { browser.look(forward: true) }
-                    .keyboardShortcut("g")
+                    .keyboardShortcut(shortcuts.menu(.findNext))
                     .disabled(!browser.finding)
                 Button("Find Previous") { browser.look(forward: false) }
-                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.findPrevious))
                     .disabled(!browser.finding)
             }
             CommandGroup(replacing: .toolbar) {
@@ -64,13 +66,13 @@ struct SearchApp: App {
                     get: { browser.prefs.sidebar },
                     set: { _ in browser.toggleSidebar() }
                 ))
-                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .keyboardShortcut(shortcuts.menu(.sidebar))
                 // Folded away, not moved (see Fold.swift) — the column, or the
                 // strip across the top.
                 Button(browser.prefs.sidebar
                        ? (browser.folded ? "Show Sidebar" : "Hide Sidebar")
                        : (browser.folded ? "Show Tab Bar" : "Hide Tab Bar")) { browser.toggleFold() }
-                    .keyboardShortcut("s")
+                    .keyboardShortcut(shortcuts.menu(.foldSidebar))
                 Picker("Tabs Wear", selection: Binding(
                     get: { browser.prefs.glyph },
                     set: { browser.prefs.glyph = $0 }
@@ -81,46 +83,46 @@ struct SearchApp: App {
                 }
                 Divider()
                 Button("Reload Page") { browser.reload() }
-                    .keyboardShortcut("r")
+                    .keyboardShortcut(shortcuts.menu(.reload))
                 Button("Reading Mode") { browser.toggleReader() }
-                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.readingMode))
                 Button("Float Video") { browser.toggleFloat() }
-                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.floatVideo))
                 Divider()
                 Button("Hide Elements…") { browser.toggleHiding() }
-                    .keyboardShortcut("h", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.hideElements))
                 Button("Hidden on This Site…") { browser.reviewing.toggle() }
-                    .keyboardShortcut("u", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.hiddenOnSite))
                 Divider()
                 Button("Zoom In") { browser.zoom(by: 1.1) }
-                    .keyboardShortcut("+")
+                    .keyboardShortcut(shortcuts.menu(.zoomIn))
                 Button("Zoom Out") { browser.zoom(by: 1 / 1.1) }
-                    .keyboardShortcut("-")
+                    .keyboardShortcut(shortcuts.menu(.zoomOut))
                 Button("Actual Size") { browser.resetZoom() }
-                    .keyboardShortcut("0")
+                    .keyboardShortcut(shortcuts.menu(.actualSize))
                 Divider()
                 // The Web Inspector, on the keys Chrome and Arc use (see Inspector.swift).
                 Button("Web Inspector") { browser.toggleInspector() }
-                    .keyboardShortcut("i", modifiers: [.command, .option])
+                    .keyboardShortcut(shortcuts.menu(.webInspector))
                 Button("JavaScript Console") { browser.showConsole() }
-                    .keyboardShortcut("j", modifiers: [.command, .option])
+                    .keyboardShortcut(shortcuts.menu(.javaScriptConsole))
                 Button("Inspect Element") { browser.inspectElement() }
-                    .keyboardShortcut("c", modifiers: [.command, .option])
+                    .keyboardShortcut(shortcuts.menu(.inspectElement))
             }
             CommandMenu("Tabs") {
                 Button("Back") { browser.back() }
-                    .keyboardShortcut("[")
+                    .keyboardShortcut(shortcuts.menu(.back))
                     .disabled(browser.active?.canGoBack != true)
                 Button("Forward") { browser.forward() }
-                    .keyboardShortcut("]")
+                    .keyboardShortcut(shortcuts.menu(.forward))
                     .disabled(browser.active?.canGoForward != true)
                 Divider()
                 Button("Next Tab") { browser.step(1) }
-                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.nextTab))
                 Button("Previous Tab") { browser.step(-1) }
-                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.previousTab))
                 Button("Search Tabs…") { browser.summon() }
-                    .keyboardShortcut("k")
+                    .keyboardShortcut(shortcuts.menu(.searchTabs))
                 Divider()
                 if let tab = browser.active {
                     if tab.pin == nil {
@@ -141,24 +143,24 @@ struct SearchApp: App {
                 Button("Rename Tab") { if let tab = browser.active { browser.beginTabRename(tab) } }
                     .disabled(browser.active == nil)
                 Button("Duplicate Tab") { browser.duplicate() }
-                    .keyboardShortcut("d")
+                    .keyboardShortcut(shortcuts.menu(.duplicateTab))
                     .disabled(browser.active?.isBlank ?? true)
                 Button("Copy Address") { browser.copyAddress() }
-                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.copyAddress))
                     .disabled(browser.active?.isBlank ?? true)
                 Button("Copy as Markdown Link") { browser.copyMarkdownLink() }
                     .disabled(browser.active?.isBlank ?? true)
                 Button("Paste and Go") { browser.pasteAndGo() }
-                    .keyboardShortcut("v", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.pasteAndGo))
                 Divider()
                 Button("Close Other Tabs") { if let tab = browser.active { browser.closeOthers(but: tab) } }
                     .disabled(browser.tabs.count < 2)
                 Button("Stop Sound in Tab") { browser.pauseMedia() }
-                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.stopSound))
             }
             CommandMenu("Bookmarks") {
                 Button("Add This Page") { browser.bookmarkCurrent() }
-                    .keyboardShortcut("b", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.addBookmark))
                     .disabled(browser.active?.isBlank ?? true)
                 Button("Show Bookmarks…") { browser.bookmarking = true }
                 Toggle("Show Bookmarks Bar", isOn: Binding(
@@ -191,18 +193,18 @@ struct SearchApp: App {
                 }
                 Divider()
                 Button("Show History…") { browser.recalling = true }
-                    .keyboardShortcut("y")
+                    .keyboardShortcut(shortcuts.menu(.history))
                 Button("Downloads…") { browser.hoarding = true }
-                    .keyboardShortcut("j", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.menu(.downloads))
                 Divider()
                 Button("Clear History") { browser.clearHistory() }
             }
             CommandGroup(after: .appSettings) {
                 Button("Settings…") { browser.tuning = true }
-                    .keyboardShortcut(",")
+                    .keyboardShortcut(shortcuts.menu(.settings))
                 Button("Welcome…") { browser.welcoming = true }
                 Button("Passwords…") { browser.managing = true }
-                    .keyboardShortcut("l", modifiers: [.command, .option])
+                    .keyboardShortcut(shortcuts.menu(.passwords))
             }
             CommandGroup(replacing: .help) {
                 Button("Send Feedback…") { Links.writeFeedback() }
@@ -886,12 +888,10 @@ struct ContentView: View {
     /// event back through the app, and it comes here a second time. Only
     /// while the page has the keyboard; in the address field or a panel,
     /// Search's keys are Search's. The keys that make and close tabs and move
-    /// between them stay Search's first, as Chrome keeps them its own.
-    private func pageFirst(_ event: NSEvent, key: String, shifted: Bool) -> Bool {
-        let reserved = (key == "t") || (key == "w" && !shifted) || (key == "n" && shifted)
-            || ((key == "[" || key == "]" || key == "{" || key == "}") && shifted)
-            || (key == "z" && browser.veiling)
-        guard !reserved, event.window?.firstResponder is PageView else { return false }
+    /// between them stay Search's first, as Chrome keeps them its own (see
+    /// Command.reserved), and so does ⌘Z while hiding things on a page.
+    private func pageFirst(_ event: NSEvent) -> Bool {
+        guard event.window?.firstResponder is PageView else { return false }
         if let passed = ContentView.passed, PageView.same(passed, event) {
             ContentView.passed = nil
             return false
@@ -908,8 +908,9 @@ struct ContentView: View {
     private func take(_ event: NSEvent) -> Bool {
         // A small window's keys are its own (see Little.swift).
         if let little = LittleWindow.owning(event.window) { return little.take(event) }
+        // A key being chosen in Settings › Shortcuts is only that.
+        if let recorder = Shortcuts.shared.recorder { return recorder(event) }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
 
         // Escape puts the page back. On a blank tab there is no page to put
         // back, so it belongs to whatever else wants it.
@@ -1006,8 +1007,17 @@ struct ContentView: View {
             return true
         }
 
-        // A shortcut an extension registered — ⌥⇧D, ⌃⇧Y — before ours, since
-        // none of ours use those.
+        // The browser's own keys, as they are in Settings › Shortcuts —
+        // before an extension's, since a key someone gave Search is one
+        // they chose.
+        if let command = Shortcuts.shared.command(for: event) {
+            // The page's turn first, for the keys it may want (Refs #147).
+            let ours = command.reserved || (command == .undoHide && browser.veiling)
+            if !ours, pageFirst(event) { return false }
+            return run(command, event)
+        }
+
+        // A shortcut an extension registered — ⌥⇧D, ⌃⇧Y.
         if #available(macOS 15.4, *), !flags.intersection([.command, .option, .control]).isEmpty,
            Extensions.shared.take(event) {
             return true
@@ -1019,40 +1029,70 @@ struct ContentView: View {
         // Anything with ⌥ or ⌃ on top is somebody else's.
         guard !flags.contains(.option), !flags.contains(.control) else { return false }
 
-        // ⌘1 through ⌘9, and ⌘0, by the key rather than the character it
-        // types. On AZERTY and many other layouts the top row types &, é, "…
-        // unless shift is held, so matching the character left these
-        // shortcuts dead there; the shortcut belongs to the key, as it does
-        // in every other browser. The ninth is the last tab, however many.
-        if !shifted, let number = ContentView.digits[event.keyCode] {
-            if number == 0 {
-                browser.resetZoom()
-            } else {
-                browser.select(index: number == 9 ? browser.tabs.count - 1 : number - 1)
-            }
+        // ⌘1 through ⌘9 by the key rather than the character it types. On
+        // AZERTY and many other layouts the top row types &, é, "… unless
+        // shift is held, so matching the character left these shortcuts dead
+        // there; the shortcut belongs to the key, as it does in every other
+        // browser. The ninth is the last tab, however many. (⌘0 is Actual
+        // Size, and can be changed.)
+        if !shifted, let number = ContentView.digits[event.keyCode], number > 0 {
+            browser.select(index: number == 9 ? browser.tabs.count - 1 : number - 1)
             return true
         }
 
-        // The page's turn first, for the keys it may want (Refs #147).
-        if pageFirst(event, key: key, shifted: shifted) { return false }
+        // Moving or selecting text belongs to the editor, not the page's
+        // history — in web forms and in the browser's own fields alike.
+        guard !shifted, browser.active?.typing != true,
+              !(event.window?.firstResponder is NSTextView)
+        else { return false }
+        // ⌘← and ⌘→, for hands that never learned the brackets.
+        if event.keyCode == 123 { browser.back(); return true }
+        if event.keyCode == 124 { browser.forward(); return true }
+        return false
+    }
 
-        switch key {
-        case "t" where !shifted:
-            browser.newTab()
-        case "t" where shifted:
-            browser.reopen()
-        case "c" where shifted:
-            browser.copyAddress()
-        case "d" where !shifted:
-            browser.duplicate()
-        case "n" where shifted:
-            browser.newShyTab()
-        case "y" where !shifted:
-            browser.recalling.toggle()
-        case "j" where shifted:
-            browser.hoarding.toggle()
-        case "v" where shifted:
-            // In a text field this key is paste without formatting — a Google
+    /// What a command does from the keyboard. Some do it only when there is
+    /// something for them to do, and otherwise leave the key to whoever
+    /// wants it next.
+    private func run(_ command: Command, _ event: NSEvent) -> Bool {
+        switch command {
+        case .newTab: browser.newTab()
+        case .reopenTab: browser.reopen()
+        case .newPrivateTab: browser.newShyTab()
+        case .openAddress: browser.edit()
+        case .closeTab:
+            // A glance first: it is what is in front.
+            if browser.glance != nil {
+                browser.closeGlance()
+            } else if browser.peekTab != nil {
+                browser.closePeek()
+            } else if let tab = browser.active {
+                browser.close(tab)
+            }
+        case .duplicateTab: browser.duplicate()
+        case .back: browser.back()
+        case .forward: browser.forward()
+        case .nextTab: browser.step(1)
+        case .previousTab: browser.step(-1)
+        case .searchTabs:
+            // Held down, ⌘K walks the list a step at a time; letting go of ⌘
+            // takes wherever it stopped.
+            if browser.editing, !browser.offers.isEmpty {
+                browser.stepSummon()
+            } else {
+                browser.summon()
+            }
+        case .reload: browser.reload()
+        case .readingMode: browser.toggleReader()
+        case .floatVideo: browser.toggleFloat()
+        case .stopSound: browser.pauseMedia()
+        case .print: browser.printPage()
+        case .find: browser.openFind()
+        case .findNext: browser.look(forward: true)
+        case .findPrevious: browser.look(forward: false)
+        case .copyAddress: browser.copyAddress()
+        case .pasteAndGo:
+            // In a text field ⇧⌘V is paste without formatting — a Google
             // Doc, a form, the address field. It only means Paste and Go when
             // nothing is being typed. Passing the key on is not enough: WebKit
             // has no use for ⌘⇧V, hands it back, and the menu's Paste and Go
@@ -1066,77 +1106,26 @@ struct ContentView: View {
             } else {
                 browser.pasteAndGo()
             }
-        case "p" where !shifted:
-            browser.printPage()
-        case "f" where !shifted:
-            browser.openFind()
-        case "g":
-            browser.look(forward: !shifted)
-        case "m" where shifted:
-            browser.pauseMedia()
-        case "p" where shifted:
-            browser.toggleFloat()
-        case "k" where !shifted:
-            // Held down, ⌘K walks the list a step at a time; letting go of ⌘
-            // takes wherever it stopped.
-            if browser.editing, !browser.offers.isEmpty {
-                browser.stepSummon()
-            } else {
-                browser.summon()
-            }
-        case "s" where shifted:
-            browser.toggleSidebar()
-        case "s" where !shifted:
-            // The column or the strip, folded away (see Fold.swift).
-            browser.toggleFold()
-        case "b" where shifted:
-            browser.bookmarkCurrent()
-        case "," where !shifted:
-            browser.tuning.toggle()
-        case "h" where shifted:
-            browser.toggleHiding()
-        case "u" where shifted:
-            browser.reviewing.toggle()
-        case "z" where !shifted:
+        case .addBookmark: browser.bookmarkCurrent()
+        case .sidebar: browser.toggleSidebar()
+        // The column or the strip, folded away (see Fold.swift).
+        case .foldSidebar: browser.toggleFold()
+        case .zoomIn: browser.zoom(by: 1.1)
+        case .zoomOut: browser.zoom(by: 1 / 1.1)
+        case .actualSize: browser.resetZoom()
+        case .hideElements: browser.toggleHiding()
+        case .undoHide:
             // Only while pointing. Everywhere else undo belongs to the page.
             guard browser.veiling else { return false }
             browser.undoHiding()
-        // ⌘+ arrives as "=" or "+" depending on the keyboard; both mean bigger.
-        case "=", "+":
-            browser.zoom(by: 1.1)
-        case "-":
-            browser.zoom(by: 1 / 1.1)
-        case "0":
-            browser.resetZoom()
-        case "w" where !shifted:
-            // A glance first: it is what is in front.
-            if browser.glance != nil {
-                browser.closeGlance()
-            } else if browser.peekTab != nil {
-                browser.closePeek()
-            } else if let tab = browser.active {
-                browser.close(tab)
-            }
-        case "l" where !shifted:
-            browser.edit()
-        case "r" where !shifted:
-            browser.reload()
-        case "r" where shifted:
-            browser.toggleReader()
-        case "[":
-            shifted ? browser.step(-1) : browser.back()
-        case "]":
-            shifted ? browser.step(1) : browser.forward()
-        default:
-            // Moving or selecting text belongs to the editor, not the page's
-            // history — in web forms and in the browser's own fields alike.
-            guard !shifted, browser.active?.typing != true,
-                  !(event.window?.firstResponder is NSTextView)
-            else { return false }
-            // ⌘← and ⌘→, for hands that never learned the brackets.
-            if event.keyCode == 123 { browser.back(); return true }
-            if event.keyCode == 124 { browser.forward(); return true }
-            return false
+        case .hiddenOnSite: browser.reviewing.toggle()
+        case .history: browser.recalling.toggle()
+        case .downloads: browser.hoarding.toggle()
+        case .passwords: browser.managing.toggle()
+        case .settings: browser.tuning.toggle()
+        case .webInspector: browser.toggleInspector()
+        case .javaScriptConsole: browser.showConsole()
+        case .inspectElement: browser.inspectElement()
         }
         return true
     }
