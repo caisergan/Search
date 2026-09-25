@@ -252,6 +252,8 @@ final class Extensions: NSObject, ObservableObject {
                 context.setPermissionStatus(.grantedExplicitly, for: pattern)
             }
             try controller.load(context)
+            // The keys someone gave its commands in Settings › Shortcuts.
+            Shortcuts.shared.apply(to: context, id: item.id)
             watch(context)
             if contexts[item.id] == nil, loadsThisRun.contains(item.id) { loadedBefore.insert(item.id) }
             loadsThisRun.insert(item.id)
