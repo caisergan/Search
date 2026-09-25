@@ -225,6 +225,12 @@ enum ExtensionShims {
       }
       const chrome = root.chrome || root.browser;
       if (!chrome || root.__searchShim) return;
+      // WebKit has no `Symbol.dispose` yet. tslib's helper for `using` throws
+      // "Symbol.dispose is not defined" without it, and Bitwarden's login
+      // stopped there (25 Sep 2026). Defined before the extension's own code
+      // runs, and only where missing, so WebKit's own wins once it comes.
+      if (!Symbol.dispose) Object.defineProperty(Symbol, "dispose", { value: Symbol("Symbol.dispose") });
+      if (!Symbol.asyncDispose) Object.defineProperty(Symbol, "asyncDispose", { value: Symbol("Symbol.asyncDispose") });
       Object.defineProperty(root, "__searchShim", { value: true });
       // WebKit finds a page's extension APIs through the `chrome` and
       // `browser` globals when it delivers an event. A sandbox that locks
