@@ -165,8 +165,8 @@ extension Bench {
             ready(tab)
             let to = request["url"] as? String ?? ""
             var url: URL?
-            if !["back", "forward", "reload", "hard"].contains(to) {
-                guard let web = Address.url(from: to), Bench.web(web) else { answer(["error": "a.navigate needs a web address, back, forward, reload or hard"]); return }
+            if !["back", "forward", "reload", "hard", "empty"].contains(to) {
+                guard let web = Address.url(from: to), Bench.web(web) else { answer(["error": "a.navigate needs a web address, back, forward, reload, hard or empty"]); return }
                 url = web
             }
             let limit = Date().addingTimeInterval(request["seconds"] as? Double ?? 20)
@@ -179,12 +179,16 @@ extension Bench {
                     case "back": tab.back()
                     case "forward": tab.forward()
                     case "reload": tab.reload()
-                    // This site's caches emptied first, service workers'
-                    // included: what a developer means after changing a file (⇧⌘R).
-                    case "hard": tab.reloadEmptied()
+                    // Every file checked with the server, what a service
+                    // worker kept dropped: what a developer means after
+                    // changing a file (⇧⌘R).
+                    case "hard": tab.hardReload()
+                    // The site's whole cache emptied first, for a server
+                    // that says a changed file hasn't changed.
+                    case "empty": tab.reloadEmptied()
                     default: if let url { tab.go(to: url) }
                     }
-                    self?.arrived(tab, within: to == "hard" ? 5 : 1.5) {
+                    self?.arrived(tab, within: to == "empty" ? 5 : to == "hard" ? 3 : 1.5) {
                         self?.wait(for: tab, until: limit) { out in answer(self?.decorated(out, tab) ?? out) }
                     }
                 }

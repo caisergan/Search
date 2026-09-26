@@ -25,7 +25,7 @@ screenshots.
 |---|---|
 | `tabs_context` | Lists the tabs Claude may use: the ones it opened, and yours if allowed |
 | `tabs_create`, `tabs_close`, `tab_show` | Open a tab of Claude's at any size, close it, or bring it to the front |
-| `navigate` | Go to a URL, or back, forward, reload, `hard` (past the cache), and wait for the page to load |
+| `navigate` | Go to a URL, or back, forward, reload, `hard` (every file checked with the server, as ⇧⌘R), `empty` (the site's cache emptied first), and wait for the page to load |
 | `resize_page` | Give a tab of Claude's another viewport size: a phone's (with its user agent), a tablet's, a wide screen's |
 | `read_page` | Lists what can be used on the page, one element per line with a ref and its place on screen. Same-site frames and shadow DOM included |
 | `find` | Finds elements by their words |
@@ -52,7 +52,10 @@ screenshots.
   A pop-up the page opens becomes a tab of Claude's too.
 - **Any size.** `resize_page` 390×844 with `mobile: true` shows the phone
   layout.
-- **Fresh after a change.** `navigate` with `hard` reloads past the cache.
+- **Fresh after a change.** `navigate` with `hard` checks every file with the
+  server and drops what a service worker kept, as ⇧⌘R does. `empty` empties
+  the site's cache first, for a server that says a changed file hasn't
+  changed.
 
 ## Safety
 

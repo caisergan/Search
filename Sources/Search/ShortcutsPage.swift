@@ -82,7 +82,7 @@ struct ShortcutsPage: View {
 
     private func row(_ command: Command) -> some View {
         let changed = shortcuts.isChanged(command)
-        return Line(command.title, changed ? "Out of the box: \(command.standard.label)" : nil) {
+        return Line(command.title, changed ? "Out of the box: \(command.standard?.label ?? "none")" : nil) {
             HStack(spacing: 6) {
                 if changed {
                     Quick("Reset") {

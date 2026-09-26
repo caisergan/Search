@@ -1092,7 +1092,10 @@ final class ExtensionTab: NSObject, WKWebExtensionTab {
         }
         tab.go(to: url)
     }
-    func reload(fromOrigin: Bool, for context: WKWebExtensionContext) async throws { tab?.reload() }
+    /// tabs.reload with bypassCache is Chrome's hard reload: ⇧⌘R's here.
+    func reload(fromOrigin: Bool, for context: WKWebExtensionContext) async throws {
+        if fromOrigin { tab?.hardReload() } else { tab?.reload() }
+    }
     func goBack(for context: WKWebExtensionContext) async throws { tab?.back() }
     func goForward(for context: WKWebExtensionContext) async throws { tab?.forward() }
 
