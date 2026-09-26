@@ -2567,6 +2567,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard let tab = tab(for: webView) else { return }
+        // A new document: whatever was full screen in the window went with the old one.
+        tab.fullscreenGone()
         if tab.id == activeID { linkStatus.dismiss() }
         tab.failure = nil
         tab.typing = false

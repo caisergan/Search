@@ -313,6 +313,18 @@ final class Tab: ObservableObject, Identifiable {
     func leaveFullscreen() {
         guard immersed, let built else { return }
         built.evaluateJavaScript("window.dispatchEvent(new Event('search-fullscreen-leave'))", in: nil, in: Web.world) { _ in }
+        // A page that doesn't answer — gone, hung — doesn't keep the window.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.fullscreenGone() }
+    }
+
+    /// The page that was full screen in the window is gone without saying so
+    /// — another document in its place, a reload, its process ended, the Mac
+    /// woken with the page loaded again — and the strip, the column and the
+    /// window come back all the same. Left, they stayed hidden for good.
+    func fullscreenGone() {
+        guard immersed else { return }
+        immersed = false
+        onWholeWindow?(self, false)
     }
 
     /// True while something on the page is making noise, so the row can say
