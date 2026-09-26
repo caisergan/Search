@@ -172,8 +172,12 @@ extension Bench {
             let limit = Date().addingTimeInterval(request["seconds"] as? Double ?? 20)
             // The page there now is marked, in Search's world, so the new one
             // is known by not having the mark — even one that loads before
-            // anyone sees it loading, as a page from this Mac does.
-            tab.web.evaluateJavaScript("window.__claudeOld = 1", in: nil, in: Web.world) { [weak self] _ in
+            // anyone sees it loading, as a page from this Mac does. A mark of
+            // this call's own: back or forward can bring a page out of
+            // WebKit's back-forward cache with an older call's mark still on
+            // it, and a plain one had that page waited on for the whole cap.
+            let mark = UUID().uuidString
+            tab.web.evaluateJavaScript("window.__claudeOld = '\(mark)'", in: nil, in: Web.world) { [weak self] _ in
                 MainActor.assumeIsolated {
                     switch to {
                     case "back": tab.back()
@@ -188,7 +192,7 @@ extension Bench {
                     case "empty": tab.reloadEmptied()
                     default: if let url { tab.go(to: url) }
                     }
-                    self?.arrived(tab, within: to == "empty" ? 5 : to == "hard" ? 3 : 1.5) {
+                    self?.arrived(tab, unmarked: mark, within: to == "empty" ? 5 : to == "hard" ? 3 : 1.5) {
                         self?.wait(for: tab, until: limit) { out in answer(self?.decorated(out, tab) ?? out) }
                     }
                 }
@@ -490,11 +494,11 @@ extension Bench {
     /// Once a new page has begun in the tab — it is loading, or it is a
     /// document without the mark a.navigate left — or the time is up, for a
     /// move within the page, which starts nothing.
-    private func arrived(_ tab: Tab, within seconds: Double, _ then: @escaping () -> Void) {
+    private func arrived(_ tab: Tab, unmarked mark: String, within seconds: Double, _ then: @escaping () -> Void) {
         let started = Date()
         func look() {
             guard !tab.loading, Date().timeIntervalSince(started) < seconds else { then(); return }
-            tab.web.evaluateJavaScript("!window.__claudeOld", in: nil, in: Web.world) { result in
+            tab.web.evaluateJavaScript("window.__claudeOld !== '\(mark)'", in: nil, in: Web.world) { result in
                 MainActor.assumeIsolated {
                     if case .success(let fresh) = result, fresh as? Bool == true { then(); return }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { look() }

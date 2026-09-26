@@ -489,6 +489,7 @@ final class Bench {
                 "column": browser.prefs.sidebar && !browser.folded && browser.active?.immersed != true,
                 "edgeWatched": Fold.watching,
             ] as [String: Any]
+            out["launch"] = Launch.marks
             if let back = Tab.lastReturn { out["lastReturn"] = ["away": back.away, "shownMs": back.shown] }
             // Settings › General › Web Inspector, as each page's WebKit has it.
             let asked = NSSelectorFromString("_developerExtrasEnabled")
@@ -1591,9 +1592,9 @@ final class Bench {
 
     /// Once the page has stopped loading, or the time is up.
     func wait(for tab: Tab, until limit: Date, _ answer: @escaping ([String: Any]) -> Void) {
-        if !tab.loading, tab.address != nil, tab.failure == nil || true {
-            // A beat for the document's own scripts to settle.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+        if !tab.loading, tab.address != nil {
+            // A beat for what the page does as it comes up (see `settle`).
+            settle(tab, until: Date().addingTimeInterval(0.25)) { [weak self] in
                 guard let self else { return }
                 var out = describe(tab)
                 if let failure = tab.failure { out["failure"] = failure }
@@ -1607,8 +1608,30 @@ final class Bench {
             answer(out)
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        // Looked at often: it is one flag, and every tenth of a second
+        // waited here was a tenth of a second on every page Claude opened.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak self] in
             self?.wait(for: tab, until: limit, answer)
+        }
+    }
+
+    /// A loaded page, left to its scripts until none of the requests they
+    /// started is still open — seen twice, 25 ms apart — or the deadline.
+    /// It was a quarter of a second every time: most of a navigation to a
+    /// page that loads in thirty milliseconds, and for a page that fetches
+    /// for longer no surer than this. Without the listener that counts
+    /// requests (see Agent.hook), a loaded page counts as quiet.
+    private func settle(_ tab: Tab, until deadline: Date, quiet: Bool = false, _ then: @escaping () -> Void) {
+        guard Date() < deadline, let web = tab.built else { then(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak self] in
+            web.callAsyncJavaScript(Agent.idle, arguments: [:], in: nil, in: .page) { result in
+                MainActor.assumeIsolated {
+                    let idle = (try? result.get()) as? Bool == true
+                    if idle, quiet { then(); return }
+                    guard let self else { then(); return }
+                    self.settle(tab, until: deadline, quiet: idle, then)
+                }
+            }
         }
     }
 
@@ -1730,4 +1753,26 @@ final class Bench {
         })();
         """
     }
+}
+
+/// How far the launch had got at each point, in ms from the process's own
+/// start, for `./bench probe`. Each point is written once.
+@MainActor
+enum Launch {
+    static private(set) var marks: [String: Int] = [:]
+
+    static func mark(_ point: String) {
+        guard marks[point] == nil else { return }
+        marks[point] = Int((Date().timeIntervalSince1970 - started) * 1000)
+    }
+
+    /// When the kernel says the process began: before any of the app's code.
+    private static let started: TimeInterval = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return Date().timeIntervalSince1970 }
+        let start = info.kp_proc.p_starttime
+        return TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000
+    }()
 }

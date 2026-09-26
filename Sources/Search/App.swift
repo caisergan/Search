@@ -13,6 +13,7 @@ struct SearchApp: App {
     @ObservedObject private var shortcuts = Shortcuts.shared
 
     init() {
+        Launch.mark("app")
         // Another Mac's settings, before anything here reads one (see Sync.swift).
         SettingsSync.pullAtLaunch()
     }

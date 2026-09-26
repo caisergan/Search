@@ -146,6 +146,7 @@ final class Extensions: NSObject, ObservableObject {
         // of milliseconds (uBlock Origin Lite, 45), and the first frame
         // waited behind it.
         Links.onceShown { [weak self] in
+            Launch.mark("shown")
             Task { [weak self] in
                 guard let self else { return }
                 // One after another, a moment apart: started all at once, WebKit
@@ -156,6 +157,7 @@ final class Extensions: NSObject, ObservableObject {
                         try? await Task.sleep(for: .milliseconds(400))
                     }
                 }
+                Launch.mark("extensions")
                 checkForUpdates()
                 // Extensions another Mac has, asked about once (see Sync.swift).
                 SettingsSync.offerExtensions(self)

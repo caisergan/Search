@@ -875,6 +875,7 @@ final class Browser: NSObject, ObservableObject {
     // MARK: - beginning and ending
 
     override init() {
+        Launch.mark("browser")
         super.init()
         Shield.shared.enabled = prefs.shielded
         Shield.shared.compile()
@@ -974,6 +975,7 @@ final class Browser: NSObject, ObservableObject {
         }
         restoreSession()
         if prefs.usesSpaces { preloadSpaces() }
+        Launch.mark("restored")
     }
 
     /// The row of tabs the space on screen had last time, or one empty tab.
@@ -2636,6 +2638,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        Launch.mark("firstCommit")
         guard let tab = tab(for: webView) else { return }
         // A new document: whatever was full screen in the window went with the old one.
         tab.fullscreenGone()
@@ -2660,6 +2663,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        Launch.mark("firstFinish")
         // A page with nothing to lay out never has a first frame. Done is
         // done, and it is shown.
         (webView as? PageView)?.showFirstFrame()
