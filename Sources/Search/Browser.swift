@@ -2569,6 +2569,16 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         let host = origin.host.isEmpty ? (tab(for: webView)?.address?.host() ?? "This page") : origin.host
         let key = "\(host)|\(type.rawValue)"
 
+        // A page in one of Claude's tabs never gets the camera or the
+        // microphone, whatever was once allowed for its site: nobody is there
+        // to be asked, and the question would wait in your window for good.
+        // Claude hears it was refused with its next answer.
+        if let tab = tab(for: webView), tab.bench {
+            Agent.asked[tab.id, default: []].append(["kind": Browser.name(for: type), "message": "\(host) asked for the \(Browser.name(for: type))", "accepted": false])
+            decisionHandler(.deny)
+            return
+        }
+
         if let remembered = Store.settings.object(forKey: "capture." + key) as? Bool {
             decisionHandler(remembered ? .grant : .deny)
             return

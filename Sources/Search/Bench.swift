@@ -1602,17 +1602,23 @@ final class Bench {
 
     /// A room of its own for each tab Claude gave a size of its own (see
     /// Agent.swift), so that the others keep theirs.
-    var rooms: [Tab.ID: NSWindow] = [:]
+    var rooms: [Tab.ID: Room] = [:]
 
     /// A page nobody is looking at has to be somewhere to be laid out at all
     /// (see Backstage). The stage takes it back the moment you pick its tab.
     /// `any`: one of yours too, while Claude uses it.
     func house(_ tab: Tab, any: Bool = false) {
         guard tab.bench || any else { return }
-        guard let size = Agent.sizes[tab.id] else { Backstage.park(tab.web); return }
-        // One Claude gave a size waits in its own room at that size — also
-        // when the stage let go of it backstage, at the stage's.
+        // A tab Claude works in waits in a room of its own, at the size Claude
+        // gave it or the stage's: its room says it is key while Claude works
+        // (see Agent.engage), which the room every background tab shares
+        // mustn't — each of those pages would take itself for the one in
+        // front. Also when the stage let go of it backstage.
         guard tab.web.window == nil || Backstage.holds(tab.web) else { return }
+        // Rooms of tabs that are gone go with them.
+        let open = Set(browser?.tabs.map(\.id) ?? [])
+        for (id, room) in rooms where !open.contains(id) { rooms[id] = nil; room.close() }
+        let size = Agent.sizes[tab.id] ?? Backstage.stageSize
         let window = rooms[tab.id] ?? Backstage.makeRoom(size: size)
         rooms[tab.id] = window
         window.setContentSize(size)
