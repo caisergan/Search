@@ -126,9 +126,9 @@ enum Web {
         // page comes back.
         config.applicationNameForUserAgent = Web.userAgentName
         config.allowsAirPlayForMediaPlayback = true
-        // Off by default on macOS, which is why a full-screen button on a video
-        // did nothing at all: the page asks, and WebKit refuses without a word.
-        config.preferences.isElementFullscreenEnabled = true
+        // WebKit's own full screen, off: it takes a video to a space of its
+        // own. Pages go full screen in the window instead (see Fullscreen.swift).
+        config.preferences.isElementFullscreenEnabled = false
         // On by default on macOS: a page could open a new tab, and take you
         // to it, whenever it liked — on load, on a timer. Off, window.open
         // works only from a click or a key, as Safari's pop-up blocking has
@@ -728,12 +728,10 @@ final class Tab: ObservableObject, Identifiable {
             WKUserScript(source: PasskeyRelay.bridge, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Web.world)
         )
         // Full screen in this window rather than a space of its own, as in
-        // Chrome, unless Settings › General says otherwise (see Fullscreen.swift).
-        if Fullscreen.inWindow {
-            controller.addUserScript(
-                WKUserScript(source: Fullscreen.page, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
-            )
-        }
+        // Chrome (see Fullscreen.swift).
+        controller.addUserScript(
+            WKUserScript(source: Fullscreen.page, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+        )
         // While a script may drive Search: Claude's own tabs, and any page
         // served from this Mac, keep their console and requests from the
         // first line (see Agent.hook). Any other page gets nothing here.

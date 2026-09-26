@@ -230,10 +230,6 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.autoScroll)
             }
             Rule()
-            Line("Full screen stays in the window", "A video or a page going full screen fills this window, which goes full screen with it, as in Chrome — no space of its own to swipe past. Off, it opens in a space of its own, as in Safari. Pages follow when reloaded") {
-                Switch(on: $prefs.fullscreenInWindow)
-            }
-            Rule()
             Line("Pages at 120 Hz", "Animations and scrolling in pages at up to 120 frames a second on a screen that can, instead of 60 as in Safari. Uses more battery. Open tabs follow when reloaded") {
                 Switch(on: $prefs.fastPages)
             }

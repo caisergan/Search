@@ -11,7 +11,7 @@ import WebKit
 //
 // Chrome keeps it in the window: the element fills the window, the window
 // goes full screen if it isn't, and nothing else is made. So does Search now,
-// unless Settings › General says otherwise. The page's own Fullscreen API is
+// always — there is no going back to the other way. The page's own Fullscreen API is
 // answered in the page's world — requestFullscreen, exitFullscreen,
 // fullscreenElement, their webkit names and their events — with the element
 // put in the top layer, over everything, at the size of the window. A frame
@@ -21,16 +21,12 @@ import WebKit
 // The top of it tells Search, through its own world (see FormRelay), which
 // hides the strip and the column and takes the window full screen.
 //
-// A <video>'s own full-screen button, drawn by WebKit, still goes WebKit's
-// way: the page never sees that request to answer it.
+// WebKit's own full screen is off (see Tab.swift): a <video> with WebKit's
+// controls loses their full-screen button, which went to a space of its own,
+// and goes full screen in the window with a double click instead.
 
 @MainActor
 enum Fullscreen {
-    /// Settings › General › Full screen stays in the window. On unless set.
-    static var inWindow: Bool {
-        Store.settings.object(forKey: "fullscreen.window") as? Bool ?? true
-    }
-
     /// The page's side, in its own world, every frame, before its scripts.
     static let page = #"""
     (function () {
@@ -138,6 +134,49 @@ enum Fullscreen {
       getter(D, 'fullscreen', function () { return !!element(); });
       getter(D, 'fullscreenEnabled', function () { return true; });
       getter(D, 'webkitFullscreenEnabled', function () { return true; });
+      // With WebKit's own full screen off, its event handler properties are
+      // gone too, and a page that looks for them before offering full screen
+      // — YouTube hides its button — decides there is none.
+      ['fullscreenchange', 'fullscreenerror', 'webkitfullscreenchange', 'webkitfullscreenerror'].forEach(function (type) {
+        var handlers = new WeakMap();
+        [D, E].forEach(function (proto) {
+          if (('on' + type) in proto) return;
+          try {
+            Object.defineProperty(proto, 'on' + type, {
+              configurable: true, enumerable: true,
+              get: function () { var h = handlers.get(this); return h ? h.fn : null; },
+              set: function (fn) {
+                var h = handlers.get(this);
+                if (h) this.removeEventListener(type, h.listener);
+                if (typeof fn !== 'function') { handlers.delete(this); return; }
+                var self = this, listener = function (e) { return fn.call(self, e); };
+                handlers.set(this, { fn: fn, listener: listener });
+                this.addEventListener(type, listener);
+              }
+            });
+          } catch (e) {}
+        });
+      });
+
+      // Safari's own names for a video's full screen, used by players made
+      // for it: the same full screen in the window.
+      var V = window.HTMLVideoElement && HTMLVideoElement.prototype;
+      if (V) {
+        put(V, 'webkitEnterFullscreen', function () { request.call(this); });
+        put(V, 'webkitEnterFullScreen', function () { request.call(this); });
+        put(V, 'webkitExitFullscreen', function () { if (current === this) exit(); });
+        put(V, 'webkitExitFullScreen', function () { if (current === this) exit(); });
+        getter(V, 'webkitSupportsFullscreen', function () { return true; });
+        getter(V, 'webkitDisplayingFullscreen', function () { return current === this; });
+      }
+      // A video with WebKit's own controls has no full-screen button of its
+      // own now — that one went to a space of its own — so a double click on
+      // it goes full screen in the window, and back, as in Chrome.
+      document.addEventListener('dblclick', function (e) {
+        var v = e.target && e.target.closest ? e.target.closest('video') : null;
+        if (!v || !v.controls || e.defaultPrevented) return;
+        if (current === v) leave(false); else request.call(v);
+      }, true);
 
       // A frame in this page asks for itself, or says it has left.
       window.addEventListener('message', function (e) {
