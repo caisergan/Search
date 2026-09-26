@@ -126,7 +126,7 @@ struct Keys: Hashable, Codable {
 enum Command: String, CaseIterable, Identifiable {
     case newTab, newPrivateTab, reopenTab, openAddress, closeTab, duplicateTab
     case back, forward, nextTab, previousTab, searchTabs
-    case reload, hardReload, readingMode, floatVideo, stopSound, print
+    case reload, hardReload, readingMode, floatVideo, stopSound, print, savePage
     case find, findNext, findPrevious
     case copyAddress, pasteAndGo, addBookmark
     case sidebar, foldSidebar
@@ -157,7 +157,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .newTab, .newPrivateTab, .reopenTab, .openAddress, .closeTab, .duplicateTab,
              .nextTab, .previousTab, .searchTabs:
             return .tabs
-        case .back, .forward, .reload, .hardReload, .readingMode, .floatVideo, .stopSound, .print,
+        case .back, .forward, .reload, .hardReload, .readingMode, .floatVideo, .stopSound, .print, .savePage,
              .copyAddress, .pasteAndGo, .addBookmark:
             return .page
         case .find, .findNext, .findPrevious, .hideElements, .undoHide, .hiddenOnSite:
@@ -190,6 +190,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .floatVideo: return "Float video"
         case .stopSound: return "Stop sound in tab"
         case .print: return "Print"
+        case .savePage: return "Download this page"
         case .find: return "Find on page"
         case .findNext: return "Find next"
         case .findPrevious: return "Find previous"
@@ -234,6 +235,8 @@ enum Command: String, CaseIterable, Identifiable {
         case .floatVideo: return Keys("p", shift: true)
         case .stopSound: return Keys("m", shift: true)
         case .print: return Keys("p")
+        // ⌘S folds the tabs away here; Save As is ⌥⌘S in Safari's menu too.
+        case .savePage: return Keys("s", option: true)
         case .find: return Keys("f")
         case .findNext: return Keys("g")
         case .findPrevious: return Keys("g", shift: true)

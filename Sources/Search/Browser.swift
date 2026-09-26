@@ -1718,6 +1718,46 @@ final class Browser: NSObject, ObservableObject {
         typed = ""
     }
 
+    /// ⌥⌘S. The page's own file, to Downloads — a PDF open in the tab above
+    /// all, which had no way to be kept: fetched again with the tab's cookies,
+    /// as the link would have been.
+    func downloadPage() {
+        guard let tab = active, !tab.isBlank, let url = tab.built?.url ?? tab.address,
+              ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "")
+        else { return }
+        tab.web.startDownload(using: URLRequest(url: url)) { [weak self] download in
+            MainActor.assumeIsolated { self?.keep(download) }
+        }
+    }
+
+    /// The PDF viewer's own download button, and anything else WebKit hands
+    /// over as data to be kept. Unanswered, the button did nothing at all.
+    @objc(_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:)
+    func webView(_ webView: WKWebView, saveDataToFile data: NSData, suggestedFilename: NSString, mimeType: NSString?, originatingURL: NSURL?) {
+        var name = (suggestedFilename as String).trimmingCharacters(in: .whitespaces)
+        if name.isEmpty { name = (originatingURL as URL?)?.lastPathComponent ?? "download" }
+        if (name as NSString).pathExtension.isEmpty, (mimeType as String?) == "application/pdf" { name += ".pdf" }
+        let file: URL
+        if prefs.asksWhereToSave {
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = name
+            panel.directoryURL = downloadsFolder
+            panel.canCreateDirectories = true
+            guard panel.runModal() == .OK, let chosen = panel.url else { return }
+            file = chosen
+        } else {
+            file = Browser.free(name, in: downloadsFolder)
+        }
+        do {
+            try (data as Data).write(to: file, options: .atomic)
+        } catch {
+            announce("Couldn't save \(name)")
+            return
+        }
+        loot.add(Keep(name: file.lastPathComponent, from: (originatingURL as URL?)?.host() ?? "", path: file.path, date: Date()))
+        announce("Saved \(file.lastPathComponent)")
+    }
+
     /// ⌘P. The system's own sheet, which is also where "save as PDF" lives.
     func printPage() {
         guard let tab = active, !tab.isBlank, let window = NSApp.keyWindow else { return }
@@ -2698,7 +2738,7 @@ extension Browser: WKDownloadDelegate {
 
     /// WebKit refuses to write over a file that is already there, so the name
     /// gains a number rather than the download quietly failing.
-    private static func free(_ name: String, in folder: URL) -> URL {
+    static func free(_ name: String, in folder: URL) -> URL {
         let stem = (name as NSString).deletingPathExtension
         let ext = (name as NSString).pathExtension
         var candidate = folder.appendingPathComponent(name)

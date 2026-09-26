@@ -48,6 +48,9 @@ struct SearchApp: App {
                 Button("Print…") { browser.printPage() }
                     .keyboardShortcut(shortcuts.menu(.print))
                     .disabled(browser.active?.isBlank ?? true)
+                Button("Download This Page") { browser.downloadPage() }
+                    .keyboardShortcut(shortcuts.menu(.savePage))
+                    .disabled(browser.active?.isBlank ?? true)
             }
             CommandGroup(after: .pasteboard) {
                 Divider()
@@ -1112,6 +1115,7 @@ struct ContentView: View {
         case .floatVideo: browser.toggleFloat()
         case .stopSound: browser.pauseMedia()
         case .print: browser.printPage()
+        case .savePage: browser.downloadPage()
         case .find: browser.openFind()
         case .findNext: browser.look(forward: true)
         case .findPrevious: browser.look(forward: false)
