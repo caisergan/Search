@@ -21,6 +21,7 @@
     ./bench probe                      the window's own state: panels, modal, windows
     ./bench extensions                 installed extensions, loaded or not, with their warnings
     ./bench little URL|keep|close      a small window for a link (made unseen), kept into the row, or closed
+    ./bench sync [state|use|keep]      settings through iCloud Drive: what it has; use another Mac's (opens again), keep this one's — --test runs only
     ./bench site PATH [security]       the site card for the tab on screen, drawn to a PNG
     ./bench ext-add ID|LINK [--yes]    install from the Chrome Web Store (--yes only in a --test run)
     ./bench ext-folder PATH [--yes]    install an unpacked extension
@@ -266,6 +267,9 @@ def main(argv):
         request["dx"] = float(args[0])
         if len(args) > 1: request["steps"] = int(args[1])
         if len(args) > 2: request["ms"] = float(args[2])
+    elif verb == "sync":
+        if len(args) > 1 or (args and args[0] not in ("state", "use", "keep", "add")): sys.exit("usage: bench sync [state|use|keep|add]")
+        if args: request["action"] = args[0]
     elif verb == "window":
         pass
     elif verb == "pages":

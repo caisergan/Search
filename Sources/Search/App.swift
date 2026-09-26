@@ -12,6 +12,11 @@ struct SearchApp: App {
     /// The keys drawn beside the menus' commands, as Settings › Shortcuts has them.
     @ObservedObject private var shortcuts = Shortcuts.shared
 
+    init() {
+        // Another Mac's settings, before anything here reads one (see Sync.swift).
+        SettingsSync.pullAtLaunch()
+    }
+
     var body: some Scene {
         Window("Search", id: "browser") {
             ContentView(browser: browser)

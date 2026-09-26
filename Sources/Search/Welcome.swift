@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The first time. Four short pages over the window, in the app's own
-/// language: what this is, what to bring over, how to hold it, and whether
-/// links from other apps should come here. Nothing is asked twice, and every
-/// page can be skipped.
+/// The first time. Five short pages over the window, in the app's own
+/// language: what this is, your settings from another Mac, what to bring
+/// over, how to hold it, and whether links from other apps should come here.
+/// Nothing is asked twice, and every page can be skipped.
 struct WelcomePanel: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
@@ -26,7 +26,12 @@ struct WelcomePanel: View {
     @State private var isDefault = Links.isDefault
     @State private var asked = false
 
-    private let pages = 4
+    // Settings from another Mac (see Sync.swift).
+    // Read when its page shows, not each time the panel is made (see `source`).
+    @State private var other: SettingsSync.Snapshot?
+    @State private var syncing = SettingsSync.on
+
+    private let pages = 5
 
     var body: some View {
         ZStack {
@@ -37,8 +42,9 @@ struct WelcomePanel: View {
                 ZStack {
                     switch page {
                     case 0: welcome
-                    case 1: bring
-                    case 2: hold
+                    case 1: sync
+                    case 2: bring
+                    case 3: hold
                     default: links
                     }
                 }
@@ -74,6 +80,52 @@ struct WelcomePanel: View {
                     .frame(maxWidth: 400)
             }
         }
+    }
+
+    private var sync: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            heading("Your other Mac.", "Search can keep its settings in your iCloud Drive — the look, the shortcuts, the bookmarks, what you hid and the extensions — and each Mac you turn this on keeps the same. Never passwords, sign-ins or history.")
+            if SettingsSync.drive == nil {
+                Text("iCloud Drive is off on this Mac. You can turn this on later, in Settings › General.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Palette.faint)
+            } else if let other {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Settings from \(other.from), saved \(other.saved.formatted(date: .abbreviated, time: .shortened)).")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Palette.muted)
+                    HStack(spacing: 12) {
+                        Big("Use them", filled: true) {
+                            prefs.welcomed = true
+                            SettingsSync.useTheirs()
+                        }
+                        Big("Keep this Mac's", filled: false) {
+                            SettingsSync.keepMine { browser.announce($0) }
+                            self.other = nil
+                            syncing = true
+                        }
+                    }
+                    Text("Using them opens Search again, with your settings.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.faint)
+                }
+            } else if syncing {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("Syncing — your other Macs can use these")
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(Palette.ink)
+            } else {
+                Big("Sync this Mac's settings", filled: true) {
+                    SettingsSync.turnOn { browser.announce($0) }
+                    syncing = SettingsSync.on
+                }
+            }
+        }
+        .animation(Motion.settle, value: syncing)
+        .onAppear { if !syncing { other = SettingsSync.another() } }
     }
 
     private var bring: some View {
