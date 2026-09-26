@@ -235,7 +235,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .floatVideo: return Keys("p", shift: true)
         case .stopSound: return Keys("m", shift: true)
         case .print: return Keys("p")
-        // ⌘S folds the tabs away here; Save As is ⌥⌘S in Safari's menu too.
+        // ⌘S folds the tabs away here, and ⇧⌘S puts them in a sidebar.
         case .savePage: return Keys("s", option: true)
         case .find: return Keys("f")
         case .findNext: return Keys("g")

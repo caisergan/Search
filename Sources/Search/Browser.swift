@@ -1734,8 +1734,14 @@ final class Browser: NSObject, ObservableObject {
     /// over as data to be kept. Unanswered, the button did nothing at all.
     @objc(_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:)
     func webView(_ webView: WKWebView, saveDataToFile data: NSData, suggestedFilename: NSString, mimeType: NSString?, originatingURL: NSURL?) {
-        var name = (suggestedFilename as String).trimmingCharacters(in: .whitespaces)
-        if name.isEmpty { name = (originatingURL as URL?)?.lastPathComponent ?? "download" }
+        // The name is the site's to suggest, and only a name: no folder of its
+        // own, nothing that climbs out of Downloads, nothing hidden.
+        var name = (suggestedFilename as String)
+            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        while name.hasPrefix(".") { name.removeFirst() }
+        if name.isEmpty { name = (originatingURL as URL?)?.lastPathComponent ?? "" }
+        if name.isEmpty || name == "/" { name = "download" }
         if (name as NSString).pathExtension.isEmpty, (mimeType as String?) == "application/pdf" { name += ".pdf" }
         let file: URL
         if prefs.asksWhereToSave {
@@ -1754,6 +1760,15 @@ final class Browser: NSObject, ObservableObject {
             announce("Couldn't save \(name)")
             return
         }
+        // Marked as from the internet, as WebKit marks what it downloads, so
+        // macOS asks before the file is first opened.
+        var marked = file
+        var values = URLResourceValues()
+        var quarantine: [String: Any] = [kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload,
+                                         kLSQuarantineAgentNameKey as String: "Search"]
+        if let origin = originatingURL as URL? { quarantine[kLSQuarantineDataURLKey as String] = origin }
+        values.quarantineProperties = quarantine
+        try? marked.setResourceValues(values)
         loot.add(Keep(name: file.lastPathComponent, from: (originatingURL as URL?)?.host() ?? "", path: file.path, date: Date()))
         announce("Saved \(file.lastPathComponent)")
     }
