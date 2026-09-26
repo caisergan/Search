@@ -347,8 +347,10 @@ final class Extensions: NSObject, ObservableObject {
             try FileManager.default.createDirectory(at: Extensions.folder, withIntermediateDirectories: true)
             try? FileManager.default.removeItem(at: staged)
             try FileManager.default.copyItem(at: source, to: staged)
+            try Crx.refuseLinks(in: staged)
             try ExtensionShims.prepare(staged, fresh: true)
         } catch {
+            try? FileManager.default.removeItem(at: staged)
             browser?.announce("Couldn't copy the extension")
             return
         }
@@ -374,6 +376,7 @@ final class Extensions: NSObject, ObservableObject {
             do {
                 try? files.removeItem(at: copy)
                 try files.copyItem(at: source, to: copy)
+                try Crx.refuseLinks(in: copy)
                 try ExtensionShims.prepare(copy, fresh: true)
             } catch {
                 try? files.removeItem(at: copy)
