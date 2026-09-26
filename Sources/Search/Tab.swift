@@ -306,6 +306,14 @@ final class Tab: ObservableObject, Identifiable {
     var onZoom: ((Tab, CGFloat) -> Void)?
     /// The resolved address under the pointer, or nil when it leaves a link.
     var onLink: ((Tab, String?) -> Void)?
+    /// A page going full screen in the window, or leaving it (see Fullscreen.swift).
+    var onWholeWindow: ((Tab, Bool) -> Void)?
+
+    /// Out of full screen in the window: the page is told, and puts itself back.
+    func leaveFullscreen() {
+        guard immersed, let built else { return }
+        built.evaluateJavaScript("window.dispatchEvent(new Event('search-fullscreen-leave'))", in: nil, in: Web.world) { _ in }
+    }
 
     /// True while something on the page is making noise, so the row can say
     /// which tab it is coming from.
@@ -719,6 +727,13 @@ final class Tab: ObservableObject, Identifiable {
         controller.addUserScript(
             WKUserScript(source: PasskeyRelay.bridge, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Web.world)
         )
+        // Full screen in this window rather than a space of its own, as in
+        // Chrome, unless Settings › General says otherwise (see Fullscreen.swift).
+        if Fullscreen.inWindow {
+            controller.addUserScript(
+                WKUserScript(source: Fullscreen.page, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+            )
+        }
         // While a script may drive Search: Claude's own tabs, and any page
         // served from this Mac, keep their console and requests from the
         // first line (see Agent.hook). Any other page gets nothing here.
