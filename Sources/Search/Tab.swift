@@ -126,9 +126,6 @@ enum Web {
         // page comes back.
         config.applicationNameForUserAgent = Web.userAgentName
         config.allowsAirPlayForMediaPlayback = true
-        // Off by default on macOS, which is why a full-screen button on a video
-        // did nothing at all: the page asks, and WebKit refuses without a word.
-        config.preferences.isElementFullscreenEnabled = true
         // On by default on macOS: a page could open a new tab, and take you
         // to it, whenever it liked — on load, on a timer. Off, window.open
         // works only from a click or a key, as Safari's pop-up blocking has
@@ -306,6 +303,31 @@ final class Tab: ObservableObject, Identifiable {
     var onZoom: ((Tab, CGFloat) -> Void)?
     /// The resolved address under the pointer, or nil when it leaves a link.
     var onLink: ((Tab, String?) -> Void)?
+    /// A page going full screen in the window, or leaving it (see Fullscreen.swift).
+    var onWholeWindow: ((Tab, Bool) -> Void)?
+    /// Full screen in the window, rather than WebKit's own in a space of its
+    /// own — which comes and goes without Search's say.
+    var inWindow = false
+
+    /// Out of full screen in the window: the page is told, and puts itself
+    /// back. The strip, the column and the window don't wait for it — a page
+    /// that doesn't answer, gone or hung, keeps nothing.
+    func leaveFullscreen() {
+        guard inWindow, let built else { return }
+        built.evaluateJavaScript("window.dispatchEvent(new Event('search-fullscreen-leave'))", in: nil, in: Web.world) { _ in }
+        fullscreenGone()
+    }
+
+    /// The page that was full screen in the window is gone without saying so
+    /// — another document in its place, a reload, its process ended, the Mac
+    /// woken with the page loaded again — and the strip, the column and the
+    /// window come back all the same. Left, they stayed hidden for good.
+    func fullscreenGone() {
+        guard immersed || inWindow else { return }
+        immersed = false
+        inWindow = false
+        onWholeWindow?(self, false)
+    }
 
     /// True while something on the page is making noise, so the row can say
     /// which tab it is coming from.
@@ -526,6 +548,8 @@ final class Tab: ObservableObject, Identifiable {
         // made with the tab, often long before its page, and a site or an
         // extension can hand over one of its own.
         FrameRate.apply(to: configuration.preferences)
+        // WebKit's own full screen, or the window's (see Fullscreen.swift).
+        Fullscreen.apply(to: configuration.preferences)
         let web = PageView(frame: .zero, configuration: configuration)
         // The trackpad pinch is WebKit's own: it magnifies what is on screen
         // and lets you move around inside it, the way pinching does everywhere
@@ -719,6 +743,14 @@ final class Tab: ObservableObject, Identifiable {
         controller.addUserScript(
             WKUserScript(source: PasskeyRelay.bridge, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Web.world)
         )
+        // Full screen in this window rather than a space of its own, as in
+        // Chrome, unless Settings › General says otherwise (see Fullscreen.swift).
+        Fullscreen.apply(to: built.configuration.preferences)
+        if Fullscreen.inWindow {
+            controller.addUserScript(
+                WKUserScript(source: Fullscreen.page, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+            )
+        }
         // While a script may drive Search: Claude's own tabs, and any page
         // served from this Mac, keep their console and requests from the
         // first line (see Agent.hook). Any other page gets nothing here.
@@ -879,7 +911,7 @@ final class Tab: ObservableObject, Identifiable {
         lastY = 0
         reader = false
         typing = false
-        immersed = false
+        fullscreenGone()
         // Sent somewhere new, a sleeping tab is simply awake again — with
         // nothing of where it was before to bring back.
         pending = nil

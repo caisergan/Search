@@ -15,6 +15,9 @@ final class Browser: NSObject, ObservableObject {
             // gone unwatched long enough to sleep is counted from here, not
             // from when it was first picked.
             guard oldValue != activeID, let old = oldValue else { return }
+            // Full screen in the window stays with its tab, however another
+            // came on screen — ⌘T, or this one closed (see Fullscreen.swift).
+            fullscreenStays()
             linkStatus.dismiss()
             tabs.first { $0.id == old }?.touch()
             // A glance belongs to the page it was taken from, and goes when
@@ -1248,6 +1251,8 @@ final class Browser: NSObject, ObservableObject {
         // Coming back to the tab whose video is out brings it home first, so
         // it is never lifted and landed in the same breath.
         if floating == tab.id { land() }
+        // A page full screen in the window stays in its tab, as in Chrome.
+        active?.leaveFullscreen()
         leaving()
         active?.left()
         activeID = tab.id
@@ -1875,6 +1880,7 @@ final class Browser: NSObject, ObservableObject {
 
     func prepare(_ tab: Tab) {
         tab.delegate = self
+        tab.onWholeWindow = { [weak self] tab, on in self?.wholeWindow(tab, on) }
         tab.onLink = { [weak self] tab, address in
             guard let self, prefs.showsLinks, tab.id == activeID else { return }
             linkStatus.show(address, over: tab.built)
@@ -2564,6 +2570,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard let tab = tab(for: webView) else { return }
+        // A new document: whatever was full screen in the window went with the old one.
+        tab.fullscreenGone()
         if tab.id == activeID { linkStatus.dismiss() }
         tab.failure = nil
         tab.typing = false

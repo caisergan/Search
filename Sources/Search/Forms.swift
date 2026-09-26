@@ -43,7 +43,18 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
                     tab?.fieldFocused(nil)
                 }
             case "fullscreen":
-                tab?.immersed = body["on"] as? Bool ?? false
+                let on = body["on"] as? Bool ?? false
+                guard let tab else { break }
+                // Full screen in the window (see Fullscreen.swift): the window
+                // too. A page made before Settings › General turned it off
+                // still has it, until reloaded.
+                if body["inWindow"] as? Bool == true {
+                    tab.inWindow = on
+                    tab.immersed = on
+                    tab.onWholeWindow?(tab, on)
+                } else {
+                    tab.immersed = on || tab.inWindow
+                }
             default:
                 break
             }
@@ -310,14 +321,27 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
       // behind it. For a frame or two ours is still on screen, and everything
       // this browser draws is white — which is the pale band across the top of
       // the animation. Knowing a moment early is enough to paint it black.
+      var inWindow = false;
       function immersed() {
-        var on = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        // The page's own full screen in the window (see Fullscreen.swift) is
+        // answered in the page's world; from here, WebKit's own says nothing.
+        var on = inWindow || !!(document.fullscreenElement || document.webkitFullscreenElement);
         window.webkit.messageHandlers.officeForms.postMessage({
           kind: 'fullscreen', on: on
         });
       }
       document.addEventListener('fullscreenchange', immersed, true);
       document.addEventListener('webkitfullscreenchange', immersed, true);
+
+      // Full screen in the window, told by the page's side of it (see
+      // Fullscreen.swift). A page could say so itself; going in is heard
+      // only just after a click or a key, as the real thing requires.
+      window.addEventListener('search-fullscreen', function (e) {
+        var on = e.detail === 'on';
+        if (on && navigator.userActivation && !navigator.userActivation.isActive) return;
+        inWindow = on;
+        window.webkit.messageHandlers.officeForms.postMessage({ kind: 'fullscreen', on: on, inWindow: true });
+      });
 
       // The asking, caught before the animation starts.
       ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen']

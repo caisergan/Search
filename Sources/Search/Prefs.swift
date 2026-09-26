@@ -354,6 +354,11 @@ final class Preferences: ObservableObject {
             AutoScroll.on = autoScroll
         }
     }
+    /// Settings › General › Full screen stays in the window (see Fullscreen.swift).
+    /// On unless set.
+    @Published var fullscreenInWindow: Bool {
+        didSet { store.set(fullscreenInWindow, forKey: "fullscreen.window") }
+    }
     /// Pages draw at 120 frames a second on a screen that can (see FrameRate.swift).
     /// Off unless asked for.
     @Published var fastPages: Bool {
@@ -523,6 +528,7 @@ final class Preferences: ObservableObject {
         let scrolls = store.bool(forKey: "autoscroll")
         autoScroll = scrolls
         AutoScroll.on = scrolls
+        fullscreenInWindow = store.object(forKey: "fullscreen.window") as? Bool ?? true
         let fast = store.bool(forKey: "pages.120")
         fastPages = fast
         FrameRate.fast = fast
