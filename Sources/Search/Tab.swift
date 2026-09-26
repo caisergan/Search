@@ -450,7 +450,7 @@ final class Tab: ObservableObject, Identifiable {
 
     /// Leaving the screen: the picture, taken from what is there now.
     func left() {
-        guard let built, built.window != nil, !isBlank, pending == nil, cover == nil else { return }
+        guard let built, built.onStage, !isBlank, pending == nil, cover == nil else { return }
         leftAt = Date()
         let shot = WKSnapshotConfiguration()
         shot.afterScreenUpdates = false
@@ -1330,17 +1330,21 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
 
 /// A web view that reads the two-finger swipe for itself.
 final class PageView: WKWebView {
-    /// Told once, the next time the view is in a window.
+    /// In a window someone can see: not waiting backstage, which is a
+    /// window too (see Backstage).
+    var onStage: Bool { window != nil && !Backstage.holds(self) }
+
+    /// Told once, the next time the view is in a window on screen.
     private var inWindow: [() -> Void] = []
 
     func whenInWindow(_ then: @escaping () -> Void) {
-        if window != nil { return then() }
+        if onStage { return then() }
         inWindow.append(then)
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil, !inWindow.isEmpty else { return }
+        guard onStage, !inWindow.isEmpty else { return }
         let waiting = inWindow
         inWindow = []
         waiting.forEach { $0() }

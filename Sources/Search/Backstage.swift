@@ -52,6 +52,12 @@ enum Backstage {
         content?.addSubview(page)
     }
 
+    /// Waiting here, rather than on screen somewhere.
+    static func holds(_ page: NSView) -> Bool {
+        guard let room else { return false }
+        return page.window === room
+    }
+
     /// Keeps waiting pages the size the stage would show them at, so the one
     /// picked next doesn't reflow as it comes back.
     static func match(_ stage: NSSize) {
