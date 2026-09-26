@@ -932,7 +932,7 @@ final class Bench {
             guard Store.testing, let window = Links.window else { answer(["error": "pages only works on a --test run"]); return }
             func onScreen(_ w: NSWindow) -> Bool { NSScreen.screens.contains { $0.frame.intersects(w.frame) } }
             if request["on"] as? Bool == true {
-                _ = room ?? makeRoom()
+                let room = Backstage.window
                 window.orderOut(nil)
                 for other in NSApp.windows where other !== room && onScreen(other) { other.orderOut(nil) }
                 NSApp.unhideWithoutActivation()
@@ -970,7 +970,7 @@ final class Bench {
                 let rect = live.convert(live.bounds, to: nil)
                 guard let chrome = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { answer(["error": "nothing drawn"]); return }
                 frame.cacheDisplay(in: frame.bounds, to: chrome)
-                let stand = room ?? makeRoom()
+                let stand = Backstage.window
                 // The tab's own page by default — as it is, reader view or
                 // things hidden included — lent to the room for the picture
                 // and handed back; or, with `fresh`, the address loaded anew.
@@ -1563,36 +1563,11 @@ final class Bench {
 
     // MARK: - the room off screen
 
-    private var room: NSWindow?
-
-    /// A page nobody is looking at has to be somewhere to be laid out at all.
-    /// The stage takes it back the moment you pick its tab, and it comes
-    /// here again when the bench next needs it.
+    /// A page nobody is looking at has to be somewhere to be laid out at all
+    /// (see Backstage). The stage takes it back the moment you pick its tab.
     private func house(_ tab: Tab) {
-        guard tab.bench, tab.web.window == nil else { return }
-        let window = room ?? makeRoom()
-        tab.web.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-        tab.web.autoresizingMask = [.width, .height]
-        window.contentView?.addSubview(tab.web)
-    }
-
-    private func makeRoom() -> NSWindow {
-        // Off every screen, and never key or main: it exists so that a web
-        // view has a window, and for nothing else.
-        let window = NSWindow(
-            contentRect: NSRect(x: -20000, y: -20000, width: 1280, height: 800),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.isReleasedWhenClosed = false
-        window.isExcludedFromWindowsMenu = true
-        window.collectionBehavior = [.transient, .ignoresCycle, .stationary]
-        window.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
-        window.hasShadow = false
-        window.orderBack(nil)
-        room = window
-        return window
+        guard tab.bench else { return }
+        Backstage.park(tab.web)
     }
 
     private func shoot(_ tab: Tab, to file: URL, width: Double?, _ answer: @escaping ([String: Any]) -> Void) {

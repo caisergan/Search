@@ -1428,6 +1428,10 @@ final class Browser: NSObject, ObservableObject {
             activeID = tab.id
             editing = false
             typed = ""
+        } else {
+            // Opened behind: laid out now, as it would be on screen, so the
+            // page — and an extension working in it — has something to work on.
+            Backstage.park(tab.web)
         }
         return tab
     }
