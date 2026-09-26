@@ -889,6 +889,8 @@ final class Browser: NSObject, ObservableObject {
         folded = prefs.sidebar && prefs.sideHides
         // Once a day, quietly: is there a newer one?
         Updater.shared.checkIfDue { [weak self] line in self?.announce(line) }
+        // Settings › General › Sync settings through iCloud Drive (see Sync.swift).
+        SettingsSync.start { [weak self] line in self?.announce(line) }
         FormRelay.passkeysOffered = prefs.passkeys
 
         // The History menu lists what the history holds, and the menu is drawn

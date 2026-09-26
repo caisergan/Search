@@ -476,6 +476,7 @@ final class Bench {
             }
             if let window = Links.window { out["lights"] = Bench.lights(of: window) }
             out["keysQuieted"] = PageView.quieted
+            out["sync"] = ["on": SettingsSync.on, "waiting": SettingsSync.waiting, "offered": SettingsSync.offered, "who": Store.settings.string(forKey: "sync.who") ?? ""]
             if let back = Tab.lastReturn { out["lastReturn"] = ["away": back.away, "shownMs": back.shown] }
             // Settings › General › Web Inspector, as each page's WebKit has it.
             let asked = NSSelectorFromString("_developerExtrasEnabled")
@@ -1375,6 +1376,19 @@ final class Bench {
                 return
             }
             extensionCommand(verb, request, browser: browser, answer)
+
+        case "sync":
+            // Settings through iCloud Drive (see Sync.swift): what it has, and
+            // on a test run its buttons — use theirs (opens again), keep mine.
+            switch request["action"] as? String ?? "" {
+            case "use" where Store.testing: SettingsSync.useTheirs()
+            case "keep" where Store.testing: SettingsSync.keepMine { browser.announce($0) }
+            case "", "state": break
+            default: answer(["error": "sync use|keep only on a --test run"]); return
+            }
+            answer(["on": SettingsSync.on, "waiting": SettingsSync.waiting, "offered": SettingsSync.offered,
+                    "another": SettingsSync.another()?.from ?? "", "who": Store.settings.string(forKey: "sync.who") ?? "",
+                    "differences": SettingsSync.differences()])
 
         case _ where verb.hasPrefix("a."):
             agent(verb, request, browser: browser, answer)

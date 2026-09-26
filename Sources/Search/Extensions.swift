@@ -157,6 +157,8 @@ final class Extensions: NSObject, ObservableObject {
                     }
                 }
                 checkForUpdates()
+                // Extensions another Mac has, asked about once (see Sync.swift).
+                SettingsSync.offerExtensions(self)
             }
         }
     }

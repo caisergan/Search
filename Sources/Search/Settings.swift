@@ -12,6 +12,7 @@ struct SettingsPanel: View {
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var shield = Shield.shared
     @State private var isDefault = Links.isDefault
+    @State private var syncing = SettingsSync.on
     @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
 
     enum Page: String, CaseIterable, Identifiable {
@@ -161,8 +162,27 @@ struct SettingsPanel: View {
 
     // MARK: - general
 
+    private var syncDetail: String {
+        guard SettingsSync.drive != nil else { return "iCloud Drive is off on this Mac — System Settings › your name › iCloud › Drive" }
+        guard syncing else { return "Settings, shortcuts, bookmarks, what you hid and your extensions, on each Mac you turn this on. Never passwords, sign-ins or history" }
+        guard let when = Store.settings.object(forKey: "sync.when") as? Date else { return "On — in iCloud Drive › Search" }
+        let who = Store.settings.string(forKey: "sync.who") ?? "this Mac"
+        return "On — last from \(who), \(when.formatted(date: .abbreviated, time: .shortened))"
+    }
+
     private var general: some View {
         Card {
+            Line("Sync settings through iCloud Drive", syncDetail) {
+                Switch(on: Binding(
+                    get: { syncing },
+                    set: { on in
+                        if on { SettingsSync.turnOn { browser.announce($0) } } else { SettingsSync.turnOff() }
+                        syncing = SettingsSync.on
+                    }
+                ))
+                .disabled(SettingsSync.drive == nil && !syncing)
+            }
+            Rule()
             Line(
                 "Open links from other apps",
                 isDefault ? "Search is the default browser on this Mac" : "Mail, Slack and the rest still send links elsewhere"
