@@ -126,7 +126,7 @@ struct Keys: Hashable, Codable {
 enum Command: String, CaseIterable, Identifiable {
     case newTab, newPrivateTab, reopenTab, openAddress, closeTab, duplicateTab
     case back, forward, nextTab, previousTab, searchTabs
-    case reload, hardReload, readingMode, floatVideo, stopSound, print, savePage
+    case reload, hardReload, emptyCacheReload, readingMode, floatVideo, stopSound, print, savePage
     case find, findNext, findPrevious
     case copyAddress, pasteAndGo, addBookmark
     case sidebar, foldSidebar
@@ -157,7 +157,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .newTab, .newPrivateTab, .reopenTab, .openAddress, .closeTab, .duplicateTab,
              .nextTab, .previousTab, .searchTabs:
             return .tabs
-        case .back, .forward, .reload, .hardReload, .readingMode, .floatVideo, .stopSound, .print, .savePage,
+        case .back, .forward, .reload, .hardReload, .emptyCacheReload, .readingMode, .floatVideo, .stopSound, .print, .savePage,
              .copyAddress, .pasteAndGo, .addBookmark:
             return .page
         case .find, .findNext, .findPrevious, .hideElements, .undoHide, .hiddenOnSite:
@@ -185,7 +185,8 @@ enum Command: String, CaseIterable, Identifiable {
         case .previousTab: return "Previous tab"
         case .searchTabs: return "Search tabs"
         case .reload: return "Reload page"
-        case .hardReload: return "Empty cache and reload"
+        case .hardReload: return "Hard reload"
+        case .emptyCacheReload: return "Empty cache and reload"
         case .readingMode: return "Reading mode"
         case .floatVideo: return "Float video"
         case .stopSound: return "Stop sound in tab"
@@ -215,7 +216,8 @@ enum Command: String, CaseIterable, Identifiable {
         }
     }
 
-    var standard: Keys {
+    /// None for a command that is only in its menu until someone gives it one.
+    var standard: Keys? {
         switch self {
         case .newTab: return Keys("t")
         case .newPrivateTab: return Keys("n", shift: true)
@@ -230,6 +232,8 @@ enum Command: String, CaseIterable, Identifiable {
         case .searchTabs: return Keys("k")
         case .reload: return Keys("r")
         case .hardReload: return Keys("r", shift: true)
+        // Rarely wanted, and slow to start: the menu, or a key of your own.
+        case .emptyCacheReload: return nil
         // ⇧⌘R until the hard reload took it, as Chrome has it.
         case .readingMode: return Keys("r", option: true)
         case .floatVideo: return Keys("p", shift: true)
@@ -360,7 +364,7 @@ final class Shortcuts: ObservableObject {
 
     func reset(_ command: Command) {
         // The default may have gone to another command meanwhile.
-        if let other = lookup[command.standard], other != command { put(other, nil) }
+        if let standard = command.standard, let other = lookup[standard], other != command { put(other, nil) }
         changed[command.rawValue] = nil
         rebuild()
         save()

@@ -2316,6 +2316,7 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func reload() { active?.reload() }
+    func hardReload() { active?.hardReload() }
     func reloadEmptied() { active?.reloadEmptied() }
     func back() { active?.back() }
     func forward() { active?.forward() }

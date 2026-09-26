@@ -145,9 +145,9 @@ TOOLS = [
     },
     {
         "name": "navigate",
-        "description": "Go to a URL in a tab, or back, forward, reload, or hard (reload past every cache — after changing a file); waits for the page to load.",
+        "description": "Go to a URL in a tab, or back, forward, reload, hard (every file checked with the server and the site's service-worker caches dropped — after changing a file, as ⇧⌘R does), or empty (the site's whole cache emptied first, for a server that says a changed file hasn't changed; slower to start); waits for the page to load.",
         "inputSchema": {"type": "object", "properties": {
-            "tabId": TAB, "url": {"type": "string", "description": "A URL, or back, forward, reload, hard."}}, "required": ["url"]},
+            "tabId": TAB, "url": {"type": "string", "description": "A URL, or back, forward, reload, hard, empty."}}, "required": ["url"]},
     },
     {
         "name": "read_page",

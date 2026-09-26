@@ -1177,13 +1177,15 @@ final class Tab: ObservableObject, Identifiable {
         return there.absoluteString == "about:blank" && pending == nil && address != nil
     }
 
-    /// The page again, as ⌘R does in Safari and Chrome: the server asked
-    /// whether each file has changed, and only what has is fetched again.
-    /// It went from the network every time, every file of it — a third
-    /// slower, and apple.com's 1.6 MB fetched as 2.5 (measured 26 Sep 2026);
-    /// Empty Cache and Reload (⇧⌘R, below) is there for a site that serves
-    /// an old version. A view that has lost its document is given the
-    /// address back instead: there is nothing else for it to reload.
+    /// The page again, as ⌘R does in Safari and Chrome: the page itself is
+    /// asked for again, and each of its files comes from the cache while the
+    /// cache may still keep it — WebKit's reload for an app built today, and
+    /// Chrome's. It went from the network every time, every file of it — a
+    /// third slower, and apple.com's 1.6 MB fetched as 2.5 (measured 26 Sep
+    /// 2026); Hard Reload (⇧⌘R, below) is there for a file that changed
+    /// before the cache let it go. A view that has lost its document is
+    /// given the address back instead: there is nothing else for it to
+    /// reload.
     func reload() {
         // A pin put down with ⌘W has no view left to reload; waking it is
         // the reload.
@@ -1194,24 +1196,69 @@ final class Tab: ObservableObject, Identifiable {
             web.reload()
         }
     }
-    /// A reload with this site's cache emptied first — what Chrome calls
-    /// Empty Cache and Hard Reload — for a site that keeps serving an old
-    /// version even to a reload that asks the server again, usually through
-    /// what a service worker cached. Only the site's caches go: its
-    /// cookies, sign-ins and stored data stay.
+    /// ⇧⌘R, for a site that may be showing an old version: every file the
+    /// page uses is checked with the server again — the page, and each
+    /// script, stylesheet and picture — and whatever changed comes down;
+    /// what hasn't is a 304 and stays. What a service worker kept for the
+    /// site is dropped first, since that copy is one a check with the
+    /// server never reaches. Its cookies, sign-ins and stored data stay.
+    ///
+    /// The check is the page's own location.reload(), asked from Search's
+    /// world where nothing of the page's can stand in for it: WKWebView's
+    /// reload() checks only the page and trusts the cache for the rest, and
+    /// reloadFromOrigin() fetches every file whole, pictures included. The
+    /// site's cache isn't emptied either: that meant reading through the
+    /// whole cache, every site's, twice before the page could start —
+    /// 0.8–1 s with 13,800 files — then fetching every file again, and the
+    /// ⌘R after it fetched them all once more. What a service worker keeps
+    /// is listed apart from the rest, in a few milliseconds. On a page a
+    /// service worker runs, WebKit fetches whole whatever the worker asks
+    /// the server about again, so there a hard reload costs what the site
+    /// weighs.
+    func hardReload() {
+        guard !wake() else { return }
+        dropping([WKWebsiteDataTypeFetchCache]) { view in
+            view.evaluateJavaScript("location.reload(); true", in: nil, in: Web.world) { result in
+                // A page that runs no script at all — sandboxed without
+                // it — still gets a reload, if a lighter one.
+                if case .failure = result { view.reload() }
+            }
+        }
+    }
+
+    /// Empty Cache and Reload, in the View menu: this site's files, what a
+    /// service worker kept and what the page holds in memory, all dropped,
+    /// then the page fetched whole from the server with any service worker
+    /// stepped past — for a site Hard Reload can't bring back, one whose
+    /// server says a file hasn't changed when it has. Its cookies, sign-ins
+    /// and stored data stay. Finding the site's files means reading through
+    /// the whole cache, so the page takes a moment to start.
     func reloadEmptied() {
         guard !wake() else { return }
-        guard let host = (built?.url ?? address)?.host(), !host.isEmpty else {
+        dropping([WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeFetchCache]) { view in
+            view.reloadFromOrigin()
+        }
+    }
+
+    /// This site's data of `types` dropped from the page's store, and then
+    /// `then` — only if the tab is still showing the page it was asked on:
+    /// closed, put to sleep or gone somewhere else while the store was busy,
+    /// it has nothing left to reload, and asking for `web` would build a
+    /// page for a tab nobody has. A view that has lost its document has no
+    /// site to drop anything for, and is given its address back.
+    private func dropping(_ types: Set<String>, then: @escaping (PageView) -> Void) {
+        guard let view = built, let host = (view.url ?? address)?.host(), !host.isEmpty else {
             reload()
             return
         }
         let site = Vault.registrable(host)
-        let store = web.configuration.websiteDataStore
-        let caches: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeFetchCache]
-        Task {
-            let records = await store.dataRecords(ofTypes: caches).filter { $0.displayName == site }
-            await store.removeData(ofTypes: caches, for: records)
-            reload()
+        let store = view.configuration.websiteDataStore
+        let page = view.url
+        Task { [weak self] in
+            let records = await store.dataRecords(ofTypes: types).filter { $0.displayName == site }
+            if !records.isEmpty { await store.removeData(ofTypes: types, for: records) }
+            guard let self, self.built === view, view.url == page else { return }
+            then(view)
         }
     }
     func stop() { web.stopLoading() }
