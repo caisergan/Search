@@ -44,9 +44,17 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
                 }
             case "fullscreen":
                 let on = body["on"] as? Bool ?? false
-                tab?.immersed = on
-                // Full screen in the window (see Fullscreen.swift): the window too.
-                if body["inWindow"] as? Bool == true, let tab { tab.onWholeWindow?(tab, on) }
+                guard let tab else { break }
+                // Full screen in the window (see Fullscreen.swift): the window
+                // too. A page made before Settings › General turned it off
+                // still has it, until reloaded.
+                if body["inWindow"] as? Bool == true {
+                    tab.inWindow = on
+                    tab.immersed = on
+                    tab.onWholeWindow?(tab, on)
+                } else {
+                    tab.immersed = on || tab.inWindow
+                }
             default:
                 break
             }

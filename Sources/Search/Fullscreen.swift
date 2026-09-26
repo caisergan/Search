@@ -11,7 +11,7 @@ import WebKit
 //
 // Chrome keeps it in the window: the element fills the window, the window
 // goes full screen if it isn't, and nothing else is made. So does Search now,
-// always — there is no going back to the other way. The page's own Fullscreen API is
+// unless Settings › General says otherwise. The page's own Fullscreen API is
 // answered in the page's world — requestFullscreen, exitFullscreen,
 // fullscreenElement, their webkit names and their events — with the element
 // put in the top layer, over everything, at the size of the window. A frame
@@ -21,12 +21,25 @@ import WebKit
 // The top of it tells Search, through its own world (see FormRelay), which
 // hides the strip and the column and takes the window full screen.
 //
-// WebKit's own full screen is off (see Tab.swift): a <video> with WebKit's
-// controls loses their full-screen button, which went to a space of its own,
-// and goes full screen in the window with a double click instead.
+// WebKit's own full screen is off while this is on (see apply): a <video>
+// with WebKit's controls loses their full-screen button, which went to a
+// space of its own, and goes full screen in the window with a double click
+// instead. Off, WebKit's own is back, and this script isn't put in pages.
 
 @MainActor
 enum Fullscreen {
+    /// Settings › General › Full screen stays in the window. On unless set.
+    nonisolated static var inWindow: Bool {
+        Store.settings.object(forKey: "fullscreen.window") as? Bool ?? true
+    }
+
+    /// WebKit's own full screen, the other way: off while pages go full
+    /// screen in the window. Before a page's view is made, and before each
+    /// page after, so a reload follows the setting.
+    static func apply(to preferences: WKPreferences) {
+        preferences.isElementFullscreenEnabled = !inWindow
+    }
+
     /// The page's side, in its own world, every frame, before its scripts.
     static let page = #"""
     (function () {
@@ -171,12 +184,13 @@ enum Fullscreen {
       }
       // A video with WebKit's own controls has no full-screen button of its
       // own now — that one went to a space of its own — so a double click on
-      // it goes full screen in the window, and back, as in Chrome.
+      // it goes full screen in the window, and back, as in Chrome. Heard as
+      // it bubbles, so a page with its own use for the double click keeps it.
       document.addEventListener('dblclick', function (e) {
         var v = e.target && e.target.closest ? e.target.closest('video') : null;
         if (!v || !v.controls || e.defaultPrevented) return;
         if (current === v) leave(false); else request.call(v);
-      }, true);
+      });
 
       // A frame in this page asks for itself, or says it has left.
       window.addEventListener('message', function (e) {
@@ -211,24 +225,43 @@ extension Browser {
     /// out of it: the window follows, and goes back as it was — full screen
     /// already, it stays so.
     func wholeWindow(_ tab: Tab, _ on: Bool) {
-        guard tab.id == activeID, let window = Links.window else { return }
-        let full = window.styleMask.contains(.fullScreen)
+        guard let window = Links.window else { return }
         if on {
-            if !full {
+            guard tab.id == activeID else { return }
+            Fullscreen.holder = tab.id
+            if !window.styleMask.contains(.fullScreen) {
                 Fullscreen.tookWindow = true
                 window.toggleFullScreen(nil)
             }
             announce("Full screen — esc to leave")
-        } else if Fullscreen.tookWindow {
-            Fullscreen.tookWindow = false
-            if full { window.toggleFullScreen(nil) }
+            Fullscreen.watch(window, browser: self)
+        } else if Fullscreen.holder == tab.id {
+            giveWindowBack()
         }
-        Fullscreen.watch(window, browser: self)
+    }
+
+    /// The window back as it was before a page took it. Also for a tab
+    /// closed while it held it, which can't say so itself.
+    func giveWindowBack() {
+        Fullscreen.holder = nil
+        guard Fullscreen.tookWindow, let window = Links.window else { return }
+        Fullscreen.tookWindow = false
+        if window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
+    }
+
+    /// Another tab on screen — picked, new, or this one closed — and the one
+    /// full screen in the window leaves it, as in Chrome.
+    func fullscreenStays() {
+        guard let holder = Fullscreen.holder, holder != activeID else { return }
+        tabs.first { $0.id == holder }?.leaveFullscreen()
+        giveWindowBack()
     }
 }
 
 extension Fullscreen {
-    /// Whether the window went full screen for a page, to go back after.
+    /// The tab whose page is full screen in the window.
+    static var holder: Tab.ID?
+    /// Whether the window went full screen for it, to go back after.
     static var tookWindow = false
     private static var watching: NSObjectProtocol?
 
@@ -239,7 +272,8 @@ extension Fullscreen {
         watching = NotificationCenter.default.addObserver(forName: NSWindow.willExitFullScreenNotification, object: window, queue: .main) { [weak browser] _ in
             MainActor.assumeIsolated {
                 tookWindow = false
-                browser?.active?.leaveFullscreen()
+                guard let browser, let holder else { return }
+                browser.tabs.first { $0.id == holder }?.leaveFullscreen()
             }
         }
     }

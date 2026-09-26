@@ -15,6 +15,9 @@ final class Browser: NSObject, ObservableObject {
             // gone unwatched long enough to sleep is counted from here, not
             // from when it was first picked.
             guard oldValue != activeID, let old = oldValue else { return }
+            // Full screen in the window stays with its tab, however another
+            // came on screen — ⌘T, or this one closed (see Fullscreen.swift).
+            fullscreenStays()
             linkStatus.dismiss()
             tabs.first { $0.id == old }?.touch()
             // A glance belongs to the page it was taken from, and goes when
