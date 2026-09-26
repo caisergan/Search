@@ -1338,9 +1338,9 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
 
 /// A web view that reads the two-finger swipe for itself.
 final class PageView: WKWebView {
-    /// In a window someone can see: not waiting backstage, which is a
-    /// window too (see Backstage).
-    var onStage: Bool { window != nil && !Backstage.holds(self) }
+    /// In a window someone can see: not waiting backstage, or in a room of
+    /// the bench's, which are windows too (see Backstage).
+    var onStage: Bool { window != nil && !Backstage.offstage(self) }
 
     /// Told once, the next time the view is in a window on screen.
     private var inWindow: [() -> Void] = []

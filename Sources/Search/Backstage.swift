@@ -28,6 +28,9 @@ enum Backstage {
         return window
     }
 
+    /// Every window made here, this one and the bench's rooms.
+    private static let rooms = NSHashTable<NSWindow>.weakObjects()
+
     /// A window far off every screen, for pages: this one, and the rooms the
     /// bench gives tabs Claude sized (see Bench.house).
     static func makeRoom(size: NSSize) -> NSWindow {
@@ -45,6 +48,7 @@ enum Backstage {
         window.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
         window.hasShadow = false
         window.orderBack(nil)
+        rooms.add(window)
         return window
     }
 
@@ -63,6 +67,12 @@ enum Backstage {
     static func holds(_ page: NSView) -> Bool {
         guard let room else { return false }
         return page.window === room
+    }
+
+    /// In a window off every screen: this one or one of the bench's rooms.
+    static func offstage(_ page: NSView) -> Bool {
+        guard let window = page.window else { return false }
+        return rooms.contains(window)
     }
 
     /// Keeps waiting pages the size the stage would show them at, so the one
