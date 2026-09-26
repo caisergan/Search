@@ -249,6 +249,12 @@ struct SettingsPanel: View {
             Line("Let a script drive Search", "A local socket for testing. Its tabs open beside yours with a flask on them and never take over — see ./bench") {
                 Switch(on: $prefs.bench)
             }
+            if prefs.bench {
+                Rule()
+                Line("Let Claude use your tabs", "Claude, through the script, can read, click and type in the tab in front and your other tabs, not only the ones it opens — never a private tab or an extension's page") {
+                    Switch(on: $prefs.claudeTabs)
+                }
+            }
         }
     }
 

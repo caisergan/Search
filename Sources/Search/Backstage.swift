@@ -23,6 +23,14 @@ enum Backstage {
     /// The window, made the first time a page needs it.
     static var window: NSWindow {
         if let room { return room }
+        let window = makeRoom(size: size)
+        room = window
+        return window
+    }
+
+    /// A window far off every screen, for pages: this one, and the rooms the
+    /// bench gives tabs Claude sized (see Bench.house).
+    static func makeRoom(size: NSSize) -> NSWindow {
         // Never key or main: it exists so that a web view has a window, and
         // for nothing else.
         let window = NSWindow(
@@ -37,7 +45,6 @@ enum Backstage {
         window.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
         window.hasShadow = false
         window.orderBack(nil)
-        room = window
         return window
     }
 

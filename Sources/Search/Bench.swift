@@ -70,25 +70,31 @@ final class Bench {
     /// nothing of yours, and scripts set them up with a defaults write.
     @MainActor
     enum Consent {
-        private static var query: [String: Any] {
-            [kSecClass as String: kSecClassGenericPassword,
-             kSecUseDataProtectionKeychain as String: true,
-             kSecAttrService as String: "com.officecommun.search.bench",
-             kSecAttrAccount as String: Store.world.map { "consent (\($0))" } ?? "consent"]
+        /// `what`: which switch — the bench's own (""), or "claude" for
+        /// Claude's use of your tabs (see Agent.swift), which a script able to
+        /// write the defaults must not be able to turn on either.
+        private static func query(_ what: String) -> [String: Any] {
+            let account = what.isEmpty ? "consent" : "consent \(what)"
+            return [kSecClass as String: kSecClassGenericPassword,
+                    kSecUseDataProtectionKeychain as String: true,
+                    kSecAttrService as String: "com.officecommun.search.bench",
+                    kSecAttrAccount as String: Store.world.map { "\(account) (\($0))" } ?? account]
         }
 
         /// The mark is there — or there is nowhere to keep one: a copy built
         /// without Search's provisioning profile has no access group, and
         /// keeps the switch as it always was.
-        static var given: Bool {
-            var asked = query
+        static var given: Bool { given("") }
+
+        static func given(_ what: String) -> Bool {
+            var asked = query(what)
             asked[kSecReturnAttributes as String] = true
             let status = SecItemCopyMatching(asked as CFDictionary, nil)
             return status == errSecSuccess || status == errSecMissingEntitlement
         }
 
-        static func grant() {
-            var item = query
+        static func grant(_ what: String = "") {
+            var item = query(what)
             item[kSecValueData as String] = Data("on".utf8)
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let status = SecItemAdd(item as CFDictionary, nil)
@@ -97,8 +103,8 @@ final class Bench {
             }
         }
 
-        static func revoke() {
-            SecItemDelete(query as CFDictionary)
+        static func revoke(_ what: String = "") {
+            SecItemDelete(query(what) as CFDictionary)
         }
     }
 
@@ -157,6 +163,8 @@ final class Bench {
         clients.values.forEach { $0.drop() }
         clients = [:]
         running = false
+        rooms.values.forEach { $0.close() }
+        rooms = [:]
         // The tabs a script left open go with it.
         if let browser {
             for tab in browser.tabs where tab.bench { browser.close(tab) }
@@ -216,7 +224,8 @@ final class Bench {
             }
             bytes.append(contentsOf: chunk[0..<count])
             // A line that never ends is not a request.
-            if bytes.count > 4_000_000 {
+            // Files Claude uploads come this way, as base64: room for 24 MB.
+            if bytes.count > 32_000_000 {
                 say(["error": "request too long"])
                 return
             }
@@ -268,7 +277,8 @@ final class Bench {
             answered = true
             given(reply)
         }
-        let patience = (request["do"] as? String) == "wait" ? (request["seconds"] as? Double ?? 30) + 5 : 25
+        let patience = (request["do"] as? String) == "wait" ? (request["seconds"] as? Double ?? 30) + 5
+            : Bench.agentPatience(request["do"] as? String ?? "", request) ?? 25
         DispatchQueue.main.asyncAfter(deadline: .now() + patience) { answer(["error": "no answer within \(Int(patience)) s"]) }
         guard let browser else {
             answer(["error": "no browser"])
@@ -1366,6 +1376,9 @@ final class Bench {
             }
             extensionCommand(verb, request, browser: browser, answer)
 
+        case _ where verb.hasPrefix("a."):
+            agent(verb, request, browser: browser, answer)
+
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
                 "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "pin", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "fold", "consent", "site", "little", "ui",
@@ -1490,11 +1503,11 @@ final class Bench {
         return browser.tabs.first { (Store.testing || $0.bench) && $0.id.uuidString.lowercased().hasPrefix(ref) }
     }
 
-    private func missing(_ request: [String: Any]) -> [String: Any] {
+    func missing(_ request: [String: Any]) -> [String: Any] {
         ["error": "no tab “\(request["id"] as? String ?? "")” — see tabs"]
     }
 
-    private func describe(_ tab: Tab) -> [String: Any] {
+    func describe(_ tab: Tab) -> [String: Any] {
         [
             "id": Bench.short(tab),
             "url": tab.address?.absoluteString ?? "",
@@ -1540,7 +1553,7 @@ final class Bench {
     }
 
     /// Once the page has stopped loading, or the time is up.
-    private func wait(for tab: Tab, until limit: Date, _ answer: @escaping ([String: Any]) -> Void) {
+    func wait(for tab: Tab, until limit: Date, _ answer: @escaping ([String: Any]) -> Void) {
         if !tab.loading, tab.address != nil, tab.failure == nil || true {
             // A beat for the document's own scripts to settle.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -1564,11 +1577,25 @@ final class Bench {
 
     // MARK: - the room off screen
 
+    /// A room of its own for each tab Claude gave a size of its own (see
+    /// Agent.swift), so that the others keep theirs.
+    var rooms: [Tab.ID: NSWindow] = [:]
+
     /// A page nobody is looking at has to be somewhere to be laid out at all
     /// (see Backstage). The stage takes it back the moment you pick its tab.
-    private func house(_ tab: Tab) {
-        guard tab.bench else { return }
-        Backstage.park(tab.web)
+    /// `any`: one of yours too, while Claude uses it.
+    func house(_ tab: Tab, any: Bool = false) {
+        guard tab.bench || any else { return }
+        guard let size = Agent.sizes[tab.id] else { Backstage.park(tab.web); return }
+        // One Claude gave a size waits in its own room at that size — also
+        // when the stage let go of it backstage, at the stage's.
+        guard tab.web.window == nil || Backstage.holds(tab.web) else { return }
+        let window = rooms[tab.id] ?? Backstage.makeRoom(size: size)
+        rooms[tab.id] = window
+        window.setContentSize(size)
+        tab.web.frame = NSRect(origin: .zero, size: size)
+        tab.web.autoresizingMask = [.width, .height]
+        window.contentView?.addSubview(tab.web)
     }
 
     private func shoot(_ tab: Tab, to file: URL, width: Double?, _ answer: @escaping ([String: Any]) -> Void) {
@@ -1601,7 +1628,7 @@ final class Bench {
     // MARK: - page-side helpers
 
     /// A JavaScript value the way JSON can carry it.
-    private static func plain(_ value: Any?) -> Any {
+    static func plain(_ value: Any?) -> Any {
         guard let value else { return NSNull() }
         if JSONSerialization.isValidJSONObject(["v": value]) { return value }
         return String(describing: value)

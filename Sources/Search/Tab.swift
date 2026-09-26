@@ -719,6 +719,14 @@ final class Tab: ObservableObject, Identifiable {
         controller.addUserScript(
             WKUserScript(source: PasskeyRelay.bridge, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Web.world)
         )
+        // While a script may drive Search: Claude's own tabs, and any page
+        // served from this Mac, keep their console and requests from the
+        // first line (see Agent.hook). Any other page gets nothing here.
+        if bench || Store.settings.bool(forKey: "bench") {
+            controller.addUserScript(
+                WKUserScript(source: Agent.hookAtStart(always: bench), injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)
+            )
+        }
         guard !css.isEmpty else { return }
         controller.addUserScript(
             WKUserScript(source: Veiling.style(css), injectionTime: .atDocumentStart, forMainFrameOnly: true, in: Web.world)
