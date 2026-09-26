@@ -157,6 +157,8 @@ final class Extensions: NSObject, ObservableObject {
                     }
                 }
                 checkForUpdates()
+                // Extensions another Mac has, asked about once (see Sync.swift).
+                SettingsSync.offerExtensions(self)
             }
         }
     }
@@ -293,7 +295,10 @@ final class Extensions: NSObject, ObservableObject {
     /// shows on a store page.
     /// `confirm: false` is for the bench in a test run only — there is no
     /// way to reach it from the real browser.
-    func install(from text: String, confirm: Bool = true) {
+    /// `approved`: an extension another Mac has, added here without asking
+    /// again if it is what it was said to be there — the same name, and no
+    /// access beyond what it was given there (see Sync.swift).
+    func install(from text: String, confirm: Bool = true, approved: (name: String, permissions: [String])? = nil) {
         guard let id = Crx.id(in: text) else {
             browser?.announce(Crx.Refused.notAnID.localizedDescription)
             return
@@ -312,7 +317,7 @@ final class Extensions: NSObject, ObservableObject {
                 let staged = Extensions.folder.appendingPathComponent(".staging-\(id)", isDirectory: true)
                 try Crx.unpack(zip, into: staged)
                 try ExtensionShims.prepare(staged, fresh: true)
-                try await admit(staged, as: id, fromStore: true, finalFolder: target, confirm: confirm || !Store.testing)
+                try await admit(staged, as: id, fromStore: true, finalFolder: target, confirm: confirm || !Store.testing, approved: approved)
             } catch {
                 browser?.announce(error.localizedDescription)
             }
@@ -480,7 +485,8 @@ final class Extensions: NSObject, ObservableObject {
 
     /// Reads what was unpacked, asks, and — on yes — moves it into place and
     /// loads it. On no, nothing is left behind.
-    private func admit(_ staged: URL, as id: String, fromStore: Bool, finalFolder: URL, confirm: Bool = true, source: URL? = nil) async throws {
+    private func admit(_ staged: URL, as id: String, fromStore: Bool, finalFolder: URL, confirm: Bool = true, source: URL? = nil,
+                       approved: (name: String, permissions: [String])? = nil) async throws {
         let files = FileManager.default
         let found: WKWebExtension
         do {
@@ -491,7 +497,10 @@ final class Extensions: NSObject, ObservableObject {
         }
         let name = found.displayName ?? id
         let wants = Extensions.describe(found, in: staged)
-        let accepted = confirm ? await ask(install: name, wants: wants, icon: found.icon(for: CGSize(width: 64, height: 64))) : true
+        // Already agreed to, on another Mac: the same extension, asking for
+        // no more than it had there.
+        let agreed = approved.map { $0.name == name && Set(Extensions.grants(found, in: staged)).isSubset(of: Set($0.permissions)) } ?? false
+        let accepted = confirm && !agreed ? await ask(install: name, wants: wants, icon: found.icon(for: CGSize(width: 64, height: 64))) : true
         guard accepted else {
             try? files.removeItem(at: staged)
             return
