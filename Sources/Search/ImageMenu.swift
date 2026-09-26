@@ -34,6 +34,9 @@ final class ImageRelay: NSObject, WKScriptMessageHandler {
       if (window.__officeImages) return;
       window.__officeImages = true;
       document.addEventListener('contextmenu', function (e) {
+        // A right-click of yours, not one the page made up: a script could
+        // otherwise put the menu up as often as it liked.
+        if (!e.isTrusted) return;
         var el = e.target;
         while (el && el.tagName !== 'IMG') el = el.parentElement;
         if (!el || !el.currentSrc || el.naturalWidth < 2) return;

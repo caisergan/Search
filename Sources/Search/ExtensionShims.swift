@@ -2620,6 +2620,12 @@ enum ExtensionShims {
         case "downloads.download":
             let spec = first as? [String: Any] ?? [:]
             guard let url = (spec["url"] as? String).flatMap(URL.init(string:)) else { throw Unsupported(what: "No url to download") }
+            // What Chrome lets an extension download: a file from the web, or
+            // one it made itself. Never a file from this Mac — file: would copy
+            // anything you can read into Downloads on an extension's say-so.
+            guard ["http", "https", "data", "blob"].contains(url.scheme?.lowercased() ?? "") else {
+                throw Unsupported(what: "Invalid URL")
+            }
             guard let web = browser.active?.built ?? browser.tabs.lazy.compactMap(\.built).first else {
                 throw Unsupported(what: "No page to download through")
             }
@@ -2637,6 +2643,10 @@ enum ExtensionShims {
                  "startTime": ISO8601DateFormatter().string(from: keep.date), "mime": ""] as [String: Any]
             }
         case "downloads.open", "downloads.show":
+            // Opening a file is a permission of its own, as in Chrome.
+            if api == "downloads.open", !allowed(id, context: context).contains("downloads.open") {
+                throw Unsupported(what: "The extension never asked for \u{201C}downloads.open\u{201D}")
+            }
             guard let index = first as? Int, browser.loot.kept.indices.contains(index - 1) else { return nil }
             let keep = browser.loot.kept[index - 1]
             if api == "downloads.open" { browser.loot.open(keep) } else { browser.loot.reveal(keep) }

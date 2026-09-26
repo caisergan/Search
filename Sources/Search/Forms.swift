@@ -200,7 +200,12 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
 
       window.__officeForms = {
         unsaved: unsaved,
-        fill: function (user, password) {
+        // Only into the site it was picked for. Between the pick and this —
+        // a keychain question can take as long as you like — the tab may
+        // have gone somewhere else, and this is the document it is in now.
+        fill: function (user, password, host) {
+          var here = location.hostname.toLowerCase().replace(/^www\\./, '').replace(/^\\[|\\]$/g, '');
+          if (host && here !== host) return false;
           var both = pair();
           if (!both) return false;
           if (both.user && !both.user.value) put(both.user, user);

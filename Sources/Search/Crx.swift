@@ -130,18 +130,23 @@ enum Crx {
         guard ditto.terminationStatus == 0,
               files.fileExists(atPath: out.appendingPathComponent("manifest.json").path)
         else { throw Refused.unpack }
-        // `ditto` keeps a symbolic link as a link, and the shim is installed
-        // by rewriting the pages a package ships: a link among them would
-        // have that rewrite land wherever it points. Nothing an extension
-        // needs is a link, so one is refused whole.
-        let carried = files.enumerator(at: out, includingPropertiesForKeys: [.isSymbolicLinkKey])
+        try refuseLinks(in: out)
+        try? files.removeItem(at: folder)
+        try files.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try files.moveItem(at: out, to: folder)
+    }
+
+    /// `ditto` and a copy keep a symbolic link as a link, and the shim is
+    /// installed by rewriting the pages a package ships: a link among them
+    /// would have that rewrite land wherever it points, and the extension
+    /// could read whatever it points at as a file of its own. Nothing an
+    /// extension needs is a link, so one is refused whole.
+    static func refuseLinks(in folder: URL) throws {
+        let carried = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey])
         while let item = carried?.nextObject() as? URL {
             guard (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true
             else { throw Refused.unpack }
         }
-        try? files.removeItem(at: folder)
-        try files.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try files.moveItem(at: out, to: folder)
     }
 
     // MARK: - pieces
