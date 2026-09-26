@@ -6,7 +6,8 @@ import WebKit
 // A page open in a tab keeps its whole content process — a hundred to three
 // hundred megabytes, running its timers, holding its sockets — for as long as
 // the tab exists. Twenty tabs is two or three gigabytes spent on the nineteen
-// nobody is looking at. So a tab left alone for half an hour gives its page
+// nobody is looking at. So a tab left alone for a while — half an hour to
+// four hours, by how much memory the Mac has — gives its page
 // back, and keeps what it takes to come back exactly where it was: its
 // history, its scroll position, and a picture to show while the page is
 // rebuilt underneath (see Tab.sleep).
@@ -16,15 +17,21 @@ import WebKit
 // with ⌘W), a tab playing sound, on a call, sending a download, holding its
 // video out in the little window, or holding something typed and not sent.
 //
-// When macOS says memory is short, the half hour shrinks: to five minutes on
-// a warning, to nothing when it is critical.
+// When macOS says memory is short, the wait shrinks: to five minutes on a
+// warning, to nothing when it is critical.
 
 extension Browser {
-    /// How long a tab has to go without being looked at. Half an hour, or
-    /// `sleep.after` in seconds — for the bench and the measurements.
+    /// How long a tab has to go without being looked at, or `sleep.after`
+    /// in seconds — for the bench and the measurements. Half an hour with
+    /// 8 GB, two hours with 16, four with more: a tab put to sleep is loaded
+    /// and drawn again from nothing when you come back to it, and a Mac with
+    /// room to spare has no reason to make you wait for that. When memory
+    /// does run short, macOS says so, and the wait shrinks as before.
     static var sleepAfter: TimeInterval {
         let set = Store.settings.double(forKey: "sleep.after")
-        return set > 0 ? set : 30 * 60
+        if set > 0 { return set }
+        let gigabytes = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
+        return gigabytes > 24 ? 4 * 3600 : gigabytes > 12 ? 2 * 3600 : 30 * 60
     }
 
     /// Started once, at launch.

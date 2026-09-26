@@ -466,6 +466,7 @@ final class Bench {
             }
             if let window = Links.window { out["lights"] = Bench.lights(of: window) }
             out["keysQuieted"] = PageView.quieted
+            if let back = Tab.lastReturn { out["lastReturn"] = ["away": back.away, "shownMs": back.shown] }
             // Settings › General › Web Inspector, as each page's WebKit has it.
             let asked = NSSelectorFromString("_developerExtrasEnabled")
             out["inspector"] = browser.tabs.compactMap { tab -> Bool? in
