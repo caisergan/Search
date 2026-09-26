@@ -19,6 +19,8 @@ enum Backstage {
     private static var room: NSWindow?
     /// The stage's size, last it was laid out.
     private static var size = NSSize(width: 1280, height: 800)
+    /// The same, for a room of Claude's that was given no size of its own.
+    static var stageSize: NSSize { size }
 
     /// The window, made the first time a page needs it.
     static var window: NSWindow {
@@ -33,10 +35,10 @@ enum Backstage {
 
     /// A window far off every screen, for pages: this one, and the rooms the
     /// bench gives tabs Claude sized (see Bench.house).
-    static func makeRoom(size: NSSize) -> NSWindow {
+    static func makeRoom(size: NSSize) -> Room {
         // Never key or main: it exists so that a web view has a window, and
-        // for nothing else.
-        let window = NSWindow(
+        // for nothing else — unless Claude is working in it (see Room).
+        let window = Room(
             contentRect: NSRect(origin: NSPoint(x: -20000, y: -20000), size: size),
             styleMask: [.borderless],
             backing: .buffered,
@@ -82,4 +84,16 @@ enum Backstage {
         size = stage
         room?.setContentSize(stage)
     }
+}
+
+/// A window off every screen that can say it is the key window: WebKit takes
+/// a page in a window that isn't key for one nobody is using — it has no
+/// focus, and a pointer moving over it sets no hover, so a menu that opens
+/// under the pointer never opens. While Claude works in a page, its room says
+/// it is key, and the page behaves as the one in front of you does (see
+/// Agent.engage). Only what asks the window itself hears it: AppKit's key
+/// window, where your keys go, is still yours.
+final class Room: NSWindow {
+    var claimsKey = false
+    override var isKeyWindow: Bool { claimsKey || super.isKeyWindow }
 }

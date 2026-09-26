@@ -554,6 +554,10 @@ final class Tab: ObservableObject, Identifiable {
         FrameRate.apply(to: configuration.preferences)
         // WebKit's own full screen, or the window's (see Fullscreen.swift).
         Fullscreen.apply(to: configuration.preferences)
+        // A tab of Claude's has no camera or microphone to ask for: a page
+        // asking would have macOS ask you whether Search may use them, on your
+        // screen, for a page you never opened (see Browser's capture question).
+        if bench { Agent.withoutCapture(configuration.preferences) }
         let web = PageView(frame: .zero, configuration: configuration)
         // The trackpad pinch is WebKit's own: it magnifies what is on screen
         // and lets you move around inside it, the way pinching does everywhere
