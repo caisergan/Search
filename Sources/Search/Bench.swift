@@ -476,6 +476,18 @@ final class Bench {
             }
             if let window = Links.window { out["lights"] = Bench.lights(of: window) }
             out["keysQuieted"] = PageView.quieted
+            // Full screen in the window (see Fullscreen.swift): the tab on
+            // screen's word, the tab holding the window, the window itself,
+            // and what the column makes of it — out, or its edge watched.
+            out["fullscreen"] = [
+                "window": Links.window?.styleMask.contains(.fullScreen) ?? false,
+                "holder": Fullscreen.holder.map { String($0.uuidString.prefix(8)).lowercased() } ?? "",
+                "tookWindow": Fullscreen.tookWindow,
+                "immersed": browser.active?.immersed ?? false,
+                "inWindow": browser.active?.inWindow ?? false,
+                "column": browser.prefs.sidebar && !browser.folded && browser.active?.immersed != true,
+                "edgeWatched": Fold.watching,
+            ] as [String: Any]
             if let back = Tab.lastReturn { out["lastReturn"] = ["away": back.away, "shownMs": back.shown] }
             // Settings › General › Web Inspector, as each page's WebKit has it.
             let asked = NSSelectorFromString("_developerExtrasEnabled")
@@ -932,6 +944,15 @@ final class Bench {
             NSApp.sendAction(action, to: item.target, from: item)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 answer(["window": NSApp.windows.map { "\(type(of: $0))" }, "hidden": NSApp.isHidden])
+            }
+
+        case "windowfs":
+            // The window in or out of full screen, as the green button does.
+            // Only on a SEARCH_PROBE run.
+            guard Store.testing, let window = Links.window else { answer(["error": "windowfs only works on a --test run"]); return }
+            window.toggleFullScreen(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                answer(["fullScreen": window.styleMask.contains(.fullScreen)])
             }
 
         case "pages":

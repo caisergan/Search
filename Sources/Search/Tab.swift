@@ -265,7 +265,11 @@ final class Tab: ObservableObject, Identifiable {
     /// True while the caret is in something on the page that takes typing.
     @Published var typing = false
     /// True while the page has taken over the screen.
-    @Published var immersed = false
+    @Published var immersed = false {
+        didSet { if immersed != oldValue { onImmersed?(self) } }
+    }
+    /// Told when the page takes the screen or gives it back (see Browser.prepare).
+    var onImmersed: ((Tab) -> Void)?
 
     /// True while this tab's page is out in the little window.
     @Published var floating = false
@@ -1232,6 +1236,7 @@ final class Tab: ObservableObject, Identifiable {
         onSwipeClose = nil
         onField = nil
         onCredentials = nil
+        onImmersed = nil
         discard()
     }
 

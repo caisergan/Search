@@ -64,6 +64,7 @@
                                        (new: into a new tab, whose page isn't built yet)
     ./bench peek URL|close             test run: the peek panel over the tab in front, as a shift-click opens it
     ./bench window                     test run: open the browser's window if a hidden probe came up without it
+    ./bench windowfs                   test run: the window in or out of full screen, as the green button does
     ./bench pages on|off               test run: let a hidden probe's pages be painted, off every screen (for picture)
     ./bench picture PATH               test run: the whole window, pages included, drawn to a PNG (start the probe hidden)
     ./bench film peek|unpeek|fold PATH [N] [SECS]  the window drawn N times while it animates → PATH-00.png… — --test runs only
@@ -266,7 +267,7 @@ def main(argv):
         request["dx"] = float(args[0])
         if len(args) > 1: request["steps"] = int(args[1])
         if len(args) > 2: request["ms"] = float(args[2])
-    elif verb == "window":
+    elif verb in ("window", "windowfs"):
         pass
     elif verb == "pages":
         if len(args) != 1 or args[0] not in ("on", "off"): sys.exit("usage: bench pages on|off")

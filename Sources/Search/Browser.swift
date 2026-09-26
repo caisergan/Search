@@ -1936,6 +1936,15 @@ final class Browser: NSObject, ObservableObject {
     func prepare(_ tab: Tab) {
         tab.delegate = self
         tab.onWholeWindow = { [weak self] tab, on in self?.wholeWindow(tab, on) }
+        // The window hears the browser, not each tab: a page giving the screen
+        // back — f on YouTube, esc — said nothing it heard, and the column and
+        // the strip stayed away, a folded column deaf to its edge, until
+        // something else happened to be said. Going in showed only because
+        // "Full screen — esc to leave" was.
+        tab.onImmersed = { [weak self] tab in
+            guard let self, tab.id == activeID else { return }
+            objectWillChange.send()
+        }
         tab.onLink = { [weak self] tab, address in
             guard let self, prefs.showsLinks, tab.id == activeID else { return }
             linkStatus.show(address, over: tab.built)
