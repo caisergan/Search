@@ -1383,6 +1383,8 @@ final class Bench {
             switch request["action"] as? String ?? "" {
             case "use" where Store.testing: SettingsSync.useTheirs()
             case "keep" where Store.testing: SettingsSync.keepMine { browser.announce($0) }
+            case "add" where Store.testing:
+                if #available(macOS 15.4, *) { SettingsSync.addOffered(Extensions.shared) }
             case "", "state": break
             default: answer(["error": "sync use|keep only on a --test run"]); return
             }

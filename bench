@@ -268,7 +268,7 @@ def main(argv):
         if len(args) > 1: request["steps"] = int(args[1])
         if len(args) > 2: request["ms"] = float(args[2])
     elif verb == "sync":
-        if len(args) > 1 or (args and args[0] not in ("state", "use", "keep")): sys.exit("usage: bench sync [state|use|keep]")
+        if len(args) > 1 or (args and args[0] not in ("state", "use", "keep", "add")): sys.exit("usage: bench sync [state|use|keep|add]")
         if args: request["action"] = args[0]
     elif verb == "window":
         pass

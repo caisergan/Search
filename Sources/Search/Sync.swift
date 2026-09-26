@@ -100,6 +100,9 @@ enum SettingsSync {
         struct Extension: Codable, Equatable {
             let id: String
             let name: String
+            /// What it was given on the Mac that has it: added elsewhere
+            /// without asking if it wants no more (see Extensions.install).
+            var permissions: [String]? = nil
         }
 
         /// What it holds, not who wrote it when: two Macs with the same
@@ -154,7 +157,9 @@ enum SettingsSync {
         if let data = try? Data(contentsOf: list),
            let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             for item in list where item["fromStore"] as? Bool == true {
-                if let id = item["id"] as? String { extensions.append(.init(id: id, name: item["name"] as? String ?? id)) }
+                if let id = item["id"] as? String {
+                    extensions.append(.init(id: id, name: item["name"] as? String ?? id, permissions: item["permissions"] as? [String]))
+                }
             }
         }
         extensions.sort { $0.id < $1.id }
@@ -330,11 +335,13 @@ enum SettingsSync {
         // A test run has nobody to ask: what would have been offered is kept for the bench.
         if Store.testing {
             offered = missing.map(\.name)
+            offeredItems = missing
             return
         }
         let alert = NSAlert()
         alert.messageText = "Add the extensions your other Mac has?"
         alert.informativeText = missing.map(\.name).joined(separator: ", ")
+            + "\n\nFrom the Chrome Web Store, with the access they have there. One that asks for more, or isn't what it says, is asked about."
         alert.addButton(withTitle: "Add")
         alert.addButton(withTitle: "Not on This Mac")
         guard alert.runModal() == .alertFirstButtonReturn else {
@@ -342,7 +349,9 @@ enum SettingsSync {
             store.set(Array(Set((store.stringArray(forKey: "sync.declined") ?? []) + missing.map(\.id))).sorted(), forKey: "sync.declined")
             return
         }
-        for item in missing { extensions.install(from: item.id) }
+        for item in missing {
+            extensions.install(from: item.id, approved: item.permissions.map { (item.name, $0) })
+        }
     }
 
     /// What differs between this Mac and the file, by setting — for the bench.
@@ -366,6 +375,16 @@ enum SettingsSync {
 
     /// The extensions last offered, in a test run (see offerExtensions).
     static var offered: [String] = []
+    static var offeredItems: [Snapshot.Extension] = []
+
+    /// A test run's Add, pressed: what was offered, added as the button would.
+    @available(macOS 15.4, *)
+    static func addOffered(_ extensions: Extensions) {
+        for item in offeredItems {
+            extensions.install(from: item.id, approved: item.permissions.map { (item.name, $0) })
+        }
+        offeredItems = []
+    }
 
     // MARK: - while open
 
