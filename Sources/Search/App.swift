@@ -12,6 +12,10 @@ struct SearchApp: App {
     /// The keys drawn beside the menus' commands, as Settings › Shortcuts has them.
     @ObservedObject private var shortcuts = Shortcuts.shared
 
+    init() {
+        Launch.mark("app")
+    }
+
     var body: some Scene {
         Window("Search", id: "browser") {
             ContentView(browser: browser)
