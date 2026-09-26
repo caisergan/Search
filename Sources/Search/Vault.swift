@@ -139,7 +139,8 @@ enum Vault {
         let touched = Store.settings.dictionary(forKey: usedKey) as? [String: Double] ?? [:]
         let used = (touched[id] ?? (row[kSecAttrComment as String] as? String).flatMap(Double.init))
             .map(Date.init(timeIntervalSince1970:))
-        let clear = (row[kSecAttrProtocol as String] as? String) == (kSecAttrProtocolHTTP as String) || touched["http\u{1}" + id] != nil
+        let clear = touched["http\u{1}" + id].map { $0 != 0 }
+            ?? ((row[kSecAttrProtocol as String] as? String) == (kSecAttrProtocolHTTP as String))
         return Login(host: host, user: user, password: "", used: used, clear: clear)
     }
 
@@ -172,12 +173,14 @@ enum Vault {
         if let used { fields[kSecAttrComment as String] = String(used.timeIntervalSince1970) }
 
         let status = SecItemUpdate(identity as CFDictionary, fields as CFDictionary)
-        if status == errSecSuccess { return true }
+        if status == errSecSuccess { untouch(host: host, user: user, time: used != nil); return true }
         guard status == errSecItemNotFound else { return false }
 
         var fresh = identity.merging(fields) { _, new in new }
         fresh[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
-        return SecItemAdd(fresh as CFDictionary, nil) == errSecSuccess
+        guard SecItemAdd(fresh as CFDictionary, nil) == errSecSuccess else { return false }
+        untouch(host: host, user: user, time: used != nil)
+        return true
     }
 
     /// It was just used to sign in, over http or https. Lists put it first
@@ -191,13 +194,28 @@ enum Vault {
     static func touch(_ login: Login) {
         var used = Store.settings.dictionary(forKey: usedKey) as? [String: Double] ?? [:]
         used[login.id] = Date().timeIntervalSince1970
-        if login.clear { used["http\u{1}" + login.id] = 1 } else { used["http\u{1}" + login.id] = nil }
+        // Kept either way: over https it overrules an item the keychain
+        // still has as http.
+        used["http\u{1}" + login.id] = login.clear ? 1 : 0
+        Store.settings.set(used, forKey: usedKey)
+    }
+
+    /// What `touch` kept for it, once the keychain item has its own again:
+    /// its http or https whenever the item is written, the time when one is
+    /// written with it or the item is deleted.
+    private static func untouch(host: String, user: String, time: Bool) {
+        let id = Login(host: host, user: user, password: "").id
+        var used = Store.settings.dictionary(forKey: usedKey) as? [String: Double] ?? [:]
+        guard used["http\u{1}" + id] != nil || (time && used[id] != nil) else { return }
+        used["http\u{1}" + id] = nil
+        if time { used[id] = nil }
         Store.settings.set(used, forKey: usedKey)
     }
 
     private static let usedKey = "passwords.used"
 
     static func forget(host: String, user: String) {
+        untouch(host: host, user: user, time: true)
         SecItemDelete([
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrServer as String: host,
