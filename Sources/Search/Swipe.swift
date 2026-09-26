@@ -79,6 +79,7 @@ enum Swipe {
       }
 
       window.addEventListener('wheel', function (e) {
+        if (!e.isTrusted) return;
         if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
         var t = taken(e), now = Date.now();
         if (t === was && now - said < 100) return;

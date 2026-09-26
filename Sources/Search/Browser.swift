@@ -339,7 +339,7 @@ final class Browser: NSObject, ObservableObject {
             announce("The keychain didn't give up the password")
             return
         }
-        tab.fill(user: login.user, password: password) { [weak self] worked in
+        tab.fill(user: login.user, password: password, on: list.host) { [weak self] worked in
             if !worked { self?.announce("Couldn't find the sign-in fields anymore") }
         }
         Vault.touch(login)

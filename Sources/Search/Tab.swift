@@ -846,9 +846,9 @@ final class Tab: ObservableObject, Identifiable {
     /// `done`, when given, hears back `false` for the one case worth saying
     /// something about: the sign-in fields that were there a moment ago,
     /// when this was offered, are gone by the time it actually runs.
-    func fill(user: String, password: String, done: ((Bool) -> Void)? = nil) {
+    func fill(user: String, password: String, on host: String, done: ((Bool) -> Void)? = nil) {
         web.evaluateInSearch(
-            "window.__officeForms && window.__officeForms.fill(`\(escape(user))`, `\(escape(password))`)"
+            "window.__officeForms && window.__officeForms.fill(`\(escape(user))`, `\(escape(password))`, `\(escape(host))`)"
         ) { result in
             done?((result as? Bool) ?? false)
         }

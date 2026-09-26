@@ -52,9 +52,12 @@ final class HoveredLink: NSObject, WKScriptMessageHandler {
             return '';
         }
 
-        addEventListener('mouseover', event => report(linkIn(event.composedPath())), { passive: true, capture: true });
+        // Only where the pointer really is. A made-up mouseover would let a
+        // page put any address it liked down there, over a link that goes
+        // somewhere else.
+        addEventListener('mouseover', event => { if (event.isTrusted) report(linkIn(event.composedPath())); }, { passive: true, capture: true });
         // Leaving the frame altogether: there is no next element to enter.
-        addEventListener('mouseout', event => { if (!event.relatedTarget) report(''); }, { passive: true, capture: true });
+        addEventListener('mouseout', event => { if (event.isTrusted && !event.relatedTarget) report(''); }, { passive: true, capture: true });
         addEventListener('pagehide', () => report(''));
     })();
     """
