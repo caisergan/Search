@@ -326,7 +326,7 @@ final class Bench {
                         "seen": arrivals.seen, "trips": arrivals.trips.count, "landings": arrivals.landings,
                         "finale": arrivals.finale.map { $0.ok ? "done" : "failed" } ?? "",
                         "button": arrivals.target.map { [Int($0.minX), Int($0.minY), Int($0.width), Int($0.height)] } ?? [],
-                        "said": browser.announcement ?? "",
+                        "said": browser.announcement ?? "", "badge": NSApp.dockTile.badgeLabel ?? "",
                         "items": downloads.items.map { item in
                     let state: String = switch item.state {
                     case .starting: "starting"

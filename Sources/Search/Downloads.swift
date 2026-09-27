@@ -125,6 +125,8 @@ final class Downloads: NSObject, ObservableObject {
 
     weak var browser: Browser?
 
+    /// The Finder, the Dock and notifications (see DownloadsMac.swift).
+    private let mac = DownloadsMac()
     private var clock: Timer?
     private var numbered = 0
     /// Something to go on with a download through when the page it came
@@ -264,6 +266,7 @@ final class Downloads: NSObject, ObservableObject {
         tick()
         save()
         ended.send(item)
+        mac.ended(item)
     }
 
     /// Off the list. The file, if it came, stays where it is.
@@ -362,6 +365,7 @@ final class Downloads: NSObject, ObservableObject {
         if held != waiting { held = waiting }
         let whole: Double? = going > 0 && sized && total > 0 ? Double(got) / Double(total) : nil
         if overall != whole { overall = whole }
+        mac.sync(items, count: going)
         if going == 0 {
             clock?.invalidate()
             clock = nil
@@ -691,6 +695,7 @@ extension Downloads: WKDownloadDelegate {
         tick()
         save()
         ended.send(item)
+        mac.ended(item)
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
@@ -709,6 +714,7 @@ extension Downloads: WKDownloadDelegate {
         tick()
         save()
         ended.send(item)
+        mac.ended(item)
     }
 
     /// Said the way a person would, rather than as an error domain.
