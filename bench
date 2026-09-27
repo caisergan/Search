@@ -46,6 +46,12 @@
                                        switch to the Nth, delete this one,
                                        two fingers DX points sideways over the column (hold: not let go yet),
                                        move this one to Nth
+    ./bench downloads [ACTION]         test run: every download, with its state, bytes and pace;
+                                       fetch ID URL through a tab, pause|resume|cancel|restart|remove N,
+                                       clear, quit as ⌘Q would without asking, list PATH (the button's
+                                       list drawn to a PNG), popover on|off, hand PATH (a file handed
+                                       over as the PDF viewer's download button hands it), pdf-save (that
+                                       button itself, pressed, on the PDF in the tab on screen)
     ./bench hit X Y [double|middle]    what a press at X Y (points from the window's top left) lands on,
                                        and whether a drag from there would move the window;
                                        double: test run, a double-click there (start the probe hidden)
@@ -268,6 +274,16 @@ def main(argv):
         request["dx"] = float(args[0])
         if len(args) > 1: request["steps"] = int(args[1])
         if len(args) > 2: request["ms"] = float(args[2])
+    elif verb == "downloads":
+        if not args: pass
+        elif args[0] == "fetch" and len(args) == 3: request["action"], request["id"], request["url"] = args
+        elif args[0] in ("pause", "resume", "cancel", "restart", "remove") and len(args) == 2:
+            request["action"], request["n"] = args[0], int(args[1])
+        elif args in (["clear"], ["quit"], ["pdf-save"]): request["action"] = args[0]
+        elif args[0] == "list" and len(args) == 2: request["action"], request["path"] = "list", os.path.abspath(args[1])
+        elif args[0] == "popover" and len(args) == 2: request["action"], request["on"] = "popover", args[1] == "on"
+        elif args[0] == "hand" and len(args) == 2: request["action"], request["path"] = "hand", os.path.abspath(args[1])
+        else: sys.exit("usage: bench downloads [fetch ID URL | pause|resume|cancel|restart|remove N | clear | quit]")
     elif verb == "sync":
         if len(args) > 1 or (args and args[0] not in ("state", "use", "keep", "add")): sys.exit("usage: bench sync [state|use|keep|add]")
         if args: request["action"] = args[0]
@@ -302,6 +318,14 @@ def main(argv):
     elif verb in ("eval", "ext-popup"):
         value = answer.get("value")
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
+    elif verb == "downloads":
+        print(f"{answer.get('count', 0)} coming in, overall {answer.get('overall', -1):.2f}; button {answer.get('button')} "
+              f"seen={answer.get('seen')} trips={answer.get('trips')} landings={answer.get('landings')} "
+              f"finale={answer.get('finale') or '-'} said={answer.get('said') or '-'} dock={answer.get('badge') or '-'}")
+        for d in answer.get("items", []):
+            left = f" {d['left']}s left" if d.get("left", -1) >= 0 else ""
+            keep = " (resumable)" if d.get("resumable") else ("" if d.get("retryable", True) else " (can't retry)")
+            print(f"  #{d['n']} {d['state']:<10} {d['received']}/{d['expected']} {d['speed']} B/s{left}{keep}  {d['name']}")
     elif verb == "tabs":
         for tab in answer.get("tabs", []):
             mark = "⚗" if tab.get("bench") else ("●" if tab.get("active") else " ")

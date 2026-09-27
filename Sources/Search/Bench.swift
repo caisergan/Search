@@ -290,6 +290,99 @@ final class Bench {
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
 
+        case "downloads":
+            // The downloads, and each one paused, resumed, cancelled, started
+            // over or taken off the list; `fetch` starts one through a tab,
+            // `quit` quits as ⌘Q would, without the question. Only on a
+            // SEARCH_PROBE run: it reads and changes what you downloaded.
+            guard Store.testing else { answer(["error": "downloads only works on a --test run"]); return }
+            let downloads = Downloads.shared
+            let item = (request["n"] as? Int).flatMap { n in downloads.items.first { $0.number == n } }
+            switch request["action"] as? String ?? "" {
+            case "fetch":
+                guard let tab = find(request, in: browser), let url = (request["url"] as? String).flatMap(URL.init(string:))
+                else { answer(missing(request)); return }
+                tab.web.startDownload(using: URLRequest(url: url)) { browser.keep($0) }
+            case "pause": item.map(downloads.pause)
+            case "resume": item.map(downloads.resume)
+            case "cancel": item.map(downloads.cancel)
+            case "restart": item.map(downloads.restart)
+            case "remove": item.map(downloads.remove)
+            case "clear": downloads.clear()
+            case "quit":
+                downloads.quitWithoutAsking()
+            case "list":
+                guard let path = request["path"] as? String,
+                      let data = downloadsListPicture()?.representation(using: .png, properties: [:])
+                else { answer(["error": "list needs a path"]); return }
+                try? data.write(to: URL(fileURLWithPath: path))
+            case "popover":
+                Arrivals.shared.listOpen = request["on"] as? Bool ?? true
+            case "pdf-save":
+                // The PDF viewer's own save button, pressed: the pointer over
+                // the PDF brings its panel up, and the last of its controls
+                // is Save. Straight to the viewer's view — a window in the
+                // background takes a first click as a click to come forward.
+                guard let web = browser.active?.built, let window = web.window,
+                      let hud = web.subviews.first(where: { "\(type(of: $0))".contains("PDFHUD") })
+                else { answer(["error": "no PDF on screen"]); return }
+                let over = web.convert(NSPoint(x: web.bounds.midX, y: web.bounds.height - 60), to: nil)
+                if let moved = NSEvent.mouseEvent(with: .mouseMoved, location: over, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) {
+                    web.mouseMoved(with: moved)
+                }
+                RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+                guard let panel = hud.layer?.sublayers?.first, let save = panel.sublayers?.last else {
+                    answer(["error": "the PDF viewer's panel didn't come up"])
+                    return
+                }
+                let spot = hud.convert(NSPoint(x: panel.frame.minX + save.frame.midX, y: panel.frame.minY + save.frame.midY), to: nil)
+                for type in [NSEvent.EventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+                    guard let event = NSEvent.mouseEvent(with: type, location: spot, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                         windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                         clickCount: type == .mouseMoved ? 0 : 1, pressure: type == .leftMouseDown ? 1 : 0)
+                    else { continue }
+                    switch type {
+                    case .leftMouseDown: hud.mouseDown(with: event)
+                    case .leftMouseUp: hud.mouseUp(with: event)
+                    default: hud.mouseMoved(with: event)
+                    }
+                }
+            case "hand":
+                // A file handed over whole, through the selector the PDF
+                // viewer's download button calls — asked for by name, as
+                // WebKit asks, so a wrong name fails here too.
+                let selector = NSSelectorFromString("_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:")
+                guard browser.responds(to: selector), let web = browser.active?.built,
+                      let path = request["path"] as? String, let data = FileManager.default.contents(atPath: path)
+                else { answer(["error": "hand needs a path, a page, and the selector answered"]); return }
+                browser.webView(web, saveDataToFile: data as NSData, suggestedFilename: (path as NSString).lastPathComponent as NSString,
+                                mimeType: "application/pdf", originatingURL: web.url as NSURL?)
+            default: break
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                let arrivals = Arrivals.shared
+                answer(["count": downloads.count, "overall": downloads.overall ?? -1,
+                        "seen": arrivals.seen, "trips": arrivals.trips.count, "landings": arrivals.landings,
+                        "finale": arrivals.finale.map { $0.ok ? "done" : "failed" } ?? "",
+                        "button": arrivals.target.map { [Int($0.minX), Int($0.minY), Int($0.width), Int($0.height)] } ?? [],
+                        "said": browser.announcement ?? "", "badge": NSApp.dockTile.badgeLabel ?? "",
+                        "items": downloads.items.map { item in
+                    let state: String = switch item.state {
+                    case .starting: "starting"
+                    case .running: "running"
+                    case .paused: "paused"
+                    case .done: "done"
+                    case .failed(let why): "failed: \(why)"
+                    case .cancelled: "cancelled"
+                    }
+                    return ["n": item.number, "name": item.name, "state": state, "received": item.received,
+                            "expected": item.expected, "speed": Int(item.speed), "left": item.remaining.map { Int($0) } ?? -1,
+                            "resumable": item.resumeData != nil, "retryable": item.retryable, "method": item.method, "there": item.there, "file": item.file?.path ?? "",
+                            "host": item.host] as [String: Any]
+                }])
+            }
+
         case "open":
             guard let url = (request["url"] as? String).flatMap(Address.url(from:)) else {
                 answer(["error": "open needs a url"])
@@ -400,14 +493,29 @@ final class Bench {
                 default: break
                 }
             }
-            view.evaluateJavaScript(Bench.locate(selector)) { value, error in
+            // `@x,y`: a point on the page rather than an element — for what
+            // isn't one, like the PDF viewer's own buttons. The pointer
+            // arrives there first, as a hand's would, which is what brings
+            // those buttons up.
+            let spotted: [Double]? = selector.hasPrefix("@")
+                ? selector.dropFirst().split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                : nil
+            let script = spotted.map { "[\($0.first ?? 0), \($0.last ?? 0)]" } ?? Bench.locate(selector)
+            view.evaluateJavaScript(script) { value, error in
                 MainActor.assumeIsolated {
-                    guard let point = value as? [Double], point.count == 2, let window = view.window else {
+                    guard let point = (value as? [Double]) ?? spotted, point.count == 2, let window = view.window else {
                         answer(["error": error?.localizedDescription ?? "nothing matches \(selector)"])
                         return
                     }
                     let local = NSPoint(x: point[0], y: view.isFlipped ? point[1] : view.bounds.height - point[1])
                     let spot = view.convert(local, to: nil)
+                    if spotted != nil, let moved = NSEvent.mouseEvent(
+                        with: .mouseMoved, location: spot, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+                    ) {
+                        view.mouseMoved(with: moved)
+                        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+                    }
                     for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                         guard let event = NSEvent.mouseEvent(
                             with: type, location: spot, modifierFlags: flags,

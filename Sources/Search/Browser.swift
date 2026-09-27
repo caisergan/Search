@@ -201,7 +201,6 @@ final class Browser: NSObject, ObservableObject {
     // MARK: - taking things off pages
 
     let curtain = Curtain()
-    let loot = Loot()
     let floater = Float()
     /// True while the pointer is picking things to hide.
     @Published private(set) var veiling = false
@@ -848,8 +847,6 @@ final class Browser: NSObject, ObservableObject {
     /// macOS saying memory is short. See Sleep.swift.
     var dozing: Timer?
     var pressure: DispatchSourceMemoryPressure?
-    /// Downloads still under way. See `keep(_:)`.
-    var downloading: [WKDownload] = []
     /// The Chrome Web Store's pages, told when installs come and go. See StoreRelay.swift.
     var storeWatch: AnyCancellable?
     private var hush: DispatchWorkItem?
@@ -877,6 +874,7 @@ final class Browser: NSObject, ObservableObject {
     override init() {
         Launch.mark("browser")
         super.init()
+        Downloads.shared.browser = self
         Shield.shared.enabled = prefs.shielded
         Shield.shared.compile()
         if #available(macOS 15.4, *) { Extensions.shared.start(for: self) }
@@ -1727,59 +1725,16 @@ final class Browser: NSObject, ObservableObject {
         typed = ""
     }
 
-    /// ⌥⌘S. The page's own file, to Downloads — a PDF open in the tab above
-    /// all, which had no way to be kept: fetched again with the tab's cookies,
-    /// as the link would have been.
+    /// ⌥⌘S. What the tab is showing, downloaded: a PDF open in it, a
+    /// picture, the page itself. Fetched again through the tab, with its
+    /// sign-ins, and kept like any download.
     func downloadPage() {
         guard let tab = active, !tab.isBlank, let url = tab.built?.url ?? tab.address,
-              ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "")
+              ["http", "https", "file", "blob", "data"].contains(url.scheme?.lowercased() ?? "")
         else { return }
         tab.web.startDownload(using: URLRequest(url: url)) { [weak self] download in
             MainActor.assumeIsolated { self?.keep(download) }
         }
-    }
-
-    /// The PDF viewer's own download button, and anything else WebKit hands
-    /// over as data to be kept. Unanswered, the button did nothing at all.
-    @objc(_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:)
-    func webView(_ webView: WKWebView, saveDataToFile data: NSData, suggestedFilename: NSString, mimeType: NSString?, originatingURL: NSURL?) {
-        // The name is the site's to suggest, and only a name: no folder of its
-        // own, nothing that climbs out of Downloads, nothing hidden.
-        var name = (suggestedFilename as String)
-            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        while name.hasPrefix(".") { name.removeFirst() }
-        if name.isEmpty { name = (originatingURL as URL?)?.lastPathComponent ?? "" }
-        if name.isEmpty || name == "/" { name = "download" }
-        if (name as NSString).pathExtension.isEmpty, (mimeType as String?) == "application/pdf" { name += ".pdf" }
-        let file: URL
-        if prefs.asksWhereToSave {
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = name
-            panel.directoryURL = downloadsFolder
-            panel.canCreateDirectories = true
-            guard panel.runModal() == .OK, let chosen = panel.url else { return }
-            file = chosen
-        } else {
-            file = Browser.free(name, in: downloadsFolder)
-        }
-        do {
-            try (data as Data).write(to: file, options: .atomic)
-        } catch {
-            announce("Couldn't save \(name)")
-            return
-        }
-        // Marked as from the internet, as WebKit marks what it downloads, so
-        // macOS asks before the file is first opened.
-        var marked = file
-        var values = URLResourceValues()
-        var quarantine: [String: Any] = [kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload,
-                                         kLSQuarantineAgentNameKey as String: "Search"]
-        if let origin = originatingURL as URL? { quarantine[kLSQuarantineDataURLKey as String] = origin }
-        values.quarantineProperties = quarantine
-        try? marked.setResourceValues(values)
-        loot.add(Keep(name: file.lastPathComponent, from: (originatingURL as URL?)?.host() ?? "", path: file.path, date: Date()))
-        announce("Saved \(file.lastPathComponent)")
     }
 
     /// ⌘P. The system's own sheet, which is also where "save as PDF" lives.
@@ -2552,6 +2507,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         didBecome download: WKDownload
     ) {
         keep(download)
+        dropIfOnlyForDownload(webView)
     }
 
     func webView(
@@ -2560,13 +2516,36 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         didBecome download: WKDownload
     ) {
         keep(download)
+        dropIfOnlyForDownload(webView)
+    }
+
+    /// A tab opened only to fetch a file — a link to it with target=_blank,
+    /// a window.open — has nothing to show once the file is on its way. It
+    /// goes, as in Safari and Chrome, and the page it came from is back on
+    /// screen. Not into the closed tabs either: there was never a page in it
+    /// to reopen. The download carries on without it.
+    private func dropIfOnlyForDownload(_ webView: WKWebView) {
+        guard let tab = tabs.first(where: { $0.built === webView }), let opener = tab.opener,
+              tab.place == .loose, !tab.bench, tabs.count > 1,
+              webView.backForwardList.currentItem == nil
+        else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let index = self.tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+            let wasActive = self.activeID == tab.id
+            tab.close()
+            self.tabs.remove(at: index)
+            if wasActive, !self.tabs.isEmpty {
+                self.select(self.tabs.first { $0.id == opener } ?? self.tabs[min(index, self.tabs.count - 1)])
+            }
+            self.writeSession(now: true)
+        }
     }
 
     /// Every download this window has going, heard from until it ends — and
-    /// counted, so a tab still sending one to disk is never put to sleep.
+    /// counted, so a tab still sending one to disk is never put to sleep
+    /// (see Downloads.swift).
     func keep(_ download: WKDownload) {
-        download.delegate = self
-        downloading.append(download)
+        Downloads.shared.track(download, page: download.webView?.url)
     }
 
     /// Without this WebKit refuses every request out of hand, and a page that
@@ -2663,6 +2642,19 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         tab.uncover(after: 0.45)
     }
 
+    /// The download button of WebKit's own PDF viewer: the file, handed
+    /// over whole. Unanswered, the button did nothing at all — a PDF opened
+    /// in a tab had no way to be kept (see Downloads.keep).
+    ///
+    /// Everything but the web view may come as nil from WebKit's side.
+    @objc(_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:)
+    func webView(_ webView: WKWebView, saveDataToFile data: NSData?, suggestedFilename: NSString?, mimeType: NSString?, originatingURL: NSURL?) {
+        guard let data else { return }
+        let source = (originatingURL as URL?) ?? webView.url
+        Downloads.shared.keep(data as Data, named: (suggestedFilename as String?) ?? "", type: mimeType as String?,
+                              from: source, page: tab(for: webView)?.address ?? source)
+    }
+
     /// The page has drawn something: a view kept out of sight until now, so
     /// as not to show the white it starts as, comes in. WebKit calls this only
     /// on a view asked to — see `PageView.holdForFirstFrame()`.
@@ -2728,80 +2720,3 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         return tabs.first { $0.built === webView }
     }
 }
-
-// MARK: - keeping files
-
-extension Browser: WKDownloadDelegate {
-    func download(
-        _ download: WKDownload,
-        decideDestinationUsing response: URLResponse,
-        suggestedFilename: String,
-        completionHandler: @escaping (URL?) -> Void
-    ) {
-        let asked = response.url.flatMap { namedDownloads.removeValue(forKey: $0) }
-        let name = asked ?? (suggestedFilename.isEmpty ? "download" : suggestedFilename)
-
-        guard !prefs.asksWhereToSave else {
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = name
-            panel.directoryURL = downloadsFolder
-            panel.canCreateDirectories = true
-            guard panel.runModal() == .OK, let url = panel.url else {
-                completionHandler(nil)
-                return
-            }
-            completionHandler(url)
-            announce("Downloading \(url.lastPathComponent)")
-            return
-        }
-
-        completionHandler(Browser.free(name, in: downloadsFolder))
-        announce("Downloading \(name)")
-    }
-
-    func downloadDidFinish(_ download: WKDownload) {
-        downloading.removeAll { $0 === download }
-        guard let file = download.progress.fileURL else {
-            announce("Download finished")
-            return
-        }
-        loot.add(
-            Keep(
-                name: file.lastPathComponent,
-                from: download.originalRequest?.url?.host() ?? "",
-                path: file.path,
-                date: Date()
-            )
-        )
-        announce("Saved \(file.lastPathComponent)")
-    }
-
-    func download(
-        _ download: WKDownload,
-        didFailWithError error: Error,
-        resumeData: Data?
-    ) {
-        downloading.removeAll { $0 === download }
-        announce("Download failed")
-    }
-
-    /// WebKit refuses to write over a file that is already there, so the name
-    /// gains a number rather than the download quietly failing.
-    static func free(_ name: String, in folder: URL) -> URL {
-        let stem = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
-        var candidate = folder.appendingPathComponent(name)
-        var n = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            let next = ext.isEmpty ? "\(stem) \(n)" : "\(stem) \(n).\(ext)"
-            candidate = folder.appendingPathComponent(next)
-            n += 1
-        }
-        return candidate
-    }
-}
-
-
-
-
-

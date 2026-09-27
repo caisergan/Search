@@ -1023,6 +1023,33 @@ enum ExtensionShims {
       define("downloads",
         ["download", "search", "pause", "resume", "cancel", "open", "show", "showDefaultFolder", "erase", "removeFile", "getFileIcon"],
         ["onCreated", "onChanged", "onErased", "onDeterminingFilename"]);
+      if (chrome.downloads && !chrome.downloads.__heard) {
+        // WebKit tells an extension nothing of downloads. The browser keeps
+        // a note of each change, read every couple of seconds while anyone
+        // listens (see Downloads.changes).
+        const heard = {};
+        let cursor = null, timer = null;
+        const read = () => native("downloads.changes", [cursor]).then((answer) => {
+          cursor = answer.cursor;
+          for (const change of answer.changes || []) {
+            const ev = heard[change.kind];
+            if (!ev) continue;
+            for (const g of [...ev.listeners]) try { g(change.body); } catch (e) { setTimeout(() => { throw e; }); }
+          }
+        }).catch(() => {});
+        for (const name of ["onCreated", "onChanged", "onErased"]) {
+          const ev = event(), add = ev.addListener;
+          heard[name] = ev;
+          ev.addListener = (f) => {
+            add(f);
+            if (timer) return;
+            read();
+            timer = setInterval(read, 2000);
+          };
+          put(chrome.downloads, name, ev);
+        }
+        put(chrome.downloads, "__heard", true);
+      }
       define("sidePanel", ["open", "setOptions", "getOptions", "setPanelBehavior", "getPanelBehavior"]);
       define("offscreen", ["createDocument", "closeDocument", "hasDocument"], [],
         { Reason: new Proxy({}, { get: (_, key) => String(key) }) });
@@ -2481,6 +2508,60 @@ enum ExtensionShims {
         return Set(asked + (Store.settings.stringArray(forKey: "extensions.granted.\(id)") ?? []))
     }
 
+    /// The download an extension means by its number.
+    private static func download(numbered value: Any?) throws -> Download {
+        guard let number = (value as? Int) ?? (value as? Double).map(Int.init),
+              let item = Downloads.shared.items.first(where: { $0.number == number })
+        else { throw Unsupported(what: "Invalid download id") }
+        return item
+    }
+
+    /// chrome.downloads' query: the fields it names, the words it looks
+    /// for, its order and its limit.
+    private static func downloadsMatching(_ query: [String: Any]) -> [Download] {
+        var found = Downloads.shared.items.filter { item in
+            let chrome = Downloads.chrome(item)
+            for key in ["id", "url", "finalUrl", "filename", "state", "paused", "exists", "danger", "mime", "error"] {
+                guard let wanted = query[key] else { continue }
+                if let wanted = wanted as? Int, key == "id" { if item.number != wanted { return false } else { continue } }
+                if "\(chrome[key] ?? "")" != "\(wanted)" { return false }
+            }
+            if let regex = query["filenameRegex"] as? String,
+               (try? NSRegularExpression(pattern: regex))?.firstMatch(in: item.file?.path ?? "", range: NSRange(location: 0, length: (item.file?.path ?? "").utf16.count)) == nil {
+                return false
+            }
+            if let regex = query["urlRegex"] as? String,
+               (try? NSRegularExpression(pattern: regex))?.firstMatch(in: item.source?.absoluteString ?? "", range: NSRange(location: 0, length: (item.source?.absoluteString ?? "").utf16.count)) == nil {
+                return false
+            }
+            // Words, each in the name or the address; a leading minus, not.
+            let words = (query["query"] as? [String]) ?? []
+            let hay = ((item.file?.path ?? item.name) + " " + (item.source?.absoluteString ?? "")).lowercased()
+            for word in words {
+                let lower = word.lowercased()
+                if lower.hasPrefix("-") ? hay.contains(lower.dropFirst()) : !hay.contains(lower) { return false }
+            }
+            return true
+        }
+        // Newest first unless asked otherwise.
+        if let order = (query["orderBy"] as? [String])?.first {
+            let backwards = order.hasPrefix("-")
+            let key = backwards ? String(order.dropFirst()) : order
+            found.sort { a, b in
+                let less: Bool = switch key {
+                case "startTime": a.started < b.started
+                case "endTime": (a.finished ?? .distantPast) < (b.finished ?? .distantPast)
+                case "bytesReceived", "fileSize", "totalBytes": a.received < b.received
+                case "filename": (a.file?.path ?? "") < (b.file?.path ?? "")
+                default: a.number < b.number
+                }
+                return backwards ? !less : less
+            }
+        }
+        if let limit = query["limit"] as? Int, limit > 0 { found = Array(found.prefix(limit)) }
+        return found
+    }
+
     private static func run(_ api: String, _ args: [Any], context: WKWebExtensionContext, owner: Extensions) async throws -> Any? {
         guard let browser = owner.browser else { throw Unsupported(what: "No browser window") }
         let first = args.first
@@ -2634,30 +2715,66 @@ enum ExtensionShims {
                 browser.namedDownloads[url] = (name as NSString).lastPathComponent
             }
             let download = await web.startDownload(using: URLRequest(url: url))
-            browser.keep(download)
-            return browser.loot.kept.count + 1
+            return Downloads.shared.track(download, page: web.url).number
         case "downloads.search":
-            return browser.loot.kept.enumerated().map { index, keep in
-                ["id": index + 1, "url": keep.url.absoluteString, "finalUrl": keep.url.absoluteString,
-                 "filename": keep.path, "state": "complete", "exists": keep.stillThere,
-                 "startTime": ISO8601DateFormatter().string(from: keep.date), "mime": ""] as [String: Any]
-            }
+            return downloadsMatching(first as? [String: Any] ?? [:]).map(Downloads.chrome)
         case "downloads.open", "downloads.show":
             // Opening a file is a permission of its own, as in Chrome.
             if api == "downloads.open", !allowed(id, context: context).contains("downloads.open") {
                 throw Unsupported(what: "The extension never asked for \u{201C}downloads.open\u{201D}")
             }
-            guard let index = first as? Int, browser.loot.kept.indices.contains(index - 1) else { return nil }
-            let keep = browser.loot.kept[index - 1]
-            if api == "downloads.open" { browser.loot.open(keep) } else { browser.loot.reveal(keep) }
+            let item = try download(numbered: first)
+            if api == "downloads.open" { Downloads.shared.open(item) } else { Downloads.shared.reveal(item) }
             return nil
         case "downloads.showDefaultFolder":
-            NSWorkspace.shared.open(browser.prefs.downloads)
+            NSWorkspace.shared.open(browser.downloadsFolder)
+            return nil
+        case "downloads.pause":
+            let item = try download(numbered: first)
+            guard item.active else { throw Unsupported(what: "Download must be in progress") }
+            Downloads.shared.pause(item)
+            return nil
+        case "downloads.resume":
+            let item = try download(numbered: first)
+            guard item.stopped else { throw Unsupported(what: "Download must be paused or interrupted") }
+            Downloads.shared.resume(item)
+            return nil
+        case "downloads.cancel":
+            let item = try download(numbered: first)
+            if item.active || item.state == .paused { Downloads.shared.cancel(item) }
             return nil
         case "downloads.erase":
-            return []
-        case "downloads.pause", "downloads.resume", "downloads.cancel", "downloads.removeFile", "downloads.getFileIcon":
-            throw Unsupported(what: "\(api) isn't available in Search yet")
+            // Off the list, as Chrome's erase: the files stay.
+            let gone = downloadsMatching(first as? [String: Any] ?? [:])
+            gone.forEach { Downloads.shared.remove($0) }
+            return gone.map(\.number)
+        case "downloads.removeFile":
+            // Into the Trash rather than gone for good; the line stays, as
+            // in Chrome, saying the file no longer exists.
+            let item = try download(numbered: first)
+            guard item.state == .done, let file = item.file, item.there else { throw Unsupported(what: "Download must be complete") }
+            try await NSWorkspace.shared.recycle([file])
+            return nil
+        case "downloads.getFileIcon":
+            let item = try download(numbered: first)
+            let size = ((args.count > 1 ? args[1] : nil) as? [String: Any])?["size"] as? Int ?? 32
+            let image = (item.there ? item.file.map { NSWorkspace.shared.icon(forFile: $0.path) } : nil) ?? FileIcon.byType(item.name)
+            let side = CGFloat(size == 16 ? 16 : 32)
+            guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(side * 2), pixelsHigh: Int(side * 2),
+                                             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+            else { return nil }
+            rep.size = NSSize(width: side, height: side)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            image.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
+            NSGraphicsContext.restoreGraphicsState()
+            guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
+            return "data:image/png;base64," + png.base64EncodedString()
+        case "downloads.changes":
+            // What the shim's onCreated, onChanged and onErased read, every
+            // couple of seconds while anyone listens (see Downloads.changes).
+            return Downloads.shared.changes(after: first as? Int)
 
         // MARK: side panel — a tab of its own, since this window has one column
         case "sidePanel.setOptions":
