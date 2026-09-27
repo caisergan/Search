@@ -560,6 +560,12 @@ extension Bench {
                             // The last way is the body as written: what it
                             // says is what the code did or couldn't.
                             guard index + 1 < ways.count else { answer(["error": Agent.said(error)]); return }
+                            // A value WebKit can't hand back came from code
+                            // that ran: tried another way, it would run twice.
+                            if (error as? WKError)?.code == .javaScriptResultTypeIsUnsupported {
+                                answer(["error": "the code ran, but its value can't be returned (a DOM node, a function, a window…) — return something plain, e.g. el.outerHTML or el.textContent"])
+                                return
+                            }
                             attempt(index + 1)
                         }
                     }
