@@ -48,6 +48,8 @@ final class Download: ObservableObject, Identifiable {
     let page: URL?
     let started: Date
     var mime: String?
+    /// How it was asked for. Only a GET can simply be asked for again.
+    var method = "GET"
 
     /// What WebKit needs to go on from where it stopped.
     var resumeData: Data?
@@ -99,6 +101,16 @@ final class Download: ObservableObject, Identifiable {
     }
 
     var host: String { source?.host() ?? page?.host() ?? "" }
+
+    /// Whether it can be taken up again: from where it stopped, or from the
+    /// start by asking for its address once more. A form's answer isn't a
+    /// GET of the same address, and a blob: address dies with its page —
+    /// those go on from where they stopped or not at all.
+    var retryable: Bool {
+        if resumeData != nil { return true }
+        guard method == "GET", let scheme = source?.scheme?.lowercased() else { return false }
+        return ["http", "https", "data", "file"].contains(scheme)
+    }
 
     /// On disk, where it was put.
     var there: Bool { file.map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
@@ -163,6 +175,7 @@ final class Downloads: NSObject, ObservableObject {
             source: task.originalRequest?.url,
             page: page ?? task.webView?.url
         )
+        item.method = task.originalRequest?.httpMethod?.uppercased() ?? "GET"
         attach(task, to: item)
         items.insert(item, at: 0)
         trim()
@@ -285,8 +298,8 @@ final class Downloads: NSObject, ObservableObject {
 
     /// From the beginning, to the same place.
     func restart(_ item: Download) {
-        guard let url = item.source, let web = carrier(for: item) else {
-            item.state = .failed("Nowhere left to download it from")
+        guard item.retryable, let url = item.source, let web = carrier(for: item) else {
+            item.state = .failed("Download it again from its page")
             return
         }
         if let task = item.task { task.cancel() }
@@ -534,7 +547,7 @@ final class Downloads: NSObject, ObservableObject {
             "fileSize": item.state == .done ? item.received : (item.expected > 0 ? item.expected : -1),
             "exists": item.state == .done ? item.there : true,
             "paused": item.state == .paused,
-            "canResume": item.state == .paused || item.failed,
+            "canResume": (item.state == .paused || item.failed) && item.retryable,
         ]
         switch item.state {
         case .starting, .running, .paused: out["state"] = "in_progress"
@@ -685,9 +698,10 @@ final class Downloads: NSObject, ObservableObject {
         var expected: Int64?
         var finished: Date?
         var mime: String?
+        var method: String?
 
         enum CodingKeys: String, CodingKey {
-            case id, number, name, from, path, date, source, page, state, error, received, expected, finished, mime
+            case id, number, name, from, path, date, source, page, state, error, received, expected, finished, mime, method
         }
 
         @MainActor init(_ item: Download) {
@@ -709,6 +723,7 @@ final class Downloads: NSObject, ObservableObject {
             expected = item.expected
             finished = item.finished
             mime = item.mime
+            method = item.method
         }
 
         /// The old list's lines have a name, a site, a path and a date, and
@@ -729,6 +744,7 @@ final class Downloads: NSObject, ObservableObject {
             expected = try box.decodeIfPresent(Int64.self, forKey: .expected)
             finished = try box.decodeIfPresent(Date.self, forKey: .finished)
             mime = try box.decodeIfPresent(String.self, forKey: .mime)
+            method = try box.decodeIfPresent(String.self, forKey: .method)
         }
     }
 
@@ -759,6 +775,7 @@ final class Downloads: NSObject, ObservableObject {
                 finished: record.finished ?? (state == .done ? record.date : nil)
             )
             item.mime = record.mime
+            item.method = record.method ?? "GET"
             if state == .paused || item.failed {
                 item.resumeData = try? Data(contentsOf: Downloads.resumeFile(for: record.id))
             }

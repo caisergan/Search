@@ -61,7 +61,8 @@ enum Bytes {
             if let left = item.remaining { parts.append(Bytes.left(left)) }
             return parts.joined(separator: " · ")
         case .paused:
-            let over = item.resumeData == nil && item.received > 0 ? " · starts over" : ""
+            let over = item.resumeData != nil || item.received == 0 ? ""
+                : item.retryable ? " · starts over" : " · can't be picked up again"
             return "Paused · \(progress(item))\(over)"
         case .done:
             guard item.there else { return "Moved or deleted" }
@@ -194,13 +195,16 @@ final class Arrivals: ObservableObject {
     }
 
     private func end(_ item: Download) {
+        // Said at the bottom only when nothing shows it arriving: no button
+        // in reach, and no icon already on its way to one.
+        let unseen = landing == nil && !leaving.contains(item.id) && !trips.contains { $0.item == item.id }
         switch item.state {
         case .done:
             if Downloads.shared.count == 0 { conclude(item, ok: true) }
-            if landing == nil { Downloads.shared.browser?.announce("Saved \(item.name)") }
+            if unseen { Downloads.shared.browser?.announce("Saved \(item.name)") }
         case .failed:
             conclude(item, ok: false)
-            if landing == nil { Downloads.shared.browser?.announce("\(item.name) couldn't be downloaded") }
+            if unseen { Downloads.shared.browser?.announce("\(item.name) couldn't be downloaded") }
         default:
             break
         }
@@ -630,12 +634,16 @@ struct DownloadRow: View {
                 Tool(symbol: "pause.fill", help: "Pause") { downloads.pause(item) }
                 Tool(symbol: "xmark", help: "Cancel") { downloads.cancel(item) }
             case .paused:
-                Tool(symbol: item.resumeData == nil ? "arrow.clockwise" : "play.fill",
-                     help: item.resumeData == nil ? "Start again" : "Resume") { downloads.resume(item) }
+                if item.retryable {
+                    Tool(symbol: item.resumeData == nil ? "arrow.clockwise" : "play.fill",
+                         help: item.resumeData == nil ? "Start again" : "Resume") { downloads.resume(item) }
+                }
                 Tool(symbol: "xmark", help: "Cancel") { downloads.cancel(item) }
             case .failed, .cancelled:
-                Tool(symbol: "arrow.clockwise", help: "Try again") { downloads.resume(item) }
-                if hovering { Tool(symbol: "minus", help: "Remove from list") { downloads.remove(item) } }
+                if item.retryable {
+                    Tool(symbol: "arrow.clockwise", help: "Try again") { downloads.resume(item) }
+                }
+                if hovering || !item.retryable { Tool(symbol: "minus", help: "Remove from list") { downloads.remove(item) } }
             case .done:
                 if hovering {
                     if item.there {
@@ -702,12 +710,16 @@ struct DownloadActions: View {
             Button("Cancel") { downloads.cancel(item) }
             Divider()
         case .paused:
-            Button(item.resumeData == nil ? "Start Again" : "Resume") { downloads.resume(item) }
+            if item.retryable {
+                Button(item.resumeData == nil ? "Start Again" : "Resume") { downloads.resume(item) }
+            }
             Button("Cancel") { downloads.cancel(item) }
             Divider()
         case .failed, .cancelled:
-            Button("Try Again") { downloads.resume(item) }
-            Divider()
+            if item.retryable {
+                Button("Try Again") { downloads.resume(item) }
+                Divider()
+            }
         case .done:
             EmptyView()
         }

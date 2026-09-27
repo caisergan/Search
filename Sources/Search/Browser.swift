@@ -2488,6 +2488,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         didBecome download: WKDownload
     ) {
         keep(download)
+        dropIfOnlyForDownload(webView)
     }
 
     func webView(
@@ -2496,6 +2497,29 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         didBecome download: WKDownload
     ) {
         keep(download)
+        dropIfOnlyForDownload(webView)
+    }
+
+    /// A tab opened only to fetch a file — a link to it with target=_blank,
+    /// a window.open — has nothing to show once the file is on its way. It
+    /// goes, as in Safari and Chrome, and the page it came from is back on
+    /// screen. Not into the closed tabs either: there was never a page in it
+    /// to reopen. The download carries on without it.
+    private func dropIfOnlyForDownload(_ webView: WKWebView) {
+        guard let tab = tabs.first(where: { $0.built === webView }), let opener = tab.opener,
+              tab.place == .loose, !tab.bench, tabs.count > 1,
+              webView.backForwardList.currentItem == nil
+        else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let index = self.tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+            let wasActive = self.activeID == tab.id
+            tab.close()
+            self.tabs.remove(at: index)
+            if wasActive, !self.tabs.isEmpty {
+                self.select(self.tabs.first { $0.id == opener } ?? self.tabs[min(index, self.tabs.count - 1)])
+            }
+            self.writeSession(now: true)
+        }
     }
 
     /// Every download this window has going, heard from until it ends — and
