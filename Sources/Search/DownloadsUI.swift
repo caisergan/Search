@@ -640,7 +640,8 @@ struct DownloadRow: View {
                 if hovering {
                     if item.there {
                         Tool(symbol: "magnifyingglass", help: "Show in Finder") { downloads.reveal(item) }
-                    } else {
+                    }
+                    if roomy || !item.there {
                         Tool(symbol: "minus", help: "Remove from list") { downloads.remove(item) }
                     }
                 }
@@ -807,37 +808,152 @@ struct Bar: View {
 
 // MARK: - the page
 
+/// ⇧⌘J: every download, newest first, by the day it started. Searched by
+/// name, site or address; narrowed to those still coming in, or those that
+/// didn't make it.
 struct DownloadsPanel: View {
     @ObservedObject var browser: Browser
     @ObservedObject var downloads: Downloads
 
-    var body: some View {
-        Plate("Downloads", width: 560, close: { browser.hoarding = false }) {
-            if downloads.items.isEmpty {
-                Card { Nothing("Nothing downloaded yet.") }
-            } else {
-                ScrollView(showsIndicators: false) {
-                    Card {
-                        ForEach(Array(downloads.items.enumerated()), id: \.element.id) { index, item in
-                            if index > 0 { Rule() }
-                            DownloadRow(item: item, roomy: true)
-                        }
-                    }
-                    .padding(.bottom, 2)
-                }
-                .frame(maxHeight: 420)
-            }
-        } foot: {
-            HStack {
-                Text(downloads.items.isEmpty ? "Files land in \(browser.downloadsFolder.lastPathComponent)"
-                     : "Clearing the list leaves the files where they are")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.muted)
-                Spacer()
-                if !downloads.items.isEmpty {
-                    Pill("Clear list") { downloads.clear() }
-                }
+    @FocusState private var hunting: Bool
+    @State private var hunt = ""
+    @State private var only = Only.all
+
+    enum Only: Hashable {
+        case all, going, failed
+
+        var title: String {
+            switch self {
+            case .all: return "All"
+            case .going: return "In progress"
+            case .failed: return "Failed"
             }
         }
+    }
+
+    var body: some View {
+        Plate("Downloads", width: 620, close: { browser.hoarding = false }) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Hunt(text: $hunt, prompt: "Search downloads", focus: $hunting)
+                    Segmented(options: [Only.all, .going, .failed].map { ($0, $0.title) }, selection: $only)
+                }
+
+                let lines = self.lines
+                if lines.isEmpty {
+                    Card { Nothing(empty) }
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(lines) { line in
+                                switch line.kind {
+                                case .day(let day):
+                                    Caption(day)
+                                        .padding(.top, line.id == lines.first?.id ? 0 : 14)
+                                        .padding(.bottom, 6)
+                                case .item(let item, let first, let last):
+                                    VStack(spacing: 0) {
+                                        if !first { Rule() }
+                                        DownloadRow(item: item, roomy: true)
+                                    }
+                                    .background(Palette.ground)
+                                    .clipShape(HistoryPanel.Slice(first: first, last: last))
+                                    .overlay(
+                                        HistoryPanel.Slice(first: first, last: last)
+                                            .strokeBorder(Palette.hairline, lineWidth: 1)
+                                            .padding(.top, first ? 0 : -1)
+                                            .padding(.bottom, last ? 0 : -1)
+                                            .clipped()
+                                    )
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
+                                }
+                            }
+                        }
+                        .padding(.bottom, 2)
+                        .animation(Motion.settle, value: lines.map(\.id))
+                    }
+                    .frame(maxHeight: 460)
+                }
+            }
+        } foot: {
+            HStack(spacing: 10) {
+                Button {
+                    NSWorkspace.shared.open(browser.downloadsFolder)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "folder").font(.system(size: 11))
+                        Text("Saving to \(browser.downloadsFolder.lastPathComponent)")
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.muted)
+                }
+                .buttonStyle(.plain)
+                .help("Open \(browser.downloadsFolder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
+                Spacer()
+                Text(summary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.muted)
+                    .contentTransition(.numericText())
+                if downloads.items.contains(where: { !$0.active && $0.state != .paused }) {
+                    Pill("Clear list") { withAnimation(Motion.settle) { downloads.clear() } }
+                        .help("Only the list: the files stay where they are")
+                }
+            }
+            .animation(Motion.settle, value: downloads.count)
+        }
+        .onAppear { hunting = true }
+    }
+
+    private var summary: String {
+        let files = downloads.items.count == 1 ? "1 download" : "\(downloads.items.count) downloads"
+        return downloads.count > 0 ? "\(files) · \(downloads.count) in progress" : files
+    }
+
+    private var empty: String {
+        if !hunt.isEmpty { return "Nothing matches." }
+        switch only {
+        case .all: return "Nothing downloaded yet. Files land in \(browser.downloadsFolder.lastPathComponent)."
+        case .going: return "Nothing is downloading."
+        case .failed: return "Nothing failed."
+        }
+    }
+
+    private var shown: [Download] {
+        let words = hunt.lowercased().split(separator: " ").map(String.init)
+        return downloads.items.filter { item in
+            switch only {
+            case .all: break
+            case .going: guard item.active || item.state == .paused else { return false }
+            case .failed: guard item.failed || item.state == .cancelled else { return false }
+            }
+            guard !words.isEmpty else { return true }
+            let hay = [item.name, item.host, item.source?.absoluteString ?? "", item.page?.absoluteString ?? ""]
+                .joined(separator: " ").lowercased()
+            return words.allSatisfy { hay.contains($0) }
+        }
+    }
+
+    /// The list as drawn: each day's name, then what started that day.
+    private var lines: [Listed] {
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: shown) { calendar.startOfDay(for: $0.started) }
+        var made: [Listed] = []
+        for day in grouped.keys.sorted(by: >) {
+            let rows = grouped[day]!.sorted { $0.started > $1.started }
+            made.append(Listed(id: "day " + day.description, kind: .day(When.day(day))))
+            for (index, item) in rows.enumerated() {
+                made.append(Listed(id: item.id.uuidString, kind: .item(item, first: index == 0, last: index == rows.count - 1)))
+            }
+        }
+        return made
+    }
+
+    struct Listed: Identifiable {
+        enum Kind {
+            case day(String)
+            case item(Download, first: Bool, last: Bool)
+        }
+        let id: String
+        let kind: Kind
     }
 }
