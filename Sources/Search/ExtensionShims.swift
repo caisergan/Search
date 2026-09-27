@@ -2628,18 +2628,16 @@ enum ExtensionShims {
                 browser.namedDownloads[url] = (name as NSString).lastPathComponent
             }
             let download = await web.startDownload(using: URLRequest(url: url))
-            browser.keep(download)
-            return browser.loot.kept.count + 1
+            return Downloads.shared.track(download, page: web.url).number
         case "downloads.search":
-            return browser.loot.kept.enumerated().map { index, keep in
-                ["id": index + 1, "url": keep.url.absoluteString, "finalUrl": keep.url.absoluteString,
-                 "filename": keep.path, "state": "complete", "exists": keep.stillThere,
-                 "startTime": ISO8601DateFormatter().string(from: keep.date), "mime": ""] as [String: Any]
+            return Downloads.shared.items.map { item in
+                ["id": item.number, "url": item.source?.absoluteString ?? "", "finalUrl": item.source?.absoluteString ?? "",
+                 "filename": item.file?.path ?? "", "state": item.state == .done ? "complete" : item.active || item.state == .paused ? "in_progress" : "interrupted",
+                 "exists": item.there, "startTime": ISO8601DateFormatter().string(from: item.started), "mime": item.mime ?? ""] as [String: Any]
             }
         case "downloads.open", "downloads.show":
-            guard let index = first as? Int, browser.loot.kept.indices.contains(index - 1) else { return nil }
-            let keep = browser.loot.kept[index - 1]
-            if api == "downloads.open" { browser.loot.open(keep) } else { browser.loot.reveal(keep) }
+            guard let number = first as? Int, let item = Downloads.shared.items.first(where: { $0.number == number }) else { return nil }
+            if api == "downloads.open" { Downloads.shared.open(item) } else { Downloads.shared.reveal(item) }
             return nil
         case "downloads.showDefaultFolder":
             NSWorkspace.shared.open(browser.prefs.downloads)

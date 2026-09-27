@@ -518,7 +518,7 @@ struct ContentView: View {
             sheet { HistoryPanel(browser: browser) } close: { browser.recalling = false }
         }
         if browser.hoarding {
-            sheet { DownloadsPanel(browser: browser, loot: browser.loot) }
+            sheet { DownloadsPanel(browser: browser, downloads: .shared) }
                 close: { browser.hoarding = false }
         }
         if browser.tuning {

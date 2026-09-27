@@ -290,6 +290,46 @@ final class Bench {
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
 
+        case "downloads":
+            // The downloads, and each one paused, resumed, cancelled, started
+            // over or taken off the list; `fetch` starts one through a tab,
+            // `quit` quits as ⌘Q would, without the question. Only on a
+            // SEARCH_PROBE run: it reads and changes what you downloaded.
+            guard Store.testing else { answer(["error": "downloads only works on a --test run"]); return }
+            let downloads = Downloads.shared
+            let item = (request["n"] as? Int).flatMap { n in downloads.items.first { $0.number == n } }
+            switch request["action"] as? String ?? "" {
+            case "fetch":
+                guard let tab = find(request, in: browser), let url = (request["url"] as? String).flatMap(URL.init(string:))
+                else { answer(missing(request)); return }
+                tab.web.startDownload(using: URLRequest(url: url)) { browser.keep($0) }
+            case "pause": item.map(downloads.pause)
+            case "resume": item.map(downloads.resume)
+            case "cancel": item.map(downloads.cancel)
+            case "restart": item.map(downloads.restart)
+            case "remove": item.map(downloads.remove)
+            case "clear": downloads.clear()
+            case "quit":
+                downloads.quitWithoutAsking()
+            default: break
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                answer(["count": downloads.count, "overall": downloads.overall ?? -1, "items": downloads.items.map { item in
+                    let state: String = switch item.state {
+                    case .starting: "starting"
+                    case .running: "running"
+                    case .paused: "paused"
+                    case .done: "done"
+                    case .failed(let why): "failed: \(why)"
+                    case .cancelled: "cancelled"
+                    }
+                    return ["n": item.number, "name": item.name, "state": state, "received": item.received,
+                            "expected": item.expected, "speed": Int(item.speed), "left": item.remaining.map { Int($0) } ?? -1,
+                            "resumable": item.resumeData != nil, "there": item.there, "file": item.file?.path ?? "",
+                            "host": item.host] as [String: Any]
+                }])
+            }
+
         case "open":
             guard let url = (request["url"] as? String).flatMap(Address.url(from:)) else {
                 answer(["error": "open needs a url"])

@@ -216,6 +216,7 @@ final class Updater: ObservableObject {
     /// running app only brings it forward. Quitting goes through NSApp so
     /// everything that is written on the way out is written, the same as ⌘Q.
     func relaunch() {
+        guard Downloads.shared.mayQuit() else { return }
         let waiter = Process()
         waiter.executableURL = URL(fileURLWithPath: "/bin/sh")
         waiter.arguments = [

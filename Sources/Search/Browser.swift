@@ -198,7 +198,6 @@ final class Browser: NSObject, ObservableObject {
     // MARK: - taking things off pages
 
     let curtain = Curtain()
-    let loot = Loot()
     let floater = Float()
     /// True while the pointer is picking things to hide.
     @Published private(set) var veiling = false
@@ -845,8 +844,6 @@ final class Browser: NSObject, ObservableObject {
     /// macOS saying memory is short. See Sleep.swift.
     var dozing: Timer?
     var pressure: DispatchSourceMemoryPressure?
-    /// Downloads still under way. See `keep(_:)`.
-    var downloading: [WKDownload] = []
     /// The Chrome Web Store's pages, told when installs come and go. See StoreRelay.swift.
     var storeWatch: AnyCancellable?
     private var hush: DispatchWorkItem?
@@ -873,6 +870,7 @@ final class Browser: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        Downloads.shared.browser = self
         Shield.shared.enabled = prefs.shielded
         Shield.shared.compile()
         if #available(macOS 15.4, *) { Extensions.shared.start(for: self) }
@@ -2488,10 +2486,10 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     }
 
     /// Every download this window has going, heard from until it ends — and
-    /// counted, so a tab still sending one to disk is never put to sleep.
+    /// counted, so a tab still sending one to disk is never put to sleep
+    /// (see Downloads.swift).
     func keep(_ download: WKDownload) {
-        download.delegate = self
-        downloading.append(download)
+        Downloads.shared.track(download, page: download.webView?.url)
     }
 
     /// Without this WebKit refuses every request out of hand, and a page that
@@ -2639,80 +2637,4 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         return tabs.first { $0.built === webView }
     }
 }
-
-// MARK: - keeping files
-
-extension Browser: WKDownloadDelegate {
-    func download(
-        _ download: WKDownload,
-        decideDestinationUsing response: URLResponse,
-        suggestedFilename: String,
-        completionHandler: @escaping (URL?) -> Void
-    ) {
-        let asked = response.url.flatMap { namedDownloads.removeValue(forKey: $0) }
-        let name = asked ?? (suggestedFilename.isEmpty ? "download" : suggestedFilename)
-
-        guard !prefs.asksWhereToSave else {
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = name
-            panel.directoryURL = downloadsFolder
-            panel.canCreateDirectories = true
-            guard panel.runModal() == .OK, let url = panel.url else {
-                completionHandler(nil)
-                return
-            }
-            completionHandler(url)
-            announce("Downloading \(url.lastPathComponent)")
-            return
-        }
-
-        completionHandler(Browser.free(name, in: downloadsFolder))
-        announce("Downloading \(name)")
-    }
-
-    func downloadDidFinish(_ download: WKDownload) {
-        downloading.removeAll { $0 === download }
-        guard let file = download.progress.fileURL else {
-            announce("Download finished")
-            return
-        }
-        loot.add(
-            Keep(
-                name: file.lastPathComponent,
-                from: download.originalRequest?.url?.host() ?? "",
-                path: file.path,
-                date: Date()
-            )
-        )
-        announce("Saved \(file.lastPathComponent)")
-    }
-
-    func download(
-        _ download: WKDownload,
-        didFailWithError error: Error,
-        resumeData: Data?
-    ) {
-        downloading.removeAll { $0 === download }
-        announce("Download failed")
-    }
-
-    /// WebKit refuses to write over a file that is already there, so the name
-    /// gains a number rather than the download quietly failing.
-    private static func free(_ name: String, in folder: URL) -> URL {
-        let stem = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
-        var candidate = folder.appendingPathComponent(name)
-        var n = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            let next = ext.isEmpty ? "\(stem) \(n)" : "\(stem) \(n).\(ext)"
-            candidate = folder.appendingPathComponent(next)
-            n += 1
-        }
-        return candidate
-    }
-}
-
-
-
-
 

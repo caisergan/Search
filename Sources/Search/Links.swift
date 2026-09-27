@@ -26,6 +26,12 @@ final class Links: NSObject, NSApplicationDelegate {
         Links.flush?()
     }
 
+    /// Downloads still coming in are asked about first, and kept to go on
+    /// with next time (see Downloads.swift).
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated { Downloads.shared.shouldQuit() }
+    }
+
     /// The nearest thing to a crash reporter a browser with no server can
     /// have: nothing is sent anywhere, but a beta with no record of what
     /// went wrong is a beta nobody can fix. One line, appended, so it
