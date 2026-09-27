@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 // What the window shows of Downloads.swift.
 //
-// A button beside the extensions, there from the first download on: a ring
+// A button beside the extensions, always there: a ring
 // round its arrow fills as everything coming in comes in, a count sits on it
 // while more than one does, and it turns to a tick when the last one lands —
 // or shakes, red, when one fails. The file's icon flies to it from where you
@@ -86,8 +86,6 @@ final class Arrivals: ObservableObject {
 
     /// The list hanging from the button.
     @Published var listOpen = false
-    /// Something was downloaded since Search opened: the button stays.
-    @Published private(set) var seen = false
     /// Icons on their way to the button.
     @Published private(set) var trips: [Trip] = []
     /// Counts up as each lands, for the button to take it.
@@ -116,7 +114,6 @@ final class Arrivals: ObservableObject {
     private var bag = Set<AnyCancellable>()
 
     private init() {
-        seen = Downloads.shared.count > 0 || Downloads.shared.held > 0
         Downloads.shared.began.sink { [weak self] in self?.launch($0) }.store(in: &bag)
         Downloads.shared.ended.sink { [weak self] in self?.end($0) }.store(in: &bag)
     }
@@ -141,14 +138,12 @@ final class Arrivals: ObservableObject {
     }
 
     private func launch(_ item: Download) {
-        let first = !seen
-        seen = true
         let icon = FileIcon.byType(item.name)
         let id = item.id
         leaving.insert(id)
-        // The button may only now be coming in: its place is known a
-        // moment after.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (first ? 0.08 : 0)) { [self] in
+        // On the next turn of the run loop, so the button's place — measured
+        // as it lays out — is the one on screen now.
+        DispatchQueue.main.async { [self] in
             leaving.remove(id)
             guard let to = landing else {
                 Downloads.shared.browser?.announce("Downloading \(item.name)")
@@ -290,22 +285,9 @@ struct DownloadsButton: View {
     @State private var shake: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var still
 
-    /// From the first download on, and while anything waits to be picked
-    /// up again.
-    static func shown(_ downloads: Downloads, _ arrivals: Arrivals) -> Bool {
-        arrivals.seen || downloads.count > 0 || downloads.held > 0 || arrivals.listOpen
-    }
-
-    var body: some View {
-        let shown = DownloadsButton.shown(downloads, arrivals)
-        ZStack {
-            if shown {
-                button
-                    .transition(.scale(scale: 0.4).combined(with: .opacity))
-            }
-        }
-        .animation(Motion.settle, value: shown)
-    }
+    /// Always there — before the first download too, the way in to the
+    /// list and the page — rather than only once something has come.
+    var body: some View { button }
 
     private var ringed: Bool { downloads.count > 0 || ending != nil }
 
@@ -439,14 +421,11 @@ struct DownloadsAndExtensions: View {
     var edge: Edge = .bottom
     var always = false
     var room = Int.max
-    @ObservedObject var downloads: Downloads = .shared
-    @ObservedObject var arrivals: Arrivals = .shared
 
     var body: some View {
         HStack(spacing: 2) {
             DownloadsButton(edge: edge)
-            let taken = DownloadsButton.shown(downloads, arrivals) && room != .max ? 1 : 0
-            ExtensionSlot(edge: edge, always: always, room: max(0, room - taken))
+            ExtensionSlot(edge: edge, always: always, room: room == .max ? room : max(0, room - 1))
         }
     }
 }
