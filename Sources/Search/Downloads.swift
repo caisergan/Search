@@ -741,8 +741,9 @@ extension Downloads: WKDownloadDelegate {
 
         // Taken up again: to where it was going. Resumed, the part that came
         // is what it goes on from; started over, it is thrown away first.
-        if let again = item.again, let file = item.file {
-            item.again = nil
+        let again = item.again
+        item.again = nil
+        if let again, let file = item.file {
             if again == .restarting { Downloads.discard(file) }
             item.state = .running
             completionHandler(file)
