@@ -73,6 +73,101 @@ struct Page: View {
     }
 }
 
+/// The line across the top of the page while it loads, when asked for in
+/// Settings › Customization.
+///
+/// A reload leaves the old page on screen until the new one is drawn, and
+/// the ring in the tab is small, and out of sight with the tabs folded away:
+/// a quick ⌘R looked like nothing happened. So the line shows every load
+/// whole, however fast. It starts a tenth of the way along, follows WebKit's
+/// estimate without ever going back, and fills the rest of the way before it
+/// fades.
+///
+/// In the Mac's accent colour, as Safari's is: it lies on the page, not on
+/// the window, and ink that is black or white with the window goes under on
+/// every page that isn't the other one.
+struct LoadingBar: View {
+    @ObservedObject var tab: Tab
+
+    /// How far across the line reaches, nought to one.
+    @State private var reach: Double = 0
+    @State private var shown = false
+    /// Counts the loads, and the moves within one, so that a move finishing
+    /// late leaves alone a line something newer has taken over.
+    @State private var load = 0
+    @State private var step = 0
+
+    var body: some View {
+        GeometryReader { space in
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: space.size.width * reach)
+        }
+        .frame(height: 2)
+        // A video filling the screen is not interrupted by it.
+        .opacity(shown && !tab.immersed ? 1 : 0)
+        .allowsHitTesting(false)
+        .onAppear {
+            // Come to a tab that is already loading: where it has got to, at once.
+            guard tab.loading else { return }
+            reach = max(tab.progress, 0.1)
+            shown = true
+            creep()
+        }
+        .onChange(of: tab.loading) { _, loading in loading ? begin() : end() }
+        .onChange(of: tab.progress) { _, progress in
+            guard tab.loading, progress > reach else { return }
+            move(to: progress, over: 0.3)
+        }
+    }
+
+    private func begin() {
+        load += 1
+        still { reach = 0; shown = true }
+        // The last load's estimate can still say one as the next one begins.
+        move(to: tab.progress < 1 ? max(tab.progress, 0.1) : 0.1, over: 0.25)
+    }
+
+    private func move(to value: Double, over time: Double) {
+        step += 1
+        let mine = step, ending = load
+        withAnimation(.easeOut(duration: time)) { reach = value } completion: {
+            guard mine == step, ending == load, tab.loading else { return }
+            creep()
+        }
+    }
+
+    /// Onward on its own while WebKit has nothing new to say — a server
+    /// taking its time says nothing for seconds, and a line standing still
+    /// that long looks stuck. A third of what is left each time, so slower
+    /// the further it gets, and never past nine tenths.
+    private func creep() {
+        guard reach < 0.9 else { return }
+        move(to: reach + (0.9 - reach) / 3, over: 5)
+    }
+
+    /// Finished, stopped or failed alike: the line is not left hanging
+    /// part of the way across.
+    private func end() {
+        guard shown else { return }
+        step += 1
+        let ending = load
+        withAnimation(.easeOut(duration: 0.2)) { reach = 1 } completion: {
+            guard ending == load else { return }
+            withAnimation(.easeOut(duration: 0.3)) { shown = false } completion: {
+                guard ending == load else { return }
+                still { reach = 0 }
+            }
+        }
+    }
+
+    private func still(_ change: () -> Void) {
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still, change)
+    }
+}
+
 /// The disc a sideways swipe brings in from the edge.
 ///
 /// White, with a hairline, like everything else that floats over a page. A

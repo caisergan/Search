@@ -26,6 +26,7 @@ in [ROADMAP.md](ROADMAP.md).
 - Glance, as in Zen: hold ⌥ and click a link to look at it over the page, in a card, instead of opening a tab. esc, ⌘W or a click beside it puts it away; the arrow beside it keeps it as a tab under the one it came from. Settings › Tabs › Glance, off by default; ⇧ or ⌘ can be the key instead.
 - How soon a hidden sidebar comes out: Settings › Tabs › Show the sidebar, under Hide the sidebar until the pointer reaches the edge. Cheetah brings it the moment the pointer touches the left edge, and slides it out faster, Human waits the short moment it always has, and Turtle waits longer, for a pointer that keeps crossing the edge on its way to the Dock.
 - Links from other apps can open in a small window of their own: the page, the site and Open in Search (⌘O), which moves it into your tabs as it is, after the pins and without loading it again. Escape or ⌘W closes it. Off unless you turn it on in Settings › General › Open links from other apps in a small window. The idea came from [@K-NRS](https://github.com/K-NRS) ([#227](https://github.com/driceroland/Search/pull/227)), after Arc's Little Arc.
+- A loading bar: a thin line in the Mac's accent colour across the top of the page, filling as it loads and fading once it's there. A reload shows it too, however quick, where the old page used to sit unchanged until the new one was drawn. Settings › Customization › Show a loading bar, off by default.
 
 ### Fixed
 

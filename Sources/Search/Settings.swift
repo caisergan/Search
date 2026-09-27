@@ -326,6 +326,10 @@ struct SettingsPanel: View {
                 .pickerStyle(.menu)
                 .fixedSize()
             }
+            Rule()
+            Line("Show a loading bar", "A thin line across the top of the page fills as it loads, reloads included") {
+                Switch(on: $prefs.showsLoading)
+            }
             if prefs.sidebar {
                 Rule()
                 Line("New tab at the foot of the sidebar", "A + in the bottom right corner, instead of the row under the last tab") {
