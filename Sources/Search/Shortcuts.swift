@@ -126,7 +126,7 @@ struct Keys: Hashable, Codable {
 enum Command: String, CaseIterable, Identifiable {
     case newTab, newPrivateTab, reopenTab, openAddress, closeTab, duplicateTab
     case back, forward, nextTab, previousTab, searchTabs
-    case reload, hardReload, readingMode, floatVideo, stopSound, print
+    case reload, hardReload, readingMode, floatVideo, stopSound, savePage, print
     case find, findNext, findPrevious
     case copyAddress, pasteAndGo, addBookmark
     case sidebar, foldSidebar
@@ -157,7 +157,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .newTab, .newPrivateTab, .reopenTab, .openAddress, .closeTab, .duplicateTab,
              .nextTab, .previousTab, .searchTabs:
             return .tabs
-        case .back, .forward, .reload, .hardReload, .readingMode, .floatVideo, .stopSound, .print,
+        case .back, .forward, .reload, .hardReload, .readingMode, .floatVideo, .stopSound, .savePage, .print,
              .copyAddress, .pasteAndGo, .addBookmark:
             return .page
         case .find, .findNext, .findPrevious, .hideElements, .undoHide, .hiddenOnSite:
@@ -189,6 +189,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .readingMode: return "Reading mode"
         case .floatVideo: return "Float video"
         case .stopSound: return "Stop sound in tab"
+        case .savePage: return "Download this page"
         case .print: return "Print"
         case .find: return "Find on page"
         case .findNext: return "Find next"
@@ -233,6 +234,9 @@ enum Command: String, CaseIterable, Identifiable {
         case .readingMode: return Keys("r", option: true)
         case .floatVideo: return Keys("p", shift: true)
         case .stopSound: return Keys("m", shift: true)
+        // ⌘S folds the tabs away and ⇧⌘S moves them to the side, so the
+        // save is one key over from both.
+        case .savePage: return Keys("s", option: true)
         case .print: return Keys("p")
         case .find: return Keys("f")
         case .findNext: return Keys("g")

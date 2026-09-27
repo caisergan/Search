@@ -45,6 +45,9 @@ struct SearchApp: App {
             CommandGroup(replacing: .printItem) {
                 Button("Share…") { browser.share() }
                     .disabled(browser.active?.isBlank ?? true)
+                Button("Download Page") { browser.downloadPage() }
+                    .keyboardShortcut(shortcuts.menu(.savePage))
+                    .disabled(browser.active?.isBlank ?? true)
                 Button("Print…") { browser.printPage() }
                     .keyboardShortcut(shortcuts.menu(.print))
                     .disabled(browser.active?.isBlank ?? true)
@@ -1113,6 +1116,7 @@ struct ContentView: View {
         case .readingMode: browser.toggleReader()
         case .floatVideo: browser.toggleFloat()
         case .stopSound: browser.pauseMedia()
+        case .savePage: browser.downloadPage()
         case .print: browser.printPage()
         case .find: browser.openFind()
         case .findNext: browser.look(forward: true)

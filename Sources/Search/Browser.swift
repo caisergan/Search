@@ -1717,6 +1717,19 @@ final class Browser: NSObject, ObservableObject {
     }
 
     /// ⌘P. The system's own sheet, which is also where "save as PDF" lives.
+    /// ⌥⌘S. What the tab is showing, downloaded: a PDF open in it, a
+    /// picture, the page itself. Fetched again through the tab, with its
+    /// sign-ins, and kept like any download.
+    func downloadPage() {
+        guard let tab = active, !tab.isBlank, let url = tab.address,
+              ["http", "https", "file", "blob", "data"].contains(url.scheme?.lowercased() ?? "")
+        else { return }
+        let web = tab.web
+        web.startDownload(using: URLRequest(url: url)) { [weak self] download in
+            self?.keep(download)
+        }
+    }
+
     func printPage() {
         guard let tab = active, !tab.isBlank, let window = NSApp.keyWindow else { return }
         let info = NSPrintInfo.shared
@@ -2571,6 +2584,15 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // A tab waking from sleep: the new document is in, and a moment
         // after it is on screen the picture of the old one can go.
         tab.uncover(after: 0.45)
+    }
+
+    /// The download button of WebKit's own PDF viewer: the file, handed
+    /// over whole. Unanswered, the button did nothing at all — a PDF opened
+    /// in a tab had no way to be kept (see Downloads.keep).
+    @objc(_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:)
+    func webView(_ webView: WKWebView, saveDataToFile data: Data, suggestedFilename: String, mimeType: String, originatingURL: URL?) {
+        let source = originatingURL ?? webView.url
+        Downloads.shared.keep(data, named: suggestedFilename, from: source, page: tab(for: webView)?.address ?? source)
     }
 
     /// The page has drawn something: a view kept out of sight until now, so

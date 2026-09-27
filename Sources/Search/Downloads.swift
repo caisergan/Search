@@ -174,6 +174,60 @@ final class Downloads: NSObject, ObservableObject {
         return item
     }
 
+    /// A file handed over whole rather than fetched — the PDF viewer's own
+    /// download button — written where downloads go and listed as one that
+    /// has come, arriving at the button like any other.
+    func keep(_ data: Data, named suggested: String, from source: URL?, page: URL?) {
+        let name = suggested.isEmpty ? (source?.lastPathComponent ?? "download") : suggested
+        let folder = browser?.downloadsFolder
+            ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        var file = free(name, in: folder)
+        if browser?.prefs.asksWhereToSave == true {
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = name
+            panel.directoryURL = folder
+            panel.canCreateDirectories = true
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            if FileManager.default.fileExists(atPath: url.path) { try? FileManager.default.removeItem(at: url) }
+            file = url
+        }
+        do {
+            try data.write(to: file, options: .withoutOverwriting)
+        } catch {
+            browser?.announce("Couldn't save \(name)")
+            return
+        }
+        // Marked as from the web, as WebKit marks what it downloads itself.
+        var values = URLResourceValues()
+        values.quarantineProperties = [
+            kLSQuarantineAgentNameKey as String: "Search",
+            kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload as String,
+        ].merging(source.map { [kLSQuarantineDataURLKey as String: $0] } ?? [:]) { a, _ in a }
+            .merging(page.map { [kLSQuarantineOriginURLKey as String: $0] } ?? [:]) { a, _ in a }
+        try? file.setResourceValues(values)
+
+        numbered += 1
+        let size = Int64(data.count)
+        let item = Download(
+            number: numbered, name: file.lastPathComponent, file: file, state: .running,
+            received: 0, expected: size, source: source, page: page
+        )
+        items.insert(item, at: 0)
+        trim()
+        if heard {
+            told[item.id] = fields(item)
+            note("onCreated", Downloads.chrome(item))
+        }
+        began.send(item)
+        item.state = .done
+        item.received = size
+        item.finished = Date()
+        tick()
+        save()
+        ended.send(item)
+        mac.ended(item)
+    }
+
     private func attach(_ task: WKDownload, to item: Download) {
         task.delegate = self
         item.task = task

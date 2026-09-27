@@ -318,6 +318,16 @@ final class Bench {
                 try? data.write(to: URL(fileURLWithPath: path))
             case "popover":
                 Arrivals.shared.listOpen = request["on"] as? Bool ?? true
+            case "hand":
+                // A file handed over whole, through the selector the PDF
+                // viewer's download button calls — asked for by name, as
+                // WebKit asks, so a wrong name fails here too.
+                let selector = NSSelectorFromString("_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:")
+                guard browser.responds(to: selector), let web = browser.active?.built,
+                      let path = request["path"] as? String, let data = FileManager.default.contents(atPath: path)
+                else { answer(["error": "hand needs a path, a page, and the selector answered"]); return }
+                browser.webView(web, saveDataToFile: data, suggestedFilename: (path as NSString).lastPathComponent,
+                                mimeType: "application/pdf", originatingURL: web.url)
             default: break
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -453,14 +463,29 @@ final class Bench {
                 default: break
                 }
             }
-            view.evaluateJavaScript(Bench.locate(selector)) { value, error in
+            // `@x,y`: a point on the page rather than an element — for what
+            // isn't one, like the PDF viewer's own buttons. The pointer
+            // arrives there first, as a hand's would, which is what brings
+            // those buttons up.
+            let spotted: [Double]? = selector.hasPrefix("@")
+                ? selector.dropFirst().split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                : nil
+            let script = spotted.map { "[\($0.first ?? 0), \($0.last ?? 0)]" } ?? Bench.locate(selector)
+            view.evaluateJavaScript(script) { value, error in
                 MainActor.assumeIsolated {
-                    guard let point = value as? [Double], point.count == 2, let window = view.window else {
+                    guard let point = (value as? [Double]) ?? spotted, point.count == 2, let window = view.window else {
                         answer(["error": error?.localizedDescription ?? "nothing matches \(selector)"])
                         return
                     }
                     let local = NSPoint(x: point[0], y: view.isFlipped ? point[1] : view.bounds.height - point[1])
                     let spot = view.convert(local, to: nil)
+                    if spotted != nil, let moved = NSEvent.mouseEvent(
+                        with: .mouseMoved, location: spot, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+                    ) {
+                        view.mouseMoved(with: moved)
+                        RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+                    }
                     for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                         guard let event = NSEvent.mouseEvent(
                             with: type, location: spot, modifierFlags: flags,
