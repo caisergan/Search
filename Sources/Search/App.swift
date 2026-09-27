@@ -403,6 +403,11 @@ struct ContentView: View {
     private var stage: some View {
         if let tab = browser.active {
             Page(tab: tab, corner: carded ? Theme.corner : 0)
+                .overlay(alignment: .top) {
+                    // One line per tab: another tab's is not what this one
+                    // grows from.
+                    if browser.prefs.showsLoading { LoadingBar(tab: tab).id(tab.id) }
+                }
                 .overlay {
                     if browser.prefs.showsLinks { LinkBubble(status: browser.linkStatus) }
                 }
