@@ -166,6 +166,10 @@ final class Downloads: NSObject, ObservableObject {
         attach(task, to: item)
         items.insert(item, at: 0)
         trim()
+        if heard {
+            told[item.id] = fields(item)
+            note("onCreated", Downloads.chrome(item))
+        }
         tick()
         return item
     }
@@ -273,16 +277,26 @@ final class Downloads: NSObject, ObservableObject {
     func remove(_ item: Download) {
         if item.active || item.state == .paused { cancel(item) }
         items.removeAll { $0.id == item.id }
+        erased([item])
         tick()
         save()
+    }
+
+    private func erased(_ gone: [Download]) {
+        for item in gone {
+            told[item.id] = nil
+            note("onErased", item.number)
+        }
     }
 
     /// Everything not still coming in, off the list.
     func clear() {
         let going = items.filter { $0.active || $0.state == .paused }
         let ids = Set(going.map(\.id))
-        items.filter { !ids.contains($0.id) }.forEach { forgetResumeFile($0) }
+        let leaving = items.filter { !ids.contains($0.id) }
+        leaving.forEach { forgetResumeFile($0) }
         items = going
+        erased(leaving)
         tick()
         save()
     }
@@ -366,6 +380,7 @@ final class Downloads: NSObject, ObservableObject {
         let whole: Double? = going > 0 && sized && total > 0 ? Double(got) / Double(total) : nil
         if overall != whole { overall = whole }
         mac.sync(items, count: going)
+        report()
         if going == 0 {
             clock?.invalidate()
             clock = nil
@@ -381,6 +396,102 @@ final class Downloads: NSObject, ObservableObject {
         let pace = Double(item.received - first.bytes) / (now - first.time)
         let eased = item.speed == 0 ? pace : item.speed * 0.7 + pace * 0.3
         if abs(eased - item.speed) > 1 { item.speed = max(0, eased) }
+    }
+
+    // MARK: - what extensions hear
+
+    /// Changes worth telling an extension (chrome.downloads' onCreated,
+    /// onChanged, onErased), numbered, the last two hundred. Kept only once
+    /// an extension has asked: nobody listening, nothing written down.
+    private var journal: [(seq: Int, kind: String, body: Any)] = []
+    private var seq = 0
+    private var heard = false
+    /// What each download last looked like to extensions, to say what changed.
+    private var told: [UUID: [String: AnyHashable]] = [:]
+
+    /// What happened after `cursor`, and where that leaves it. Asked with
+    /// none, the answer is only where things stand: a listener hears what
+    /// happens from now on.
+    func changes(after cursor: Int?) -> [String: Any] {
+        if !heard {
+            heard = true
+            for item in items { told[item.id] = fields(item) }
+        }
+        guard let cursor else { return ["cursor": seq, "changes": []] }
+        let news = journal.filter { $0.seq > cursor }.map { ["kind": $0.kind, "body": $0.body] as [String: Any] }
+        return ["cursor": seq, "changes": news]
+    }
+
+    private func note(_ kind: String, _ body: Any) {
+        guard heard else { return }
+        seq += 1
+        journal.append((seq, kind, body))
+        if journal.count > 200 { journal.removeFirst(journal.count - 200) }
+    }
+
+    /// What has changed about each download since extensions last heard,
+    /// as Chrome's delta: each field's previous and current value.
+    private func report() {
+        guard heard else { return }
+        for item in items {
+            let now = fields(item)
+            guard let was = told[item.id] else {
+                told[item.id] = now
+                continue
+            }
+            guard was != now else { continue }
+            var delta: [String: Any] = ["id": item.number]
+            for (key, value) in now where was[key] != value {
+                var change: [String: Any] = ["current": value.base]
+                if let old = was[key] { change["previous"] = old.base }
+                delta[key] = change
+            }
+            told[item.id] = now
+            note("onChanged", delta)
+        }
+    }
+
+    /// The fields Chrome says have changed when they do.
+    private func fields(_ item: Download) -> [String: AnyHashable] {
+        let chrome = Downloads.chrome(item)
+        var out: [String: AnyHashable] = [:]
+        for key in ["state", "paused", "filename", "totalBytes", "error", "exists", "canResume", "endTime", "mime", "url", "finalUrl"] {
+            if let value = chrome[key] as? AnyHashable { out[key] = value }
+        }
+        return out
+    }
+
+    /// A download as chrome.downloads describes one.
+    static func chrome(_ item: Download) -> [String: Any] {
+        let clock = ISO8601DateFormatter()
+        clock.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var out: [String: Any] = [
+            "id": item.number,
+            "url": item.source?.absoluteString ?? "",
+            "finalUrl": item.source?.absoluteString ?? "",
+            "referrer": item.page?.absoluteString ?? "",
+            "filename": item.file?.path ?? "",
+            "incognito": false,
+            "danger": "safe",
+            "mime": item.mime ?? "",
+            "startTime": clock.string(from: item.started),
+            "bytesReceived": item.received,
+            "totalBytes": item.expected > 0 ? item.expected : -1,
+            "fileSize": item.state == .done ? item.received : (item.expected > 0 ? item.expected : -1),
+            "exists": item.state == .done ? item.there : true,
+            "paused": item.state == .paused,
+            "canResume": item.state == .paused || item.failed,
+        ]
+        switch item.state {
+        case .starting, .running, .paused: out["state"] = "in_progress"
+        case .done: out["state"] = "complete"
+        case .failed, .cancelled: out["state"] = "interrupted"
+        }
+        if case .failed = item.state { out["error"] = "NETWORK_FAILED" }
+        if item.state == .cancelled { out["error"] = "USER_CANCELED" }
+        if let finished = item.finished { out["endTime"] = clock.string(from: finished) }
+        if let left = item.remaining { out["estimatedEndTime"] = clock.string(from: Date().addingTimeInterval(left)) }
+        return out
     }
 
     // MARK: - quitting
@@ -497,6 +608,7 @@ final class Downloads: NSObject, ObservableObject {
         for item in items.reversed() where extra > 0 && !item.active && item.state != .paused {
             forgetResumeFile(item)
             items.removeAll { $0.id == item.id }
+            erased([item])
             extra -= 1
         }
     }
