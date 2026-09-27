@@ -141,9 +141,17 @@ struct LoadingBar: View {
     /// taking its time says nothing for seconds, and a line standing still
     /// that long looks stuck. A third of what is left each time, so slower
     /// the further it gets, and never past nine tenths.
+    ///
+    /// It stops once a step would hardly move it. A third of what is left
+    /// never gets there: after ninety steps it comes out to where the line
+    /// already is, a move that changes nothing finishes at once, and its
+    /// finishing came straight back here — round and round on the main
+    /// thread, and the window froze, on any page still loading after seven
+    /// minutes or so.
     private func creep() {
-        guard reach < 0.9 else { return }
-        move(to: reach + (0.9 - reach) / 3, over: 5)
+        let next = reach + (0.9 - reach) / 3
+        guard next - reach > 0.001 else { return }
+        move(to: next, over: 5)
     }
 
     /// Finished, stopped or failed alike: the line is not left hanging
