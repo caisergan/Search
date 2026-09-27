@@ -2317,7 +2317,9 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         }
 
         // ⌘-click opens beside this tab and leaves you where you are; ⌘⇧-click
-        // takes you with it. Settings can turn that round.
+        // takes you with it. Settings can turn that round — and ⇧⌘, the
+        // glance's keys out of the box, is the glance's when glancing is on
+        // (see above).
         //
         // The middle button is not judged here. WebKit hands the browser a
         // navigation action for a ⌘-click and none at all for a middle one,

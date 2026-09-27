@@ -403,7 +403,7 @@ final class Preferences: ObservableObject {
     @Published var glances: Bool {
         didSet { store.set(glances, forKey: "glance") }
     }
-    /// Which key that is. ⌥ unless changed, as in Zen.
+    /// Which keys those are. ⇧⌘ unless changed.
     @Published var glanceTrigger: GlanceTrigger {
         didSet { store.set(glanceTrigger.rawValue, forKey: "glance.trigger") }
     }
@@ -413,7 +413,7 @@ final class Preferences: ObservableObject {
     @Published var commandClickFront: Bool {
         didSet {
             store.set(commandClickFront, forKey: "links.command.front")
-            if commandClickFront, glanceTrigger == .command { glanceTrigger = .option }
+            if commandClickFront, glanceTrigger.flags == .command { glanceTrigger = .standard }
         }
     }
     /// A link opened in a new window — "Open Link in New Window", or one
@@ -522,7 +522,7 @@ final class Preferences: ObservableObject {
         welcomed = store.bool(forKey: "welcomed") || store.object(forKey: "glyph") != nil
         usesSpaces = store.bool(forKey: "spaces")
         glances = store.bool(forKey: "glance")
-        glanceTrigger = store.string(forKey: "glance.trigger").flatMap(GlanceTrigger.init) ?? .option
+        glanceTrigger = store.string(forKey: "glance.trigger").flatMap(GlanceTrigger.init(rawValue:)) ?? .standard
         commandClickFront = store.bool(forKey: "links.command.front")
         newWindowFront = store.object(forKey: "links.window.front") as? Bool ?? true
         let flicks = store.bool(forKey: "float.flicks")
