@@ -12,6 +12,12 @@ struct SearchApp: App {
     /// The keys drawn beside the menus' commands, as Settings › Shortcuts has them.
     @ObservedObject private var shortcuts = Shortcuts.shared
 
+    init() {
+        Launch.mark("app")
+        // Another Mac's settings, before anything here reads one (see Sync.swift).
+        SettingsSync.pullAtLaunch()
+    }
+
     var body: some Scene {
         Window("Search", id: "browser") {
             ContentView(browser: browser)
@@ -45,11 +51,11 @@ struct SearchApp: App {
             CommandGroup(replacing: .printItem) {
                 Button("Share…") { browser.share() }
                     .disabled(browser.active?.isBlank ?? true)
-                Button("Download Page") { browser.downloadPage() }
-                    .keyboardShortcut(shortcuts.menu(.savePage))
-                    .disabled(browser.active?.isBlank ?? true)
                 Button("Print…") { browser.printPage() }
                     .keyboardShortcut(shortcuts.menu(.print))
+                    .disabled(browser.active?.isBlank ?? true)
+                Button("Download This Page") { browser.downloadPage() }
+                    .keyboardShortcut(shortcuts.menu(.savePage))
                     .disabled(browser.active?.isBlank ?? true)
             }
             CommandGroup(after: .pasteboard) {
@@ -87,8 +93,10 @@ struct SearchApp: App {
                 Divider()
                 Button("Reload Page") { browser.reload() }
                     .keyboardShortcut(shortcuts.menu(.reload))
-                Button("Empty Cache and Reload") { browser.reloadEmptied() }
+                Button("Hard Reload") { browser.hardReload() }
                     .keyboardShortcut(shortcuts.menu(.hardReload))
+                Button("Empty Cache and Reload") { browser.reloadEmptied() }
+                    .keyboardShortcut(shortcuts.menu(.emptyCacheReload))
                 Button("Reading Mode") { browser.toggleReader() }
                     .keyboardShortcut(shortcuts.menu(.readingMode))
                 Button("Float Video") { browser.toggleFloat() }
@@ -1112,12 +1120,13 @@ struct ContentView: View {
                 browser.summon()
             }
         case .reload: browser.reload()
-        case .hardReload: browser.reloadEmptied()
+        case .hardReload: browser.hardReload()
+        case .emptyCacheReload: browser.reloadEmptied()
         case .readingMode: browser.toggleReader()
         case .floatVideo: browser.toggleFloat()
         case .stopSound: browser.pauseMedia()
-        case .savePage: browser.downloadPage()
         case .print: browser.printPage()
+        case .savePage: browser.downloadPage()
         case .find: browser.openFind()
         case .findNext: browser.look(forward: true)
         case .findPrevious: browser.look(forward: false)

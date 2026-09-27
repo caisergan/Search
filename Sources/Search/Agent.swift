@@ -1,4 +1,6 @@
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 import WebKit
 
 // Claude, in Search: what an assistant needs to use the browser the way a
@@ -66,10 +68,53 @@ extension Bench {
         return browser.tabs.first { $0.id.uuidString.lowercased().hasPrefix(ref) && reachable($0, in: browser) }
     }
 
-    /// Ready to be read or used: awake, and in a window so it is laid out.
+    /// Ready to be read or used: awake, in a window so it is laid out, and
+    /// a page in front of someone as far as it can tell (see `engage`).
     private func ready(_ tab: Tab) {
         tab.wake()
         if tab.web.window == nil || Backstage.holds(tab.web) { house(tab, any: true) }
+        engage(tab)
+    }
+
+    /// A page Claude works in, behaving as the one in front of you does.
+    /// Off every screen, WebKit took it for covered and for unused: it ran
+    /// no animation frame at all, its timers at most once a second, it had
+    /// no focus, and a pointer moving over it set no hover — a menu that
+    /// opens under the pointer never opened, a search box that waits for
+    /// typing to pause answered a second late (measured: 0 frames and 1
+    /// tick of a 10 ms timer a second, where a page on screen has 61 and 84).
+    /// So WebKit is told not to go by what covers the window, and the room
+    /// says it is key. A minute after Claude's last word the page is left to
+    /// be throttled again, as every page nobody is looking at is.
+    private func engage(_ tab: Tab) {
+        let web = tab.web
+        Agent.visible(web, true)
+        if let room = web.window as? Room, rooms[tab.id] === room {
+            if room.firstResponder !== web { room.makeFirstResponder(web) }
+            if !room.claimsKey {
+                room.claimsKey = true
+                // WebKit asks the window again on its word that it became key.
+                NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: room)
+            }
+        }
+        Agent.resting[tab.id]?.cancel()
+        let rest = DispatchWorkItem { [weak self, weak tab] in
+            guard let tab else { return }
+            self?.disengage(tab)
+        }
+        Agent.resting[tab.id] = rest
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: rest)
+    }
+
+    private func disengage(_ tab: Tab) {
+        Agent.resting[tab.id] = nil
+        guard let web = tab.built else { return }
+        if let room = rooms[tab.id], room.claimsKey {
+            room.claimsKey = false
+            NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: room)
+        }
+        // A page back on the stage is judged by what covers the window again.
+        Agent.visible(web, false)
     }
 
     /// In the page's world or Search's, with what comes back as a dictionary.
@@ -90,7 +135,79 @@ extension Bench {
         for key in ["filter", "ref", "query", "value", "dx", "dy", "x", "y", "max", "selector", "files", "toRef", "toX", "toY"] {
             if let value = request[key] { arguments[key] = value }
         }
-        run(Agent.page, ["args": arguments], on: tab, in: Web.world, then)
+        // A ref from a frame of another site — f2.r7 — is that frame's r7:
+        // the verb runs in the frame, and a place it answers with is turned
+        // into the page's own coordinates, where the pointer goes.
+        guard let ref = arguments["ref"] as? String, let far = Agent.far(ref) else {
+            run(Agent.page, ["args": arguments], on: tab, in: Web.world, then)
+            return
+        }
+        arguments["ref"] = far.ref
+        if let to = arguments["toRef"] as? String, let farTo = Agent.far(to), farTo.alias == far.alias { arguments["toRef"] = farTo.ref }
+        Agent.frame(far.alias, of: tab) { info in
+            guard let info else { then(.failure(Agent.Failure(said: "frame \(far.alias) is gone — read the page again"))); return }
+            tab.web.callAsyncJavaScript(Agent.page, arguments: ["args": arguments], in: info, in: Web.world) { result in
+                MainActor.assumeIsolated {
+                    switch result {
+                    case .failure(let error): then(.failure(Agent.Failure(said: Agent.said(error))))
+                    case .success(let value):
+                        var out = (value as? [String: Any]) ?? ["value": Bench.plain(value)]
+                        guard let x = out["x"] as? Double, let y = out["y"] as? Double else { then(.success(out)); return }
+                        let size = CGSize(width: out["width"] as? Double ?? 0, height: out["height"] as? Double ?? 0)
+                        Agent.onPage(CGRect(origin: CGPoint(x: x, y: y), size: size), from: info, in: tab.web) { place in
+                            out["x"] = Double(place.minX)
+                            out["y"] = Double(place.minY)
+                            if size.width > 0 || size.height > 0 { out["width"] = Double(place.width); out["height"] = Double(place.height) }
+                            then(.success(out))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// read and find, over the page and every frame from another site in
+    /// it: each frame's lines follow the page's, their refs named after the
+    /// frame (f2.r7) and their places in the page's coordinates.
+    private func everywhere(_ verb: String, _ request: [String: Any], on tab: Tab, _ then: @escaping (Result<[String: Any], Agent.Failure>) -> Void) {
+        page(verb, request, on: tab) { main in
+            guard case .success(var out) = main, request["ref"] == nil else { then(main); return }
+            Agent.farFrames(of: tab) { frames in
+                guard !frames.isEmpty else { then(.success(out)); return }
+                var arguments: [String: Any] = ["verb": verb]
+                for key in ["filter", "query", "max"] { if let value = request[key] { arguments[key] = value } }
+                var parts = Array(repeating: [String](), count: frames.count)
+                var left = frames.count
+                for (index, frame) in frames.enumerated() {
+                    tab.web.callAsyncJavaScript(Agent.page, arguments: ["args": arguments], in: frame.info, in: Web.world) { result in
+                        MainActor.assumeIsolated {
+                            let lines: [String] = {
+                                guard case .success(let value) = result, let got = value as? [String: Any] else { return [] }
+                                if verb == "a.find" { return got["found"] as? [String] ?? [] }
+                                return (got["page"] as? String ?? "").split(separator: "\n").dropFirst(2).map(String.init)
+                            }()
+                            Agent.onPage(.zero, from: frame.info, in: tab.web) { origin in
+                                let viewport = tab.web.bounds.size
+                                parts[index] = lines.map { Agent.moved($0, to: frame.alias, by: origin.origin, within: viewport) }
+                                left -= 1
+                                guard left == 0 else { return }
+                                if verb == "a.find" {
+                                    let found = (out["found"] as? [String] ?? []) + parts.flatMap { $0 }
+                                    out["found"] = Array(found.prefix(request["max"] as? Int ?? 20))
+                                } else {
+                                    var text = out["page"] as? String ?? ""
+                                    for (n, frame) in frames.enumerated() where !parts[n].isEmpty {
+                                        text += "\n— in frame \(frame.alias) (\(frame.info.request.url?.absoluteString.prefix(80) ?? "")):\n" + parts[n].joined(separator: "\n")
+                                    }
+                                    out["page"] = text
+                                }
+                                then(.success(out))
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     func agent(_ verb: String, _ request: [String: Any], browser: Browser, _ answer: @escaping ([String: Any]) -> Void) {
@@ -165,26 +282,34 @@ extension Bench {
             ready(tab)
             let to = request["url"] as? String ?? ""
             var url: URL?
-            if !["back", "forward", "reload", "hard"].contains(to) {
-                guard let web = Address.url(from: to), Bench.web(web) else { answer(["error": "a.navigate needs a web address, back, forward, reload or hard"]); return }
+            if !["back", "forward", "reload", "hard", "empty"].contains(to) {
+                guard let web = Address.url(from: to), Bench.web(web) else { answer(["error": "a.navigate needs a web address, back, forward, reload, hard or empty"]); return }
                 url = web
             }
             let limit = Date().addingTimeInterval(request["seconds"] as? Double ?? 20)
             // The page there now is marked, in Search's world, so the new one
             // is known by not having the mark — even one that loads before
-            // anyone sees it loading, as a page from this Mac does.
-            tab.web.evaluateJavaScript("window.__claudeOld = 1", in: nil, in: Web.world) { [weak self] _ in
+            // anyone sees it loading, as a page from this Mac does. A mark of
+            // this call's own: back or forward can bring a page out of
+            // WebKit's back-forward cache with an older call's mark still on
+            // it, and a plain one had that page waited on for the whole cap.
+            let mark = UUID().uuidString
+            tab.web.evaluateJavaScript("window.__claudeOld = '\(mark)'", in: nil, in: Web.world) { [weak self] _ in
                 MainActor.assumeIsolated {
                     switch to {
                     case "back": tab.back()
                     case "forward": tab.forward()
                     case "reload": tab.reload()
-                    // This site's caches emptied first, service workers'
-                    // included: what a developer means after changing a file (⇧⌘R).
-                    case "hard": tab.reloadEmptied()
+                    // Every file checked with the server, what a service
+                    // worker kept dropped: what a developer means after
+                    // changing a file (⇧⌘R).
+                    case "hard": tab.hardReload()
+                    // The site's whole cache emptied first, for a server
+                    // that says a changed file hasn't changed.
+                    case "empty": tab.reloadEmptied()
                     default: if let url { tab.go(to: url) }
                     }
-                    self?.arrived(tab, within: to == "hard" ? 5 : 1.5) {
+                    self?.arrived(tab, unmarked: mark, within: to == "empty" ? 5 : to == "hard" ? 3 : 1.5) {
                         self?.wait(for: tab, until: limit) { out in answer(self?.decorated(out, tab) ?? out) }
                     }
                 }
@@ -226,7 +351,7 @@ extension Bench {
         case "a.read", "a.find", "a.text", "a.fill", "a.scroll", "a.focus", "a.upload":
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             ready(tab)
-            page(verb, request, on: tab) { result in
+            (verb == "a.read" || verb == "a.find" ? everywhere : page)(verb, request, tab) { result in
                 if case .success(var out) = result, verb == "a.read" || verb == "a.text" {
                     out["tab"] = Bench.short(tab)
                     answer(out)
@@ -243,7 +368,21 @@ extension Bench {
                 guard let spot else { answer(["error": found["error"] as? String ?? "nowhere to click"]); return }
                 if verb == "a.hover" {
                     self.mouse(tab.web, at: spot, kinds: [.mouseMoved], clicks: 1, mods: [])
-                    answer(["ok": true, "at": found["at"] ?? []])
+                    // Answered once the page has had it: the next look finds
+                    // the menu the hover opened. A page in your window while
+                    // Search isn't in front takes no hover from WebKit — the
+                    // window isn't key — so it is told the pointer's events
+                    // itself: a menu opened by script opens, one made of CSS
+                    // :hover alone can't, and the answer says so.
+                    Agent.afterMouse(tab.web) {
+                        self.run(Agent.hoverCheck, ["x": found["x"] ?? 0, "y": found["y"] ?? 0], on: tab, in: .page) { result in
+                            var out: [String: Any] = ["ok": true, "at": found["at"] ?? []]
+                            if case .success(let seen) = result, seen["hovered"] as? Bool == false {
+                                out["note"] = "Search's window isn't in front, so this page of yours can't be given CSS :hover — it heard the pointer's events; a menu that opens with CSS alone may stay shut (a tab of Claude's own has no such limit)"
+                            }
+                            answer(out)
+                        }
+                    }
                     return
                 }
                 // A select's list is AppKit's menu, which holds the whole app
@@ -263,13 +402,30 @@ extension Bench {
                     return
                 }
                 let count = button == "double" ? 2 : button == "triple" ? 3 : 1
-                self.mouse(tab.web, at: spot, kinds: [.mouseMoved], clicks: 1, mods: mods)
-                for n in 1...count {
-                    self.mouse(tab.web, at: spot, kinds: [.leftMouseDown, .leftMouseUp], clicks: n, mods: mods)
+                let press = { (at: NSPoint, found: [String: Any]) in
+                    for n in 1...count {
+                        self.mouse(tab.web, at: at, kinds: [.leftMouseDown, .leftMouseUp], clicks: n, mods: mods)
+                    }
+                    var out: [String: Any] = ["ok": true, "at": found["at"] ?? []]
+                    if let note = found["note"] as? String { out["note"] = note }
+                    self.settled(tab, out, answer)
                 }
-                var out: [String: Any] = ["ok": true, "at": found["at"] ?? []]
-                if let note = found["note"] as? String { out["note"] = note }
-                self.settled(tab, out, answer)
+                // The pointer arrives first, as a hand's does — and what that
+                // sets off can move the target: a menu open from the last
+                // hover closes, and a button below it rises. An element named
+                // by ref or selector is looked for again once the page has
+                // had the move, and pressed where it is now.
+                self.mouse(tab.web, at: spot, kinds: [.mouseMoved], clicks: 1, mods: mods)
+                guard request["ref"] != nil || request["selector"] != nil else { press(spot, found); return }
+                Agent.afterMouse(tab.web) {
+                    self.point(on: tab, request) { again, refound in
+                        guard let again else { press(spot, found); return }
+                        if hypot(again.x - spot.x, again.y - spot.y) > 1 {
+                            self.mouse(tab.web, at: again, kinds: [.mouseMoved], clicks: 1, mods: mods)
+                        }
+                        press(again, refound)
+                    }
+                }
             }
 
         case "a.drag":
@@ -352,8 +508,17 @@ extension Bench {
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
             ready(tab)
             let quality = request["quality"] as? Double ?? 0.6
+            // Smaller for fewer tokens; the coordinates stay the page's own.
+            let scale = max(0.1, min(1, request["scale"] as? Double ?? 1))
+            // A part of the page by its corners — to look closer, drawn at
+            // twice the density, as a Retina screen shows it.
+            if let x = request["x"] as? Double, let y = request["y"] as? Double,
+               let w = request["w"] as? Double, let h = request["h"] as? Double {
+                picture(tab.web, of: CGRect(x: x, y: y, width: w, height: h), quality: quality, density: 2 * scale, answer)
+                return
+            }
             guard request["ref"] != nil || request["selector"] != nil else {
-                picture(tab.web, of: nil, quality: quality, answer)
+                picture(tab.web, of: nil, quality: quality, density: scale, answer)
                 return
             }
             page("a.rect", request, on: tab) { [weak self] result in
@@ -361,7 +526,7 @@ extension Bench {
                 case .success(let out):
                     guard let x = out["x"] as? Double, let y = out["y"] as? Double, let w = out["width"] as? Double, let h = out["height"] as? Double
                     else { answer(["error": "no picture of that"]); return }
-                    self?.picture(tab.web, of: CGRect(x: x, y: y, width: w, height: h), quality: quality, answer)
+                    self?.picture(tab.web, of: CGRect(x: x, y: y, width: w, height: h), quality: quality, density: scale, answer)
                 case .failure(let error): answer(["error": error.said])
                 }
             }
@@ -371,28 +536,59 @@ extension Bench {
             guard let code = request["code"] as? String else { answer(["error": "a.js needs code"]); return }
             ready(tab)
             // In the page's world only: Search's own has its handlers in it.
-            // An expression's value, or a body that returns one — awaited
-            // either way. The expression is tried first, and what it throws
-            // is caught and told: only code that isn't an expression at all,
-            // and so never ran, is run again as a body. Run twice, a click or
-            // a request in code that then threw would have happened twice.
-            let expression = "try { return await (\n" + code + "\n); } catch (e) { return { \(Agent.threw): String(e && e.stack ? e.name + ': ' + e.message : e) }; }"
-            tab.web.callAsyncJavaScript(expression, arguments: [:], in: nil, in: .page) { [weak self] result in
-                MainActor.assumeIsolated {
-                    if case .success(let value) = result {
-                        if let thrown = (value as? [String: Any])?[Agent.threw] { answer(["error": thrown]); return }
-                        answer(self?.decorated(["value": Bench.plain(value)], tab) ?? [:])
-                        return
-                    }
-                    tab.web.callAsyncJavaScript(code, arguments: [:], in: nil, in: .page) { again in
-                        MainActor.assumeIsolated {
-                            switch again {
-                            case .success(let value): answer(self?.decorated(["value": Bench.plain(value)], tab) ?? [:])
-                            case .failure(let error): answer(["error": Agent.said(error)])
+            // Its value as a console gives it, as Claude in Chrome's does: an
+            // expression's, or the last statement's when it is one, awaited
+            // either way; or a body's return. Each way is tried in turn, and
+            // one that isn't valid JavaScript never runs — WebKit refuses it
+            // before a line of it does — so the code runs once, in the first
+            // way it is. What it throws is caught and told. Run twice, a click
+            // or a request in code that then threw would have happened twice.
+            let caught = "} catch (e) { return { \(Agent.threw): String(e && e.stack ? e.name + ': ' + e.message : e) }; }"
+            var ways = ["try { return await (\n" + code + "\n);\n" + caught]
+            for (head, last) in Agent.lastStatements(of: code) {
+                ways.append("try {\n" + head + "\nreturn await (\n" + last + "\n);\n" + caught)
+            }
+            ways.append(code)
+            func attempt(_ index: Int) {
+                tab.web.callAsyncJavaScript(ways[index], arguments: [:], in: nil, in: .page) { [weak self] result in
+                    MainActor.assumeIsolated {
+                        switch result {
+                        case .success(let value):
+                            if let thrown = (value as? [String: Any])?[Agent.threw] { answer(["error": thrown]); return }
+                            answer(self?.decorated(["value": Bench.plain(value)], tab) ?? [:])
+                        case .failure(let error):
+                            // The last way is the body as written: what it
+                            // says is what the code did or couldn't.
+                            guard index + 1 < ways.count else { answer(["error": Agent.said(error)]); return }
+                            // A value WebKit can't hand back came from code
+                            // that ran: tried another way, it would run twice.
+                            if (error as? WKError)?.code == .javaScriptResultTypeIsUnsupported {
+                                answer(["error": "the code ran, but its value can't be returned (a DOM node, a function, a window…) — return something plain, e.g. el.outerHTML or el.textContent"])
+                                return
                             }
+                            attempt(index + 1)
                         }
                     }
                 }
+            }
+            attempt(0)
+
+        case "a.gif":
+            // A recording, as Claude in Chrome's gif_creator makes one: the
+            // frames the MCP server kept, each with what was done drawn on it,
+            // written into the Downloads folder.
+            guard let frames = request["frames"] as? [[String: Any]], !frames.isEmpty else { answer(["error": "a.gif needs frames"]); return }
+            let options = request["options"] as? [String: Any] ?? [:]
+            var name = ((request["name"] as? String).map { ($0 as NSString).lastPathComponent } ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty || name.hasPrefix(".") { name = "recording-\(Int(Date().timeIntervalSince1970)).gif" }
+            if !name.lowercased().hasSuffix(".gif") { name += ".gif" }
+            let file = browser.prefs.downloads.appendingPathComponent(name)
+            do {
+                let size = try Agent.gif(frames, options: options, to: file)
+                answer(["path": file.path, "frames": frames.count, "bytes": size])
+            } catch {
+                answer(["error": "the GIF couldn't be written: \(error.localizedDescription)"])
             }
 
         case "a.console":
@@ -486,11 +682,11 @@ extension Bench {
     /// Once a new page has begun in the tab — it is loading, or it is a
     /// document without the mark a.navigate left — or the time is up, for a
     /// move within the page, which starts nothing.
-    private func arrived(_ tab: Tab, within seconds: Double, _ then: @escaping () -> Void) {
+    private func arrived(_ tab: Tab, unmarked mark: String, within seconds: Double, _ then: @escaping () -> Void) {
         let started = Date()
         func look() {
             guard !tab.loading, Date().timeIntervalSince(started) < seconds else { then(); return }
-            tab.web.evaluateJavaScript("!window.__claudeOld", in: nil, in: Web.world) { result in
+            tab.web.evaluateJavaScript("window.__claudeOld !== '\(mark)'", in: nil, in: Web.world) { result in
                 MainActor.assumeIsolated {
                     if case .success(let fresh) = result, fresh as? Bool == true { then(); return }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { look() }
@@ -501,6 +697,7 @@ extension Bench {
     }
 
     private func forget(_ tab: Tab) {
+        Agent.resting.removeValue(forKey: tab.id)?.cancel()
         Agent.sizes[tab.id] = nil
         Agent.next[tab.id] = nil
         Agent.asked[tab.id] = nil
@@ -548,7 +745,10 @@ extension Bench {
                 web.mouseDown(with: event)
             case .leftMouseUp: web.mouseUp(with: event)
             case .leftMouseDragged: web.mouseDragged(with: event)
-            default: web.mouseMoved(with: event)
+            // A move goes where the pointer's own do: WebKit's tracking
+            // observer. Handed to the view, it is passed on and lost, and
+            // the page never hears the pointer arrive.
+            default: (Agent.tracker(of: web) ?? web).perform(#selector(NSResponder.mouseMoved(with:)), with: event)
             }
         }
     }
@@ -647,12 +847,16 @@ extension Bench {
     /// The page as it is on screen, one pixel per CSS pixel: a point on the
     /// picture is a point for `a.click`. `rect`, in the page's CSS pixels,
     /// for one element's part of it.
-    private func picture(_ web: WKWebView, of rect: CGRect?, quality: Double, _ answer: @escaping ([String: Any]) -> Void) {
+    /// `density`: pixels to a page pixel — below 1 for a smaller picture,
+    /// 2 for a closer look. The coordinates reported stay the page's.
+    private func picture(_ web: WKWebView, of rect: CGRect?, quality: Double, density: Double = 1, _ answer: @escaping ([String: Any]) -> Void) {
         let scale = web.pageZoom * web.magnification
         let whole = CGRect(x: 0, y: 0, width: web.bounds.width / scale, height: web.bounds.height / scale)
         let area = (rect ?? whole).intersection(whole)
         guard !area.isNull, area.width >= 1, area.height >= 1 else { answer(["error": "that is not on screen — scroll to it first"]); return }
-        let size = NSSize(width: area.width.rounded(), height: area.height.rounded())
+        // Never past 2400 pixels a side, however close the look.
+        let density = min(density, 2400 / max(area.width, area.height))
+        let size = NSSize(width: (area.width * density).rounded(), height: (area.height * density).rounded())
         let shot = WKSnapshotConfiguration()
         shot.afterScreenUpdates = true
         if rect != nil {
@@ -683,7 +887,8 @@ extension Bench {
                     return
                 }
                 answer(["jpeg": jpeg.base64EncodedString(), "width": Int(size.width), "height": Int(size.height),
-                        "left": Int(area.minX), "top": Int(area.minY)])
+                        "left": Int(area.minX), "top": Int(area.minY), "pageWidth": Int(area.width.rounded()),
+                        "pageHeight": Int(area.height.rounded()), "density": density])
             }
         }
     }
@@ -923,6 +1128,25 @@ enum Agent {
     return document.readyState === 'complete' && (!box || box.inflight <= 0);
     """#
 
+    /// After a hover: whether what is under the point took it. If not, the
+    /// pointer's events are told to it and every element it is inside, as
+    /// they would have been.
+    static let hoverCheck = #"""
+    var el = document.elementFromPoint(x, y);
+    if (!el) return { hovered: false };
+    if (el.matches(':hover')) return { hovered: true };
+    var o = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, view: window, pointerType: 'mouse', isPrimary: true };
+    el.dispatchEvent(new PointerEvent('pointerover', o));
+    el.dispatchEvent(new MouseEvent('mouseover', o));
+    for (var n = el; n && n.nodeType === 1; n = n.parentElement) {
+      n.dispatchEvent(new PointerEvent('pointerenter', Object.assign({}, o, { bubbles: false })));
+      n.dispatchEvent(new MouseEvent('mouseenter', Object.assign({}, o, { bubbles: false })));
+    }
+    el.dispatchEvent(new PointerEvent('pointermove', o));
+    el.dispatchEvent(new MouseEvent('mousemove', o));
+    return { hovered: false };
+    """#
+
     /// A right-click, told to the page as its events.
     static let contextMenu = #"""
     var el = document.elementFromPoint(x, y);
@@ -1051,7 +1275,8 @@ enum Agent {
     /// Reading, finding, filling, scrolling and pointing, in Search's world.
     /// Refs are kept here, per element, for as long as the element lives.
     /// Frames from the same site are read as part of the page; a frame from
-    /// another site is listed with where it is, for a screenshot and a click.
+    /// another site is run through this on its own (see Bench.everywhere),
+    /// its refs named after it.
     static let page = #"""
     var S = window.__claude || (window.__claude = { byId: new Map(), ids: new WeakMap(), next: 1 });
     if (S.byId.size > 5000) S.byId.forEach(function (w, id) { if (!w.deref()) S.byId.delete(id); });
@@ -1185,6 +1410,9 @@ enum Agent {
       if (win(el) !== window) s += ' (in a frame)';
       return s + place(r);
     }
+    function hiddenFile(el, r) {
+      return line(el, r, 'file').replace(/ @-?\d+,-?\d+$| \(offscreen\)$/, '') + ' (hidden: upload_file and upload_image still put files in it)';
+    }
     // Every element under root, into shadow roots and frames from the same
     // site; each() returning false skips what is under that element.
     function walk(root, each) {
@@ -1222,7 +1450,7 @@ enum Agent {
           if (!visible(el, fr)) return false;
           if (frameDoc(el)) return;
           if (count >= max) { cut = true; return false; }
-          out.push('[' + refOf(el) + '] frame from another site ' + clean(el.src, 80) + ' — not readable here; a screenshot shows it and clicks at its points reach it' + place(fr));
+          out.push('[' + refOf(el) + '] frame from another site ' + clean(el.src, 80) + ' — read on its own, below' + place(fr));
           count++;
           return false;
         }
@@ -1235,6 +1463,16 @@ enum Agent {
         out.push(line(el, r, rl));
         count++;
         if (rl === 'link' || rl === 'button') return false;
+      });
+      // A file field is often hidden behind a button of the page's own, and
+      // it is still where files go (upload_file, upload_image) — listed as
+      // Claude in Chrome lists it, hidden or not.
+      Array.prototype.forEach.call(root.querySelectorAll ? root.querySelectorAll('input[type=file]') : [], function (el) {
+        var r = box(el);
+        if (visible(el, r)) return;
+        if (count >= max) { cut = true; return; }
+        out.push(hiddenFile(el, r));
+        count++;
       });
       var text = header() + '\n' + out.join('\n');
       if (cut) text += '\n… more than ' + max + ' — read a part with ref, or use find';
@@ -1259,8 +1497,9 @@ enum Agent {
         var score = q.reduce(function (s, w) { return s + (low.indexOf(w) >= 0 ? 1 : 0); }, 0);
         if (!score) return;
         var r = box(el);
-        if (!visible(el, r)) return;
-        hits.push({ score: score + (ACTIVE[rl] ? 0.5 : 0), line: rl === 'text' ? '[' + refOf(el) + '] text "' + clean(own, 120) + '"' + place(r) : line(el, r, rl) });
+        var shown = visible(el, r);
+        if (!shown && rl !== 'file') return;
+        hits.push({ score: score + (ACTIVE[rl] ? 0.5 : 0), line: !shown ? hiddenFile(el, r) : rl === 'text' ? '[' + refOf(el) + '] text "' + clean(own, 120) + '"' + place(r) : line(el, r, rl) });
       });
       hits.sort(function (a, b) { return b.score - a.score; });
       return { found: hits.slice(0, args.max || 20).map(function (h) { return h.line; }), total: hits.length };
@@ -1356,7 +1595,9 @@ enum Agent {
     if (verb === 'a.upload') {
       // Files into a file field, or dropped on a drop zone, as the page would
       // get them from the chooser or from a drag.
-      var el = target();
+      var at = !args.ref && !args.selector && args.x != null && args.y != null;
+      var el = at ? hitAt(Number(args.x), Number(args.y)) : target();
+      if (!el) throw new Error('nothing at that point');
       var input = el.tagName === 'INPUT' && el.type === 'file' ? el : (el.querySelector && el.querySelector('input[type=file]'));
       var dt = new DataTransfer();
       (args.files || []).forEach(function (f) {
@@ -1371,7 +1612,7 @@ enum Agent {
         input.dispatchEvent(new Event('change', { bubbles: true }));
         return { ok: true, files: input.files.length, into: 'field' };
       }
-      var r = box(el), px = r.left + r.width / 2, py = r.top + r.height / 2;
+      var r = box(el), px = at ? Number(args.x) : r.left + r.width / 2, py = at ? Number(args.y) : r.top + r.height / 2;
       ['dragenter', 'dragover', 'drop'].forEach(function (type) {
         el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: px, clientY: py, dataTransfer: dt }));
       });
@@ -1396,4 +1637,229 @@ enum Agent {
     }
     throw new Error('unknown verb ' + verb);
     """#
+}
+
+extension Agent {
+    /// When each tab Claude works in is left to rest (see Bench.engage).
+    static var resting: [Tab.ID: DispatchWorkItem] = [:]
+
+    /// WebKit told to take the page for visible whenever its window is up,
+    /// whatever covers the window — or to go by that again. It looks again
+    /// at the next word about the window, so one is given.
+    static func visible(_ web: WKWebView, _ on: Bool) {
+        let set = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
+        guard web.responds(to: set) else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        unsafeBitCast(web.method(for: set), to: Setter.self)(web, set, !on)
+        if let window = web.window {
+            NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        }
+    }
+
+    /// The places code could end with a statement whose value is the
+    /// answer: split after each `;` or line from the end, the part after it
+    /// taken as an expression — `const a = 1; a + 1` answers 2. Only splits
+    /// whose last part could be an expression at all; whether it is, WebKit
+    /// says by refusing the ones that aren't (see a.js).
+    static func lastStatements(of code: String) -> [(String, String)] {
+        let words: Set<String> = ["const", "let", "var", "if", "for", "while", "do", "switch", "try",
+                                  "return", "throw", "function", "class", "import", "export", "break", "continue"]
+        var found: [(String, String)] = []
+        var text = code
+        while let end = text.last, end == ";" || end.isWhitespace { text.removeLast() }
+        var cut = text.endIndex
+        while found.count < 24, let split = text[..<cut].lastIndex(where: { $0 == ";" || $0 == "\n" }) {
+            cut = split
+            let last = text[text.index(after: split)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !last.isEmpty, !last.hasPrefix("}"), !last.hasPrefix("//") else { continue }
+            let first = last.prefix { $0.isLetter }
+            guard !words.contains(String(first)) else { break }
+            found.append((String(text[...split]), last))
+        }
+        return found
+    }
+
+    /// navigator.mediaDevices gone from the pages these preferences make.
+    static func withoutCapture(_ preferences: WKPreferences) {
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        for name in ["_setMediaDevicesEnabled:", "_setMediaStreamEnabled:"] {
+            let set = NSSelectorFromString(name)
+            guard preferences.responds(to: set) else { continue }
+            unsafeBitCast(preferences.method(for: set), to: Setter.self)(preferences, set, false)
+        }
+    }
+
+    /// Frame aliases per tab — f1, f2 … by WebKit's frame id — so a ref read
+    /// in a frame stays good for the frame's life.
+    static var aliases: [Tab.ID: [UInt64: String]] = [:]
+
+    /// f2.r7 → ("f2", "r7").
+    static func far(_ ref: String) -> (alias: String, ref: String)? {
+        let clean = ref.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+        guard let dot = clean.firstIndex(of: "."), clean.hasPrefix("f") else { return nil }
+        let alias = String(clean[..<dot]), local = String(clean[clean.index(after: dot)...])
+        guard alias.dropFirst().allSatisfy(\.isNumber), local.hasPrefix("r") else { return nil }
+        return (alias, local)
+    }
+
+    private static func frameID(_ info: WKFrameInfo) -> UInt64? {
+        ((info.value(forKey: "_handle") as? NSObject)?.value(forKey: "frameID") as? NSNumber)?.uint64Value
+    }
+
+    /// The frames of the page from another site than the one they are in —
+    /// what the page's own reading can't look into — with their aliases.
+    static func farFrames(of tab: Tab, _ then: @escaping ([(alias: String, info: WKFrameInfo)]) -> Void) {
+        let web = tab.web
+        let list = NSSelectorFromString("_frames:")
+        guard web.responds(to: list) else { then([]); return }
+        let done: @convention(block) (AnyObject?) -> Void = { root in
+            MainActor.assumeIsolated {
+                var found: [(alias: String, info: WKFrameInfo)] = []
+                func origin(_ o: WKSecurityOrigin) -> String { "\(o.`protocol`)://\(o.host):\(o.port)" }
+                @MainActor func walk(_ node: NSObject?, parent: String?) {
+                    guard let node, let info = node.value(forKey: "info") as? WKFrameInfo else { return }
+                    let here = origin(info.securityOrigin)
+                    if let parent, here != parent || here.hasPrefix("://"), let id = frameID(info) {
+                        var known = aliases[tab.id] ?? [:]
+                        let alias = known[id] ?? "f\(known.count + 1)"
+                        known[id] = alias
+                        aliases[tab.id] = known
+                        found.append((alias, info))
+                    }
+                    for child in (node.value(forKey: "childFrames") as? [NSObject]) ?? [] { walk(child, parent: here) }
+                }
+                walk(root as? NSObject, parent: nil)
+                then(found)
+            }
+        }
+        web.perform(list, with: done)
+    }
+
+    /// The frame an alias names, if it is still in the page.
+    static func frame(_ alias: String, of tab: Tab, _ then: @escaping (WKFrameInfo?) -> Void) {
+        farFrames(of: tab) { frames in then(frames.first { $0.alias == alias }?.info) }
+    }
+
+    /// A rect in a frame's own coordinates, in the page's.
+    static func onPage(_ rect: CGRect, from frame: WKFrameInfo, in web: WKWebView, _ then: @escaping (CGRect) -> Void) {
+        let convert = NSSelectorFromString("_convertRect:fromFrame:toMainFrameCoordinates:")
+        guard web.responds(to: convert) else { then(rect); return }
+        typealias Convert = @convention(c) (AnyObject, Selector, CGRect, WKFrameInfo, @convention(block) (CGRect, NSError?) -> Void) -> Void
+        let done: @convention(block) (CGRect, NSError?) -> Void = { place, _ in
+            MainActor.assumeIsolated { then(place) }
+        }
+        unsafeBitCast(web.method(for: convert), to: Convert.self)(web, convert, rect, frame, done)
+    }
+
+    /// A line a frame read, with the frame's alias on its refs and its place
+    /// moved into the page — off the page's screen, it says so.
+    static func moved(_ line: String, to alias: String, by offset: CGPoint, within viewport: CGSize) -> String {
+        var line = line.replacingOccurrences(of: #"\[(r\d+)\]"#, with: "[\(alias).$1]", options: .regularExpression)
+        if let at = line.range(of: #" @(-?\d+),(-?\d+)$"#, options: .regularExpression) {
+            let numbers = line[at].dropFirst(2).split(separator: ",").compactMap { Double($0) }
+            if numbers.count == 2 {
+                let x = numbers[0] + offset.x, y = numbers[1] + offset.y
+                let inside = x >= 0 && y >= 0 && x <= viewport.width && y <= viewport.height
+                line.replaceSubrange(at, with: inside ? " @\(Int(x.rounded())),\(Int(y.rounded()))" : " (offscreen)")
+            }
+        }
+        return line
+    }
+
+    /// Once WebKit has handed the page every mouse event sent so far.
+    static func afterMouse(_ web: WKWebView, _ then: @escaping () -> Void) {
+        let wait = NSSelectorFromString("_doAfterProcessingAllPendingMouseEvents:")
+        guard web.responds(to: wait) else { then(); return }
+        let done: @convention(block) () -> Void = { then() }
+        web.perform(wait, with: done)
+    }
+
+    /// The object WebKit has the pointer's moves go to: the owner of one of
+    /// the view's tracking areas that isn't the view.
+    static func tracker(of web: WKWebView) -> NSObject? {
+        web.trackingAreas.lazy.compactMap { $0.owner as? NSObject }.first {
+            $0 !== web && $0.responds(to: #selector(NSResponder.mouseMoved(with:)))
+        }
+    }
+}
+
+// MARK: - a recording
+
+extension Agent {
+    struct GIFFailure: LocalizedError {
+        let errorDescription: String?
+    }
+
+    /// Frames — a JPEG each, with what was done: a label, a click, a drag —
+    /// into one looping GIF, no wider than 960 points. Returns its size.
+    static func gif(_ frames: [[String: Any]], options: [String: Any], to file: URL) throws -> Int {
+        let flag = { (key: String) in options[key] as? Bool ?? true }
+        let pictures: [(CGImage, [String: Any])] = frames.compactMap { frame in
+            guard let text = frame["jpeg"] as? String, let data = Data(base64Encoded: text),
+                  let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+            return (image, frame)
+        }
+        guard let first = pictures.first?.0 else { throw GIFFailure(errorDescription: "no frame could be read") }
+        let fit = min(1, 960 / CGFloat(first.width))
+        let width = Int(CGFloat(first.width) * fit), height = Int(CGFloat(first.height) * fit)
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let out = CGImageDestinationCreateWithURL(file as CFURL, UTType.gif.identifier as CFString, pictures.count, nil)
+        else { throw GIFFailure(errorDescription: "no GIF writer") }
+        CGImageDestinationSetProperties(out, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+        for (index, (image, frame)) in pictures.enumerated() {
+            guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { continue }
+            context.interpolationQuality = .high
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            // The frame's own pixels to the page's: a frame may be smaller.
+            let across = CGFloat(width) / CGFloat(frame["pageWidth"] as? Double ?? Double(image.width))
+            let point = { (x: Double, y: Double) in CGPoint(x: CGFloat(x) * across, y: CGFloat(height) - CGFloat(y) * across) }
+            let orange = CGColor(red: 0.96, green: 0.45, blue: 0.1, alpha: 1)
+            if flag("showClickIndicators"), let click = frame["click"] as? [Double], click.count == 2 {
+                let at = point(click[0], click[1])
+                context.setFillColor(orange.copy(alpha: 0.3)!)
+                context.fillEllipse(in: CGRect(x: at.x - 16, y: at.y - 16, width: 32, height: 32))
+                context.setStrokeColor(orange)
+                context.setLineWidth(3)
+                context.strokeEllipse(in: CGRect(x: at.x - 16, y: at.y - 16, width: 32, height: 32))
+            }
+            if flag("showDragPaths"), let drag = frame["drag"] as? [Double], drag.count == 4 {
+                let from = point(drag[0], drag[1]), to = point(drag[2], drag[3])
+                context.setStrokeColor(CGColor(red: 0.9, green: 0.15, blue: 0.15, alpha: 1))
+                context.setLineWidth(3)
+                context.move(to: from); context.addLine(to: to); context.strokePath()
+                let angle = atan2(to.y - from.y, to.x - from.x)
+                for turn in [CGFloat.pi * 0.8, -CGFloat.pi * 0.8] {
+                    context.move(to: to)
+                    context.addLine(to: CGPoint(x: to.x + 14 * cos(angle + turn), y: to.y + 14 * sin(angle + turn)))
+                }
+                context.strokePath()
+            }
+            if flag("showActionLabels"), let label = frame["label"] as? String, !label.isEmpty {
+                let text = NSAttributedString(string: String(label.prefix(80)), attributes: [
+                    .font: NSFont.systemFont(ofSize: 15, weight: .semibold), .foregroundColor: NSColor.white,
+                ])
+                let bounds = text.size()
+                let plate = CGRect(x: 12, y: CGFloat(height) - 12 - bounds.height - 12, width: bounds.width + 20, height: bounds.height + 12)
+                context.setFillColor(CGColor(gray: 0, alpha: 0.78))
+                context.addPath(CGPath(roundedRect: plate, cornerWidth: 7, cornerHeight: 7, transform: nil))
+                context.fillPath()
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+                text.draw(at: NSPoint(x: plate.minX + 10, y: plate.minY + 6))
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            if flag("showProgressBar") {
+                context.setFillColor(orange)
+                context.fill(CGRect(x: 0, y: 0, width: CGFloat(width) * CGFloat(index + 1) / CGFloat(pictures.count), height: 5))
+            }
+            guard let drawn = context.makeImage() else { continue }
+            let delay = index == pictures.count - 1 ? 1.6 : 0.9
+            CGImageDestinationAddImage(out, drawn, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: delay]] as CFDictionary)
+        }
+        guard CGImageDestinationFinalize(out) else { throw GIFFailure(errorDescription: "the GIF writer failed") }
+        return (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+    }
 }

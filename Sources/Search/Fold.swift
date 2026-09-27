@@ -178,12 +178,16 @@ struct Fold: View {
     /// The pointer is watched only while there is something folded for it
     /// to bring out; the rest of the time no move of it costs anything.
     private func watch() {
+        Fold.watching = folding
         if folding {
             pointer.start { follow() }
         } else {
             pointer.stop()
         }
     }
+
+    /// Whether the edge is being watched, for the bench.
+    private(set) static var watching = false
 
     /// Opens or closes the column from the pointer's actual position, on
     /// every move. Hover events weren't enough: a view that appears under a

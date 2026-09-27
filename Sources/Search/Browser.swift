@@ -15,6 +15,9 @@ final class Browser: NSObject, ObservableObject {
             // gone unwatched long enough to sleep is counted from here, not
             // from when it was first picked.
             guard oldValue != activeID, let old = oldValue else { return }
+            // Full screen in the window stays with its tab, however another
+            // came on screen — ⌘T, or this one closed (see Fullscreen.swift).
+            fullscreenStays()
             linkStatus.dismiss()
             tabs.first { $0.id == old }?.touch()
             // A glance belongs to the page it was taken from, and goes when
@@ -335,7 +338,7 @@ final class Browser: NSObject, ObservableObject {
             announce("The keychain didn't give up the password")
             return
         }
-        tab.fill(user: login.user, password: password) { [weak self] worked in
+        tab.fill(user: login.user, password: password, on: list.host) { [weak self] worked in
             if !worked { self?.announce("Couldn't find the sign-in fields anymore") }
         }
         Vault.touch(login)
@@ -869,6 +872,7 @@ final class Browser: NSObject, ObservableObject {
     // MARK: - beginning and ending
 
     override init() {
+        Launch.mark("browser")
         super.init()
         Downloads.shared.browser = self
         Shield.shared.enabled = prefs.shielded
@@ -884,6 +888,8 @@ final class Browser: NSObject, ObservableObject {
         folded = prefs.sidebar && prefs.sideHides
         // Once a day, quietly: is there a newer one?
         Updater.shared.checkIfDue { [weak self] line in self?.announce(line) }
+        // Settings › General › Sync settings through iCloud Drive (see Sync.swift).
+        SettingsSync.start { [weak self] line in self?.announce(line) }
         FormRelay.passkeysOffered = prefs.passkeys
 
         // The History menu lists what the history holds, and the menu is drawn
@@ -967,6 +973,7 @@ final class Browser: NSObject, ObservableObject {
         }
         restoreSession()
         if prefs.usesSpaces { preloadSpaces() }
+        Launch.mark("restored")
     }
 
     /// The row of tabs the space on screen had last time, or one empty tab.
@@ -1246,6 +1253,8 @@ final class Browser: NSObject, ObservableObject {
         // Coming back to the tab whose video is out brings it home first, so
         // it is never lifted and landed in the same breath.
         if floating == tab.id { land() }
+        // A page full screen in the window stays in its tab, as in Chrome.
+        active?.leaveFullscreen()
         leaving()
         active?.left()
         activeID = tab.id
@@ -1716,20 +1725,19 @@ final class Browser: NSObject, ObservableObject {
         typed = ""
     }
 
-    /// ⌘P. The system's own sheet, which is also where "save as PDF" lives.
     /// ⌥⌘S. What the tab is showing, downloaded: a PDF open in it, a
     /// picture, the page itself. Fetched again through the tab, with its
     /// sign-ins, and kept like any download.
     func downloadPage() {
-        guard let tab = active, !tab.isBlank, let url = tab.address,
+        guard let tab = active, !tab.isBlank, let url = tab.built?.url ?? tab.address,
               ["http", "https", "file", "blob", "data"].contains(url.scheme?.lowercased() ?? "")
         else { return }
-        let web = tab.web
-        web.startDownload(using: URLRequest(url: url)) { [weak self] download in
-            self?.keep(download)
+        tab.web.startDownload(using: URLRequest(url: url)) { [weak self] download in
+            MainActor.assumeIsolated { self?.keep(download) }
         }
     }
 
+    /// ⌘P. The system's own sheet, which is also where "save as PDF" lives.
     func printPage() {
         guard let tab = active, !tab.isBlank, let window = NSApp.keyWindow else { return }
         let info = NSPrintInfo.shared
@@ -1886,6 +1894,16 @@ final class Browser: NSObject, ObservableObject {
 
     func prepare(_ tab: Tab) {
         tab.delegate = self
+        tab.onWholeWindow = { [weak self] tab, on in self?.wholeWindow(tab, on) }
+        // The window hears the browser, not each tab: a page giving the screen
+        // back — f on YouTube, esc — said nothing it heard, and the column and
+        // the strip stayed away, a folded column deaf to its edge, until
+        // something else happened to be said. Going in showed only because
+        // "Full screen — esc to leave" was.
+        tab.onImmersed = { [weak self] tab in
+            guard let self, tab.id == activeID else { return }
+            objectWillChange.send()
+        }
         tab.onLink = { [weak self] tab, address in
             guard let self, prefs.showsLinks, tab.id == activeID else { return }
             linkStatus.show(address, over: tab.built)
@@ -2264,6 +2282,7 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func reload() { active?.reload() }
+    func hardReload() { active?.hardReload() }
     func reloadEmptied() { active?.reloadEmptied() }
     func back() { active?.back() }
     func forward() { active?.forward() }
@@ -2541,6 +2560,16 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         let host = origin.host.isEmpty ? (tab(for: webView)?.address?.host() ?? "This page") : origin.host
         let key = "\(host)|\(type.rawValue)"
 
+        // A page in one of Claude's tabs never gets the camera or the
+        // microphone, whatever was once allowed for its site: nobody is there
+        // to be asked, and the question would wait in your window for good.
+        // Claude hears it was refused with its next answer.
+        if let tab = tab(for: webView), tab.bench {
+            Agent.asked[tab.id, default: []].append(["kind": Browser.name(for: type), "message": "\(host) asked for the \(Browser.name(for: type))", "accepted": false])
+            decisionHandler(.deny)
+            return
+        }
+
         if let remembered = Store.settings.object(forKey: "capture." + key) as? Bool {
             decisionHandler(remembered ? .grant : .deny)
             return
@@ -2598,7 +2627,10 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        Launch.mark("firstCommit")
         guard let tab = tab(for: webView) else { return }
+        // A new document: whatever was full screen in the window went with the old one.
+        tab.fullscreenGone()
         if tab.id == activeID { linkStatus.dismiss() }
         tab.failure = nil
         tab.typing = false
@@ -2613,10 +2645,14 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     /// The download button of WebKit's own PDF viewer: the file, handed
     /// over whole. Unanswered, the button did nothing at all — a PDF opened
     /// in a tab had no way to be kept (see Downloads.keep).
+    ///
+    /// Everything but the web view may come as nil from WebKit's side.
     @objc(_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:)
-    func webView(_ webView: WKWebView, saveDataToFile data: Data, suggestedFilename: String, mimeType: String, originatingURL: URL?) {
-        let source = originatingURL ?? webView.url
-        Downloads.shared.keep(data, named: suggestedFilename, from: source, page: tab(for: webView)?.address ?? source)
+    func webView(_ webView: WKWebView, saveDataToFile data: NSData?, suggestedFilename: NSString?, mimeType: NSString?, originatingURL: NSURL?) {
+        guard let data else { return }
+        let source = (originatingURL as URL?) ?? webView.url
+        Downloads.shared.keep(data as Data, named: (suggestedFilename as String?) ?? "", type: mimeType as String?,
+                              from: source, page: tab(for: webView)?.address ?? source)
     }
 
     /// The page has drawn something: a view kept out of sight until now, so
@@ -2629,6 +2665,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        Launch.mark("firstFinish")
         // A page with nothing to lay out never has a first frame. Done is
         // done, and it is shown.
         (webView as? PageView)?.showFirstFrame()
@@ -2683,4 +2720,3 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         return tabs.first { $0.built === webView }
     }
 }
-

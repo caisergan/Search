@@ -126,9 +126,6 @@ enum Web {
         // page comes back.
         config.applicationNameForUserAgent = Web.userAgentName
         config.allowsAirPlayForMediaPlayback = true
-        // Off by default on macOS, which is why a full-screen button on a video
-        // did nothing at all: the page asks, and WebKit refuses without a word.
-        config.preferences.isElementFullscreenEnabled = true
         // On by default on macOS: a page could open a new tab, and take you
         // to it, whenever it liked — on load, on a timer. Off, window.open
         // works only from a click or a key, as Safari's pop-up blocking has
@@ -268,7 +265,11 @@ final class Tab: ObservableObject, Identifiable {
     /// True while the caret is in something on the page that takes typing.
     @Published var typing = false
     /// True while the page has taken over the screen.
-    @Published var immersed = false
+    @Published var immersed = false {
+        didSet { if immersed != oldValue { onImmersed?(self) } }
+    }
+    /// Told when the page takes the screen or gives it back (see Browser.prepare).
+    var onImmersed: ((Tab) -> Void)?
 
     /// True while this tab's page is out in the little window.
     @Published var floating = false
@@ -306,6 +307,31 @@ final class Tab: ObservableObject, Identifiable {
     var onZoom: ((Tab, CGFloat) -> Void)?
     /// The resolved address under the pointer, or nil when it leaves a link.
     var onLink: ((Tab, String?) -> Void)?
+    /// A page going full screen in the window, or leaving it (see Fullscreen.swift).
+    var onWholeWindow: ((Tab, Bool) -> Void)?
+    /// Full screen in the window, rather than WebKit's own in a space of its
+    /// own — which comes and goes without Search's say.
+    var inWindow = false
+
+    /// Out of full screen in the window: the page is told, and puts itself
+    /// back. The strip, the column and the window don't wait for it — a page
+    /// that doesn't answer, gone or hung, keeps nothing.
+    func leaveFullscreen() {
+        guard inWindow, let built else { return }
+        built.evaluateJavaScript("window.dispatchEvent(new Event('search-fullscreen-leave'))", in: nil, in: Web.world) { _ in }
+        fullscreenGone()
+    }
+
+    /// The page that was full screen in the window is gone without saying so
+    /// — another document in its place, a reload, its process ended, the Mac
+    /// woken with the page loaded again — and the strip, the column and the
+    /// window come back all the same. Left, they stayed hidden for good.
+    func fullscreenGone() {
+        guard immersed || inWindow else { return }
+        immersed = false
+        inWindow = false
+        onWholeWindow?(self, false)
+    }
 
     /// True while something on the page is making noise, so the row can say
     /// which tab it is coming from.
@@ -526,6 +552,12 @@ final class Tab: ObservableObject, Identifiable {
         // made with the tab, often long before its page, and a site or an
         // extension can hand over one of its own.
         FrameRate.apply(to: configuration.preferences)
+        // WebKit's own full screen, or the window's (see Fullscreen.swift).
+        Fullscreen.apply(to: configuration.preferences)
+        // A tab of Claude's has no camera or microphone to ask for: a page
+        // asking would have macOS ask you whether Search may use them, on your
+        // screen, for a page you never opened (see Browser's capture question).
+        if bench { Agent.withoutCapture(configuration.preferences) }
         let web = PageView(frame: .zero, configuration: configuration)
         // The trackpad pinch is WebKit's own: it magnifies what is on screen
         // and lets you move around inside it, the way pinching does everywhere
@@ -719,6 +751,14 @@ final class Tab: ObservableObject, Identifiable {
         controller.addUserScript(
             WKUserScript(source: PasskeyRelay.bridge, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Web.world)
         )
+        // Full screen in this window rather than a space of its own, as in
+        // Chrome, unless Settings › General says otherwise (see Fullscreen.swift).
+        Fullscreen.apply(to: built.configuration.preferences)
+        if Fullscreen.inWindow {
+            controller.addUserScript(
+                WKUserScript(source: Fullscreen.page, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+            )
+        }
         // While a script may drive Search: Claude's own tabs, and any page
         // served from this Mac, keep their console and requests from the
         // first line (see Agent.hook). Any other page gets nothing here.
@@ -814,9 +854,9 @@ final class Tab: ObservableObject, Identifiable {
     /// `done`, when given, hears back `false` for the one case worth saying
     /// something about: the sign-in fields that were there a moment ago,
     /// when this was offered, are gone by the time it actually runs.
-    func fill(user: String, password: String, done: ((Bool) -> Void)? = nil) {
+    func fill(user: String, password: String, on host: String, done: ((Bool) -> Void)? = nil) {
         web.evaluateInSearch(
-            "window.__officeForms && window.__officeForms.fill(`\(escape(user))`, `\(escape(password))`)"
+            "window.__officeForms && window.__officeForms.fill(`\(escape(user))`, `\(escape(password))`, `\(escape(host))`)"
         ) { result in
             done?((result as? Bool) ?? false)
         }
@@ -879,7 +919,7 @@ final class Tab: ObservableObject, Identifiable {
         lastY = 0
         reader = false
         typing = false
-        immersed = false
+        fullscreenGone()
         // Sent somewhere new, a sleeping tab is simply awake again — with
         // nothing of where it was before to bring back.
         pending = nil
@@ -1145,13 +1185,15 @@ final class Tab: ObservableObject, Identifiable {
         return there.absoluteString == "about:blank" && pending == nil && address != nil
     }
 
-    /// The page again, as ⌘R does in Safari and Chrome: the server asked
-    /// whether each file has changed, and only what has is fetched again.
-    /// It went from the network every time, every file of it — a third
-    /// slower, and apple.com's 1.6 MB fetched as 2.5 (measured 26 Sep 2026);
-    /// Empty Cache and Reload (⇧⌘R, below) is there for a site that serves
-    /// an old version. A view that has lost its document is given the
-    /// address back instead: there is nothing else for it to reload.
+    /// The page again, as ⌘R does in Safari and Chrome: the page itself is
+    /// asked for again, and each of its files comes from the cache while the
+    /// cache may still keep it — WebKit's reload for an app built today, and
+    /// Chrome's. It went from the network every time, every file of it — a
+    /// third slower, and apple.com's 1.6 MB fetched as 2.5 (measured 26 Sep
+    /// 2026); Hard Reload (⇧⌘R, below) is there for a file that changed
+    /// before the cache let it go. A view that has lost its document is
+    /// given the address back instead: there is nothing else for it to
+    /// reload.
     func reload() {
         // A pin put down with ⌘W has no view left to reload; waking it is
         // the reload.
@@ -1162,24 +1204,69 @@ final class Tab: ObservableObject, Identifiable {
             web.reload()
         }
     }
-    /// A reload with this site's cache emptied first — what Chrome calls
-    /// Empty Cache and Hard Reload — for a site that keeps serving an old
-    /// version even to a reload that asks the server again, usually through
-    /// what a service worker cached. Only the site's caches go: its
-    /// cookies, sign-ins and stored data stay.
+    /// ⇧⌘R, for a site that may be showing an old version: every file the
+    /// page uses is checked with the server again — the page, and each
+    /// script, stylesheet and picture — and whatever changed comes down;
+    /// what hasn't is a 304 and stays. What a service worker kept for the
+    /// site is dropped first, since that copy is one a check with the
+    /// server never reaches. Its cookies, sign-ins and stored data stay.
+    ///
+    /// The check is the page's own location.reload(), asked from Search's
+    /// world where nothing of the page's can stand in for it: WKWebView's
+    /// reload() checks only the page and trusts the cache for the rest, and
+    /// reloadFromOrigin() fetches every file whole, pictures included. The
+    /// site's cache isn't emptied either: that meant reading through the
+    /// whole cache, every site's, twice before the page could start —
+    /// 0.8–1 s with 13,800 files — then fetching every file again, and the
+    /// ⌘R after it fetched them all once more. What a service worker keeps
+    /// is listed apart from the rest, in a few milliseconds. On a page a
+    /// service worker runs, WebKit fetches whole whatever the worker asks
+    /// the server about again, so there a hard reload costs what the site
+    /// weighs.
+    func hardReload() {
+        guard !wake() else { return }
+        dropping([WKWebsiteDataTypeFetchCache]) { view in
+            view.evaluateJavaScript("location.reload(); true", in: nil, in: Web.world) { result in
+                // A page that runs no script at all — sandboxed without
+                // it — still gets a reload, if a lighter one.
+                if case .failure = result { view.reload() }
+            }
+        }
+    }
+
+    /// Empty Cache and Reload, in the View menu: this site's files, what a
+    /// service worker kept and what the page holds in memory, all dropped,
+    /// then the page fetched whole from the server with any service worker
+    /// stepped past — for a site Hard Reload can't bring back, one whose
+    /// server says a file hasn't changed when it has. Its cookies, sign-ins
+    /// and stored data stay. Finding the site's files means reading through
+    /// the whole cache, so the page takes a moment to start.
     func reloadEmptied() {
         guard !wake() else { return }
-        guard let host = (built?.url ?? address)?.host(), !host.isEmpty else {
+        dropping([WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeFetchCache]) { view in
+            view.reloadFromOrigin()
+        }
+    }
+
+    /// This site's data of `types` dropped from the page's store, and then
+    /// `then` — only if the tab is still showing the page it was asked on:
+    /// closed, put to sleep or gone somewhere else while the store was busy,
+    /// it has nothing left to reload, and asking for `web` would build a
+    /// page for a tab nobody has. A view that has lost its document has no
+    /// site to drop anything for, and is given its address back.
+    private func dropping(_ types: Set<String>, then: @escaping (PageView) -> Void) {
+        guard let view = built, let host = (view.url ?? address)?.host(), !host.isEmpty else {
             reload()
             return
         }
         let site = Vault.registrable(host)
-        let store = web.configuration.websiteDataStore
-        let caches: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeFetchCache]
-        Task {
-            let records = await store.dataRecords(ofTypes: caches).filter { $0.displayName == site }
-            await store.removeData(ofTypes: caches, for: records)
-            reload()
+        let store = view.configuration.websiteDataStore
+        let page = view.url
+        Task { [weak self] in
+            let records = await store.dataRecords(ofTypes: types).filter { $0.displayName == site }
+            if !records.isEmpty { await store.removeData(ofTypes: types, for: records) }
+            guard let self, self.built === view, view.url == page else { return }
+            then(view)
         }
     }
     func stop() { web.stopLoading() }
@@ -1200,6 +1287,7 @@ final class Tab: ObservableObject, Identifiable {
         onSwipeClose = nil
         onField = nil
         onCredentials = nil
+        onImmersed = nil
         discard()
     }
 

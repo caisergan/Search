@@ -12,6 +12,7 @@ struct SettingsPanel: View {
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var shield = Shield.shared
     @State private var isDefault = Links.isDefault
+    @State private var syncing = SettingsSync.on
     @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
 
     enum Page: String, CaseIterable, Identifiable {
@@ -161,8 +162,27 @@ struct SettingsPanel: View {
 
     // MARK: - general
 
+    private var syncDetail: String {
+        guard SettingsSync.drive != nil else { return "iCloud Drive is off on this Mac — System Settings › your name › iCloud › Drive" }
+        guard syncing else { return "Settings, shortcuts, bookmarks, what you hid and your extensions, on each Mac you turn this on. Never passwords, sign-ins or history" }
+        guard let when = Store.settings.object(forKey: "sync.when") as? Date else { return "On — in iCloud Drive › Search" }
+        let who = Store.settings.string(forKey: "sync.who") ?? "this Mac"
+        return "On — last from \(who), \(when.formatted(date: .abbreviated, time: .shortened))"
+    }
+
     private var general: some View {
         Card {
+            Line("Sync settings through iCloud Drive", syncDetail) {
+                Switch(on: Binding(
+                    get: { syncing },
+                    set: { on in
+                        if on { SettingsSync.turnOn { browser.announce($0) } } else { SettingsSync.turnOff() }
+                        syncing = SettingsSync.on
+                    }
+                ))
+                .disabled(SettingsSync.drive == nil && !syncing)
+            }
+            Rule()
             Line(
                 "Open links from other apps",
                 isDefault ? "Search is the default browser on this Mac" : "Mail, Slack and the rest still send links elsewhere"
@@ -228,6 +248,10 @@ struct SettingsPanel: View {
             Rule()
             Line("Scroll with the middle button", "Click the wheel on a page, then move the mouse up or down to scroll, as on Windows. Click again to stop") {
                 Switch(on: $prefs.autoScroll)
+            }
+            Rule()
+            Line("Full screen stays in the window", "A video or a page going full screen fills this window, which goes full screen with it, as in Chrome — no space of its own to swipe past. Off, it opens in a space of its own, as in Safari. Open tabs follow when reloaded") {
+                Switch(on: $prefs.fullscreenInWindow)
             }
             Rule()
             Line("Pages at 120 Hz", "Animations and scrolling in pages at up to 120 frames a second on a screen that can, instead of 60 as in Safari. Uses more battery. Open tabs follow when reloaded") {

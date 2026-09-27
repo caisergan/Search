@@ -32,6 +32,11 @@ VERSION = "1.0.0"
 
 # The tab Claude last opened or used: the one a call without a tabId means.
 current = {"id": None}
+# The last screenshots, by the id each was given, for upload_image.
+shots = {}
+shot_order = []
+# gif_creator's frames, while recording or until exported or cleared.
+recording = {"on": False, "frames": []}
 
 
 class Refused(Exception):
@@ -109,6 +114,40 @@ def tab_line(t):
     return f"{t['id']}  [{mark}]  {t.get('title') or '—'}  {t.get('url')}{state}"
 
 
+def keep_shot(answer):
+    """A screenshot kept under an id of its own, the last 20 of them."""
+    n = (int(shot_order[-1].split("_")[1]) + 1) if shot_order else 1
+    image_id = f"img_{n}"
+    shots[image_id] = answer["jpeg"]
+    shot_order.append(image_id)
+    while len(shot_order) > 20:
+        shots.pop(shot_order.pop(0), None)
+    return image_id
+
+
+def frame(args, label, click=None, drag=None, answer=None):
+    """While recording: the page as it is now, with what was just done."""
+    if not recording["on"]:
+        return
+    try:
+        a = answer or ask(with_tab({"do": "a.shot", "quality": 0.5, "scale": 0.75}, args))
+    except Exception:
+        return
+    recording["frames"].append({"jpeg": a["jpeg"], "pageWidth": a.get("pageWidth", a["width"]), "label": label,
+                                **({"click": click} if click else {}), **({"drag": drag} if drag else {})})
+    del recording["frames"][:-200]
+
+
+def spot(args, answer):
+    """Where an action landed, in page coordinates: the answer's, or the one given."""
+    at = answer.get("at") if isinstance(answer, dict) else None
+    if at and len(at) == 2:
+        return [float(at[0]), float(at[1])]
+    if args.get("coordinate"):
+        return [float(args["coordinate"][0]), float(args["coordinate"][1])]
+    return None
+
+
 # MARK: - the tools
 
 TAB = {"type": "string", "description": "The tab's id from tabs_context. Leave out for the tab Claude last opened or used (or, with “Let Claude use your tabs” on, the one in front)."}
@@ -145,13 +184,14 @@ TOOLS = [
     },
     {
         "name": "navigate",
-        "description": "Go to a URL in a tab, or back, forward, reload, or hard (reload past every cache — after changing a file); waits for the page to load.",
+        "description": "Go to a URL in a tab, or back, forward, reload, hard (every file checked with the server and the site's service-worker caches dropped — after changing a file, as ⇧⌘R does), or empty (the site's whole cache emptied first, for a server that says a changed file hasn't changed; slower to start); waits for the page to load.",
         "inputSchema": {"type": "object", "properties": {
-            "tabId": TAB, "url": {"type": "string", "description": "A URL, or back, forward, reload, hard."}}, "required": ["url"]},
+            "tabId": {"type": "string", "description": "The tab's id from tabs_context. Leave out for the tab Claude last opened or used; with none yet, a new tab of Claude's own is opened — never the user's tab in front."},
+            "url": {"type": "string", "description": "A URL, or back, forward, reload, hard, empty."}}, "required": ["url"]},
     },
     {
         "name": "read_page",
-        "description": "What can be used on the page, one element per line with a ref: links, buttons, fields (with their values), checkboxes, headings, dialogs. Each line ends with @x,y, its middle in screenshot coordinates, or (offscreen). Refs stay the same for the same element across reads. filter: interactive (default) or all (adds images and other labeled elements). ref: read only under that element. Fast: a few milliseconds.",
+        "description": "What can be used on the page, one element per line with a ref: links, buttons, fields (with their values), checkboxes, headings, dialogs, and file fields even when hidden. Each line ends with @x,y, its middle in screenshot coordinates, or (offscreen). Frames from other sites — a payment form, an embedded widget — are read too, below the page: their refs are named after the frame (f1.r4) and work with every tool. Refs stay the same for the same element across reads. filter: interactive (default) or all (adds images and other labeled elements). ref: read only under that element. Fast: a few milliseconds.",
         "inputSchema": {"type": "object", "properties": {
             "tabId": TAB, "filter": {"type": "string", "enum": ["interactive", "all"]}, "ref": REF,
             "max": {"type": "integer", "description": "At most this many elements (default 400)."}}},
@@ -171,7 +211,8 @@ TOOLS = [
         "name": "computer",
         "description": (
             "Use the page with real mouse and keyboard events, as a person would. Actions:\n"
-            "- screenshot: a JPEG of what is on screen; 1 pixel = 1 CSS pixel, so its coordinates are the ones to click. With ref: just that element.\n"
+            "- screenshot: a JPEG of what is on screen; 1 pixel = 1 CSS pixel, so its coordinates are the ones to click. With ref: just that element. scale (0.1–1): a smaller picture for fewer tokens — coordinates stay the page's. save_to_disk: also written to a file, for the user. Each screenshot has an imageId for upload_image.\n"
+            "- zoom: region [x0, y0, x1, y1] in page coordinates, drawn at twice the density — to read small text or icons.\n"
             "- left_click, double_click, triple_click, right_click, hover: at ref (preferred — scrolled into view first) or coordinate [x, y]. modifiers: e.g. \"cmd\" or \"shift+cmd\". A click that loads a page answers once it has loaded. A select can't be clicked: use form_input.\n"
             "- left_click_drag: from ref or coordinate to to_ref or to_coordinate — a slider, a sortable list, a canvas, HTML drag and drop.\n"
             "- type: text into the focused field (ref: click that field first). Inserted in one go, like Chrome's; keys: true presses a key per character instead.\n"
@@ -182,7 +223,7 @@ TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {
             "tabId": TAB,
-            "action": {"type": "string", "enum": ["screenshot", "left_click", "double_click", "triple_click", "right_click", "hover", "left_click_drag", "type", "key", "scroll", "scroll_to", "wait"]},
+            "action": {"type": "string", "enum": ["screenshot", "zoom", "left_click", "double_click", "triple_click", "right_click", "hover", "left_click_drag", "type", "key", "scroll", "scroll_to", "wait"]},
             "ref": REF,
             "coordinate": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
             "to_ref": REF,
@@ -194,6 +235,9 @@ TOOLS = [
             "scroll_direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
             "scroll_amount": {"type": "number"},
             "duration": {"type": "number"},
+            "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+            "scale": {"type": "number", "minimum": 0.1, "maximum": 1},
+            "save_to_disk": {"type": "boolean"},
         }, "required": ["action"]},
     },
     {
@@ -209,6 +253,24 @@ TOOLS = [
             "tabId": TAB, "ref": REF, "paths": {"type": "array", "items": {"type": "string"}}}, "required": ["ref", "paths"]},
     },
     {
+        "name": "upload_image",
+        "description": "Put a screenshot taken with computer screenshot or zoom (its imageId) into a file field, or drop it on the page: ref for a field or drop zone (a hidden file input too), or coordinate [x, y] to drop it where that is, as a drag from the desktop would. Take the screenshot just before; filename is optional.",
+        "inputSchema": {"type": "object", "properties": {
+            "tabId": TAB, "imageId": {"type": "string"}, "ref": REF,
+            "coordinate": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+            "filename": {"type": "string"}}, "required": ["imageId"]},
+    },
+    {
+        "name": "gif_creator",
+        "description": "Record what is done in the browser as an animated GIF. start_recording, then act — every computer action and navigation adds a frame, with clicks, drags and what was done drawn on it; take a screenshot right after starting and right before stopping for the first and last frames. stop_recording keeps the frames; export writes the GIF into the Downloads folder (download: true) or drops it on the page at coordinate; clear discards the frames. options: showClickIndicators, showDragPaths, showActionLabels, showProgressBar (all on by default).",
+        "inputSchema": {"type": "object", "properties": {
+            "tabId": TAB,
+            "action": {"type": "string", "enum": ["start_recording", "stop_recording", "export", "clear"]},
+            "download": {"type": "boolean"}, "filename": {"type": "string"},
+            "coordinate": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+            "options": {"type": "object"}}, "required": ["action"]},
+    },
+    {
         "name": "wait_for",
         "description": "Wait until a CSS selector matches, some text is on the page, or (idle: true) the page has loaded and has no fetch or XHR open for half a second. Default up to 10 s.",
         "inputSchema": {"type": "object", "properties": {
@@ -222,20 +284,20 @@ TOOLS = [
     },
     {
         "name": "javascript_tool",
-        "description": "Run JavaScript in the page, with the page's own globals, and get its value back: an expression, or a function body that returns. Promises are awaited. An error is reported, never run twice.",
+        "description": "Run JavaScript in the page, with the page's own globals, and get its value back as a console gives it: top-level await works, and the last expression's value is returned (`const r = await fetch(u); r.status` answers the status), or a body's `return`. An error is reported; code is never run twice.",
         "inputSchema": {"type": "object", "properties": {
             "tabId": TAB, "code": {"type": "string"}}, "required": ["code"]},
     },
     {
         "name": "read_console_messages",
-        "description": "Console messages, uncaught errors and rejections, files that failed to load and blocked content. Claude's own tabs and pages from this Mac (localhost, *.local, *.test) are heard from the first line of the page; any other page from the first call on it. pattern: a regex to keep only matching lines. onlyErrors: errors and exceptions only. clear: empty the buffer after reading.",
+        "description": "Console messages, uncaught errors and rejections, files that failed to load and blocked content. Claude's own tabs and pages from this Mac (localhost, *.local, *.test) are heard from the first line of the page; any other page from the first call on it. pattern: a regex to keep only matching lines. onlyErrors: errors and exceptions only. clear: empty the buffer after reading. limit: the last this many (default 100).",
         "inputSchema": {"type": "object", "properties": {
-            "tabId": TAB, "pattern": {"type": "string"}, "onlyErrors": {"type": "boolean"}, "clear": {"type": "boolean"}}},
+            "tabId": TAB, "pattern": {"type": "string"}, "onlyErrors": {"type": "boolean"}, "clear": {"type": "boolean"}, "limit": {"type": "integer"}}},
     },
     {
         "name": "read_network_requests",
-        "description": "What the page loaded and asked for: the document, each file, and every fetch and XHR with its method, status, time and failure. Heard from the first line in Claude's tabs and localhost pages. pattern: a regex on the URL. onlyFailed: 4xx, 5xx and failures only. clear: forget what was listed.",
-        "inputSchema": {"type": "object", "properties": {"tabId": TAB, "pattern": {"type": "string"}, "onlyFailed": {"type": "boolean"}, "clear": {"type": "boolean"}}},
+        "description": "What the page loaded and asked for: the document, each file, and every fetch and XHR with its method, status, time and failure. Heard from the first line in Claude's tabs and localhost pages. pattern: a regex on the URL. onlyFailed: 4xx, 5xx and failures only. clear: forget what was listed. limit: the last this many (default 100).",
+        "inputSchema": {"type": "object", "properties": {"tabId": TAB, "pattern": {"type": "string"}, "onlyFailed": {"type": "boolean"}, "clear": {"type": "boolean"}, "limit": {"type": "integer"}}},
     },
     {
         "name": "batch",
@@ -363,8 +425,16 @@ def call(name, args):
         return [text(f"in front: {tab_line(a)}")]
 
     if name == "navigate":
-        a = ask(with_tab({"do": "a.navigate", "url": args["url"]}, args))
+        # Without a tabId, and no tab of Claude's in hand yet: a tab of its
+        # own, as Claude in Chrome opens one — never the page in front of the
+        # user, which an address would take them away from. Back, forward
+        # and the reloads need a tab to act on.
+        if not args.get("tabId") and not current["id"] and args["url"] not in ("back", "forward", "reload", "hard", "empty"):
+            a = ask({"do": "a.open", "url": args["url"]})
+        else:
+            a = ask(with_tab({"do": "a.navigate", "url": args["url"]}, args))
         current["id"] = a.get("id") or current["id"]
+        frame(args, "navigate " + args["url"])
         return [text(said("a.navigate", a))]
 
     if name == "read_page":
@@ -411,7 +481,7 @@ def call(name, args):
         if args.get("pattern"):
             rx = re.compile(args["pattern"])
             messages = [m for m in messages if rx.search(m["text"])]
-        lines = [f"[{m['level']}] {m['text']}" for m in messages[-200:]]
+        lines = [f"[{m['level']}] {m['text']}" for m in messages[-int(args.get("limit") or 100):]]
         head = "listening from now on — what the page said before this call was not heard\n" if a.get("since") == "now" else ""
         return [text(head + ("\n".join(lines) or "no messages"))]
 
@@ -429,7 +499,7 @@ def call(name, args):
             ms = f" {r['ms']}ms" if r.get("ms") is not None else ""
             return f"{status} {r.get('method', 'GET')} {r.get('type', '')}{ms}{size} {r.get('url', '')}"
         head = "listening from now on — only files the page loaded are listed from before\n" if a.get("since") == "now" else ""
-        return [text(head + ("\n".join(row(r) for r in reqs[-200:]) or "no requests"))]
+        return [text(head + ("\n".join(row(r) for r in reqs[-int(args.get("limit") or 100):]) or "no requests"))]
 
     if name == "batch":
         steps = [step(s) for s in args["steps"]]
@@ -441,6 +511,45 @@ def call(name, args):
             out.append(f"stopped at step {a['stopped'] + 1}")
         return [text("\n".join(out))]
 
+    if name == "upload_image":
+        data = shots.get(args.get("imageId", ""))
+        if not data:
+            raise Refused(f"no screenshot {args.get('imageId')} — take one with computer screenshot and use its imageId")
+        req = with_tab({"do": "a.upload", "files": [{"name": os.path.basename(args.get("filename") or "screenshot.jpg"), "type": "image/jpeg", "data": data}]}, args)
+        if args.get("ref"):
+            req["ref"] = args["ref"]
+        elif args.get("coordinate"):
+            req["x"], req["y"] = float(args["coordinate"][0]), float(args["coordinate"][1])
+        else:
+            raise Refused("upload_image needs a ref or a coordinate")
+        a = ask(req)
+        return [text(f"{a.get('files')} image " + ("put in the field" if a.get("into") == "field" else "dropped"))]
+
+    if name == "gif_creator":
+        action = args["action"]
+        if action == "start_recording":
+            recording.update(on=True, frames=[])
+            return [text("recording — take a screenshot now for the first frame")]
+        if action == "stop_recording":
+            recording["on"] = False
+            return [text(f"stopped with {len(recording['frames'])} frames")]
+        if action == "clear":
+            recording.update(on=False, frames=[])
+            return [text("frames discarded")]
+        if action == "export":
+            if not recording["frames"]:
+                raise Refused("no frames — start_recording, act, then export")
+            a = ask({"do": "a.gif", "frames": recording["frames"], "options": args.get("options") or {}, "name": args.get("filename") or ""}, timeout=120)
+            if args.get("coordinate"):
+                with open(a["path"], "rb") as f:
+                    gif = base64.b64encode(f.read()).decode()
+                req = with_tab({"do": "a.upload", "x": float(args["coordinate"][0]), "y": float(args["coordinate"][1]),
+                                "files": [{"name": os.path.basename(a["path"]), "type": "image/gif", "data": gif}]}, args)
+                ask(req)
+                return [text(f"{a['frames']} frames, {a['bytes'] // 1024} KB, dropped on the page — also at {a['path']}")]
+            return [text(f"{a['frames']} frames, {a['bytes'] // 1024} KB: {a['path']}")]
+        raise Refused(f"unknown action {action}")
+
     if name == "computer":
         action = args["action"]
         req = with_tab({}, args)
@@ -448,11 +557,38 @@ def call(name, args):
             req["x"], req["y"] = float(args["coordinate"][0]), float(args["coordinate"][1])
         if args.get("ref"):
             req["ref"] = args["ref"]
-        if action == "screenshot":
+        if action in ("screenshot", "zoom"):
             req["do"] = "a.shot"
+            if args.get("scale"):
+                req["scale"] = float(args["scale"])
+            if action == "zoom":
+                region = args.get("region") or []
+                if len(region) != 4:
+                    raise Refused("zoom needs region [x0, y0, x1, y1]")
+                x0, y0, x1, y1 = (float(v) for v in region)
+                req.update(x=min(x0, x1), y=min(y0, y1), w=abs(x1 - x0), h=abs(y1 - y0))
+                req.pop("ref", None)
             a = ask(req)
-            where = f"{a['width']}×{a['height']}"
-            where += f" — the element, from ({a['left']}, {a['top']}) on the page" if args.get("ref") else " — coordinates on this picture are the ones to click"
+            image_id = keep_shot(a)
+            if action == "screenshot" and not args.get("ref"):
+                frame(args, "screenshot", answer=a)
+            page_w, page_h = a.get("pageWidth", a["width"]), a.get("pageHeight", a["height"])
+            if action == "zoom":
+                where = f"{a['width']}×{a['height']} picture of the page from ({a['left']}, {a['top']}) to ({a['left'] + page_w}, {a['top'] + page_h})"
+            elif args.get("ref"):
+                where = f"{a['width']}×{a['height']} — the element, from ({a['left']}, {a['top']}) on the page"
+            elif a["width"] != page_w:
+                where = f"{a['width']}×{a['height']}, scaled from {page_w}×{page_h} — click in the page's coordinates: multiply this picture's by {page_w / a['width']:.3g}"
+            else:
+                where = f"{a['width']}×{a['height']} — coordinates on this picture are the ones to click"
+            where += f"\nimageId: {image_id}"
+            if args.get("save_to_disk"):
+                folder = os.path.join(os.path.expanduser("~/Downloads"), "Search screenshots")
+                os.makedirs(folder, exist_ok=True)
+                path = os.path.join(folder, time.strftime("screenshot %Y-%m-%d at %H.%M.%S") + f" {image_id}.jpg")
+                with open(path, "wb") as f:
+                    f.write(base64.b64decode(a["jpeg"]))
+                where += f"\nsaved: {path}"
             return [{"type": "image", "data": a["jpeg"], "mimeType": "image/jpeg"}, text(where)]
         if action == "left_click_drag":
             req["do"] = "a.drag"
@@ -460,28 +596,40 @@ def call(name, args):
                 req["toRef"] = args["to_ref"]
             if args.get("to_coordinate"):
                 req["toX"], req["toY"] = float(args["to_coordinate"][0]), float(args["to_coordinate"][1])
-            return [text(said("a.drag", ask(req)))]
+            a = ask(req)
+            start = spot(args, a)
+            end = [float(v) for v in args["to_coordinate"]] if args.get("to_coordinate") else None
+            frame(args, "drag", drag=(start + end) if start and end else None)
+            return [text(said("a.drag", a))]
         if action in ("left_click", "double_click", "triple_click", "right_click"):
             req["do"] = "a.click"
             req["button"] = {"left_click": "left", "double_click": "double", "triple_click": "triple", "right_click": "right"}[action]
             if args.get("modifiers"):
                 req["mods"] = args["modifiers"]
-            return [text(said("a.click", ask(req)))]
+            a = ask(req)
+            frame(args, action.replace("_", " "), click=spot(args, a))
+            return [text(said("a.click", a))]
         if action == "hover":
             req["do"] = "a.hover"
-            return [text(said("a.hover", ask(req)))]
+            a = ask(req)
+            frame(args, "hover", click=spot(args, a))
+            return [text(said("a.hover", a))]
         if action == "type":
             req["do"] = "a.type"
             req["text"] = args.get("text", "")
             if args.get("keys"):
                 req["keys"] = True
-            return [text(said("a.type", ask(req)))]
+            a = ask(req)
+            frame(args, "type “" + (args.get("text", "")[:40]) + "”")
+            return [text(said("a.type", a))]
         if action == "key":
             req["do"] = "a.key"
             req["keys"] = args.get("text", "")
             if args.get("repeat"):
                 req["repeat"] = int(args["repeat"])
-            return [text(said("a.key", ask(req)))]
+            a = ask(req)
+            frame(args, "key " + args.get("text", ""))
+            return [text(said("a.key", a))]
         if action in ("scroll", "scroll_to"):
             req["do"] = "a.scroll"
             if action == "scroll":
@@ -489,9 +637,10 @@ def call(name, args):
                 direction = args.get("scroll_direction", "down")
                 req["dx"] = {"left": -amount, "right": amount}.get(direction, 0)
                 req["dy"] = {"up": -amount, "down": amount}.get(direction, 0)
-            return [text(said("a.scroll", ask(req)))]
+            a = ask(req)
+            frame(args, "scroll " + args.get("scroll_direction", "") if action == "scroll" else "scroll to " + str(args.get("ref", "")))
+            return [text(said("a.scroll", a))]
         if action == "wait":
-            import time
             time.sleep(max(0, min(30, float(args.get("duration", 1)))))
             return [text("waited")]
         raise Refused(f"unknown action {action}")
@@ -529,10 +678,11 @@ def main():
                     "serverInfo": {"name": "search", "version": VERSION},
                     "instructions": (
                         "Claude in Search: use the Search browser on this Mac. Start with tabs_context. "
-                        "Prefer read_page/find and refs over screenshots: they are exact and take milliseconds. "
+                        "Prefer read_page/find and refs over screenshots: they are exact and take milliseconds, and reach into frames from other sites. "
+                        "Pages in Claude's tabs behave as the page in front of a person does — visible, focused, hover opens menus. "
                         "Use batch to do several steps in one call. For web development: pages on localhost keep their console "
                         "and requests from the first line (read_console_messages, read_network_requests); navigate with url "
-                        "\"hard\" after changing files; resize_page for phones; dialogs never block."
+                        "\"hard\" after changing files; resize_page for phones; dialogs never block; gif_creator records a flow."
                     ),
                 }
             elif method == "tools/list":

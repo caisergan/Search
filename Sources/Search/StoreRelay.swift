@@ -138,7 +138,8 @@ final class StoreRelay: NSObject, WKScriptMessageHandler {
         if (!mine) return;
         e.preventDefault();
         e.stopImmediatePropagation();
-        if (!mine.disabled) window.webkit.messageHandlers.officeStore.postMessage({ add: true });
+        // Your click only: the store's own scripts don't get to press it.
+        if (e.isTrusted && !mine.disabled) window.webkit.messageHandlers.officeStore.postMessage({ add: true });
       }, true);
 
       window.__officeStore = {

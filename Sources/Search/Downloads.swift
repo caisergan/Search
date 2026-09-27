@@ -190,8 +190,16 @@ final class Downloads: NSObject, ObservableObject {
     /// A file handed over whole rather than fetched — the PDF viewer's own
     /// download button — written where downloads go and listed as one that
     /// has come, arriving at the button like any other.
-    func keep(_ data: Data, named suggested: String, from source: URL?, page: URL?) {
-        let name = suggested.isEmpty ? (source?.lastPathComponent ?? "download") : suggested
+    func keep(_ data: Data, named suggested: String, type: String? = nil, from source: URL?, page: URL?) {
+        // The name is the site's to suggest, and only a name: no folder of
+        // its own, nothing that climbs out of Downloads, nothing hidden.
+        var name = suggested
+            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        while name.hasPrefix(".") { name.removeFirst() }
+        if name.isEmpty { name = source?.lastPathComponent ?? "" }
+        if name.isEmpty || name == "/" { name = "download" }
+        if (name as NSString).pathExtension.isEmpty, type == "application/pdf" { name += ".pdf" }
         let folder = browser?.downloadsFolder
             ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
         var file = free(name, in: folder)

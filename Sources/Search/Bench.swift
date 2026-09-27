@@ -356,8 +356,8 @@ final class Bench {
                 guard browser.responds(to: selector), let web = browser.active?.built,
                       let path = request["path"] as? String, let data = FileManager.default.contents(atPath: path)
                 else { answer(["error": "hand needs a path, a page, and the selector answered"]); return }
-                browser.webView(web, saveDataToFile: data, suggestedFilename: (path as NSString).lastPathComponent,
-                                mimeType: "application/pdf", originatingURL: web.url)
+                browser.webView(web, saveDataToFile: data as NSData, suggestedFilename: (path as NSString).lastPathComponent as NSString,
+                                mimeType: "application/pdf", originatingURL: web.url as NSURL?)
             default: break
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -584,6 +584,20 @@ final class Bench {
             }
             if let window = Links.window { out["lights"] = Bench.lights(of: window) }
             out["keysQuieted"] = PageView.quieted
+            out["sync"] = ["on": SettingsSync.on, "waiting": SettingsSync.waiting, "offered": SettingsSync.offered, "who": Store.settings.string(forKey: "sync.who") ?? ""]
+            // Full screen in the window (see Fullscreen.swift): the tab on
+            // screen's word, the tab holding the window, the window itself,
+            // and what the column makes of it — out, or its edge watched.
+            out["fullscreen"] = [
+                "window": Links.window?.styleMask.contains(.fullScreen) ?? false,
+                "holder": Fullscreen.holder.map { String($0.uuidString.prefix(8)).lowercased() } ?? "",
+                "tookWindow": Fullscreen.tookWindow,
+                "immersed": browser.active?.immersed ?? false,
+                "inWindow": browser.active?.inWindow ?? false,
+                "column": browser.prefs.sidebar && !browser.folded && browser.active?.immersed != true,
+                "edgeWatched": Fold.watching,
+            ] as [String: Any]
+            out["launch"] = Launch.marks
             if let back = Tab.lastReturn { out["lastReturn"] = ["away": back.away, "shownMs": back.shown] }
             // Settings › General › Web Inspector, as each page's WebKit has it.
             let asked = NSSelectorFromString("_developerExtrasEnabled")
@@ -1042,6 +1056,15 @@ final class Bench {
                 answer(["window": NSApp.windows.map { "\(type(of: $0))" }, "hidden": NSApp.isHidden])
             }
 
+        case "windowfs":
+            // The window in or out of full screen, as the green button does.
+            // Only on a SEARCH_PROBE run.
+            guard Store.testing, let window = Links.window else { answer(["error": "windowfs only works on a --test run"]); return }
+            window.toggleFullScreen(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                answer(["fullScreen": window.styleMask.contains(.fullScreen)])
+            }
+
         case "pages":
             // Pages that WebKit will paint, for `picture`, from a probe started
             // hidden: the app shown again without coming forward, but only
@@ -1484,6 +1507,21 @@ final class Bench {
             }
             extensionCommand(verb, request, browser: browser, answer)
 
+        case "sync":
+            // Settings through iCloud Drive (see Sync.swift): what it has, and
+            // on a test run its buttons — use theirs (opens again), keep mine.
+            switch request["action"] as? String ?? "" {
+            case "use" where Store.testing: SettingsSync.useTheirs()
+            case "keep" where Store.testing: SettingsSync.keepMine { browser.announce($0) }
+            case "add" where Store.testing:
+                if #available(macOS 15.4, *) { SettingsSync.addOffered(Extensions.shared) }
+            case "", "state": break
+            default: answer(["error": "sync use|keep only on a --test run"]); return
+            }
+            answer(["on": SettingsSync.on, "waiting": SettingsSync.waiting, "offered": SettingsSync.offered,
+                    "another": SettingsSync.another()?.from ?? "", "who": Store.settings.string(forKey: "sync.who") ?? "",
+                    "differences": SettingsSync.differences()])
+
         case _ where verb.hasPrefix("a."):
             agent(verb, request, browser: browser, answer)
 
@@ -1662,9 +1700,9 @@ final class Bench {
 
     /// Once the page has stopped loading, or the time is up.
     func wait(for tab: Tab, until limit: Date, _ answer: @escaping ([String: Any]) -> Void) {
-        if !tab.loading, tab.address != nil, tab.failure == nil || true {
-            // A beat for the document's own scripts to settle.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+        if !tab.loading, tab.address != nil {
+            // A beat for what the page does as it comes up (see `settle`).
+            settle(tab, until: Date().addingTimeInterval(0.25)) { [weak self] in
                 guard let self else { return }
                 var out = describe(tab)
                 if let failure = tab.failure { out["failure"] = failure }
@@ -1678,8 +1716,30 @@ final class Bench {
             answer(out)
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        // Looked at often: it is one flag, and every tenth of a second
+        // waited here was a tenth of a second on every page Claude opened.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak self] in
             self?.wait(for: tab, until: limit, answer)
+        }
+    }
+
+    /// A loaded page, left to its scripts until none of the requests they
+    /// started is still open — seen twice, 25 ms apart — or the deadline.
+    /// It was a quarter of a second every time: most of a navigation to a
+    /// page that loads in thirty milliseconds, and for a page that fetches
+    /// for longer no surer than this. Without the listener that counts
+    /// requests (see Agent.hook), a loaded page counts as quiet.
+    private func settle(_ tab: Tab, until deadline: Date, quiet: Bool = false, _ then: @escaping () -> Void) {
+        guard Date() < deadline, let web = tab.built else { then(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak self] in
+            web.callAsyncJavaScript(Agent.idle, arguments: [:], in: nil, in: .page) { result in
+                MainActor.assumeIsolated {
+                    let idle = (try? result.get()) as? Bool == true
+                    if idle, quiet { then(); return }
+                    guard let self else { then(); return }
+                    self.settle(tab, until: deadline, quiet: idle, then)
+                }
+            }
         }
     }
 
@@ -1687,17 +1747,23 @@ final class Bench {
 
     /// A room of its own for each tab Claude gave a size of its own (see
     /// Agent.swift), so that the others keep theirs.
-    var rooms: [Tab.ID: NSWindow] = [:]
+    var rooms: [Tab.ID: Room] = [:]
 
     /// A page nobody is looking at has to be somewhere to be laid out at all
     /// (see Backstage). The stage takes it back the moment you pick its tab.
     /// `any`: one of yours too, while Claude uses it.
     func house(_ tab: Tab, any: Bool = false) {
         guard tab.bench || any else { return }
-        guard let size = Agent.sizes[tab.id] else { Backstage.park(tab.web); return }
-        // One Claude gave a size waits in its own room at that size — also
-        // when the stage let go of it backstage, at the stage's.
+        // A tab Claude works in waits in a room of its own, at the size Claude
+        // gave it or the stage's: its room says it is key while Claude works
+        // (see Agent.engage), which the room every background tab shares
+        // mustn't — each of those pages would take itself for the one in
+        // front. Also when the stage let go of it backstage.
         guard tab.web.window == nil || Backstage.holds(tab.web) else { return }
+        // Rooms of tabs that are gone go with them.
+        let open = Set(browser?.tabs.map(\.id) ?? [])
+        for (id, room) in rooms where !open.contains(id) { rooms[id] = nil; room.close() }
+        let size = Agent.sizes[tab.id] ?? Backstage.stageSize
         let window = rooms[tab.id] ?? Backstage.makeRoom(size: size)
         rooms[tab.id] = window
         window.setContentSize(size)
@@ -1801,4 +1867,26 @@ final class Bench {
         })();
         """
     }
+}
+
+/// How far the launch had got at each point, in ms from the process's own
+/// start, for `./bench probe`. Each point is written once.
+@MainActor
+enum Launch {
+    static private(set) var marks: [String: Int] = [:]
+
+    static func mark(_ point: String) {
+        guard marks[point] == nil else { return }
+        marks[point] = Int((Date().timeIntervalSince1970 - started) * 1000)
+    }
+
+    /// When the kernel says the process began: before any of the app's code.
+    private static let started: TimeInterval = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return Date().timeIntervalSince1970 }
+        let start = info.kp_proc.p_starttime
+        return TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000
+    }()
 }
