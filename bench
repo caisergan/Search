@@ -47,7 +47,8 @@
                                        move this one to Nth
     ./bench downloads [ACTION]         test run: every download, with its state, bytes and pace;
                                        fetch ID URL through a tab, pause|resume|cancel|restart|remove N,
-                                       clear, or quit as ⌘Q would without asking
+                                       clear, quit as ⌘Q would without asking, list PATH (the button's
+                                       list drawn to a PNG), popover on|off
     ./bench hit X Y [double|middle]    what a press at X Y (points from the window's top left) lands on,
                                        and whether a drag from there would move the window;
                                        double: test run, a double-click there (start the probe hidden)
@@ -275,6 +276,8 @@ def main(argv):
         elif args[0] in ("pause", "resume", "cancel", "restart", "remove") and len(args) == 2:
             request["action"], request["n"] = args[0], int(args[1])
         elif args in (["clear"], ["quit"]): request["action"] = args[0]
+        elif args[0] == "list" and len(args) == 2: request["action"], request["path"] = "list", os.path.abspath(args[1])
+        elif args[0] == "popover" and len(args) == 2: request["action"], request["on"] = "popover", args[1] == "on"
         else: sys.exit("usage: bench downloads [fetch ID URL | pause|resume|cancel|restart|remove N | clear | quit]")
     elif verb == "window":
         pass
@@ -308,7 +311,9 @@ def main(argv):
         value = answer.get("value")
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
     elif verb == "downloads":
-        print(f"{answer.get('count', 0)} coming in, overall {answer.get('overall', -1):.2f}")
+        print(f"{answer.get('count', 0)} coming in, overall {answer.get('overall', -1):.2f}; button {answer.get('button')} "
+              f"seen={answer.get('seen')} trips={answer.get('trips')} landings={answer.get('landings')} "
+              f"finale={answer.get('finale') or '-'} said={answer.get('said') or '-'}")
         for d in answer.get("items", []):
             left = f" {d['left']}s left" if d.get("left", -1) >= 0 else ""
             keep = " (resumable)" if d.get("resumable") else ""

@@ -94,8 +94,9 @@ struct SideBar: View {
                     Color.clear.frame(width: Metrics.sideLights)
                     Helm(browser: browser)
                     Spacer(minLength: 0)
-                    // The extensions, in the corner across from the lights.
-                    ExtensionSlot(always: true, room: extensionRoom)
+                    // The downloads and the extensions, in the corner
+                    // across from the lights.
+                    DownloadsAndExtensions(always: true, room: extensionRoom)
                         .background {
                             GeometryReader { box in
                                 Color.clear

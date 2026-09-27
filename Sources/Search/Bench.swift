@@ -311,10 +311,23 @@ final class Bench {
             case "clear": downloads.clear()
             case "quit":
                 downloads.quitWithoutAsking()
+            case "list":
+                guard let path = request["path"] as? String,
+                      let data = downloadsListPicture()?.representation(using: .png, properties: [:])
+                else { answer(["error": "list needs a path"]); return }
+                try? data.write(to: URL(fileURLWithPath: path))
+            case "popover":
+                Arrivals.shared.listOpen = request["on"] as? Bool ?? true
             default: break
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                answer(["count": downloads.count, "overall": downloads.overall ?? -1, "items": downloads.items.map { item in
+                let arrivals = Arrivals.shared
+                answer(["count": downloads.count, "overall": downloads.overall ?? -1,
+                        "seen": arrivals.seen, "trips": arrivals.trips.count, "landings": arrivals.landings,
+                        "finale": arrivals.finale.map { $0.ok ? "done" : "failed" } ?? "",
+                        "button": arrivals.target.map { [Int($0.minX), Int($0.minY), Int($0.width), Int($0.height)] } ?? [],
+                        "said": browser.announcement ?? "",
+                        "items": downloads.items.map { item in
                     let state: String = switch item.state {
                     case .starting: "starting"
                     case .running: "running"

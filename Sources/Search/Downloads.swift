@@ -112,6 +112,8 @@ final class Downloads: NSObject, ObservableObject {
     @Published private(set) var items: [Download] = []
     /// How many are coming in right now.
     @Published private(set) var count = 0
+    /// How many are paused, waiting to be picked up again.
+    @Published private(set) var held = 0
     /// Everything coming in, together: 0…1, nil when nothing is, or nothing
     /// coming in has said how big it is.
     @Published private(set) var overall: Double?
@@ -137,6 +139,7 @@ final class Downloads: NSObject, ObservableObject {
     private override init() {
         super.init()
         load()
+        tick()
     }
 
     var running: [Download] { items.filter(\.active) }
@@ -355,6 +358,8 @@ final class Downloads: NSObject, ObservableObject {
             }
         }
         if count != going { count = going }
+        let waiting = items.filter { $0.state == .paused }.count
+        if held != waiting { held = waiting }
         let whole: Double? = going > 0 && sized && total > 0 ? Double(got) / Double(total) : nil
         if overall != whole { overall = whole }
         if going == 0 {

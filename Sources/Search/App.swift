@@ -558,6 +558,8 @@ struct ContentView: View {
             // The column folded away, and out again at the edge (see Fold.swift).
             .overlay(alignment: .leading) { Fold(browser: browser, prefs: browser.prefs) }
             .overlay(alignment: .bottom) { bars }
+            // A download's icon on its way to the button (see DownloadsUI.swift).
+            .overlay { Flights().ignoresSafeArea() }
             .overlay {
                 // Over the page only: the column, the strip and the bookmarks
                 // bar stay as they are, uncovered and in reach.
