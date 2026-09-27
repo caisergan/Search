@@ -387,13 +387,22 @@ struct SettingsPanel: View {
                 Segmented(options: StartLoad.allCases.map { ($0, $0.title) }, selection: $prefs.startLoad)
             }
             Rule()
+            Line("Go to a tab opened with ⌘-click", "⌘-click opens the link in a new tab and takes you to it; ⌘⇧-click leaves it behind. Off, it's the other way round.") {
+                Switch(on: $prefs.commandClickFront)
+            }
+            Rule()
+            Line("Go to a link opened in a new window", "Open Link in New Window, and a link that opens a window of its own. Off, its tab waits behind the one you're on. A sign-in window still comes to the front.") {
+                Switch(on: $prefs.newWindowFront)
+            }
+            Rule()
             Line("Glance", "Hold \(prefs.glanceTrigger.key) and click a link to look at it over the page instead of opening a tab. esc or a click beside it puts it away; the arrow keeps it as a tab.") {
                 Switch(on: $prefs.glances)
             }
             if prefs.glances {
                 Rule()
                 Line("Glance with", "The key held while clicking. ⌘⇧-click and the middle button still open a tab") {
-                    Segmented(options: GlanceTrigger.allCases.map { ($0, $0.title) }, selection: $prefs.glanceTrigger)
+                    // ⌘ is the tab's while ⌘-click goes to it.
+                    Segmented(options: GlanceTrigger.allCases.filter { !prefs.commandClickFront || $0 != .command }.map { ($0, $0.title) }, selection: $prefs.glanceTrigger)
                 }
             }
             Rule()
