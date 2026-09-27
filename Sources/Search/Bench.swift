@@ -363,7 +363,7 @@ final class Bench {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 let arrivals = Arrivals.shared
                 answer(["count": downloads.count, "overall": downloads.overall ?? -1,
-                        "seen": arrivals.seen, "trips": arrivals.trips.count, "landings": arrivals.landings,
+                        "trips": arrivals.trips.count, "landings": arrivals.landings,
                         "finale": arrivals.finale.map { $0.ok ? "done" : "failed" } ?? "",
                         "button": arrivals.target.map { [Int($0.minX), Int($0.minY), Int($0.width), Int($0.height)] } ?? [],
                         "said": browser.announcement ?? "", "badge": NSApp.dockTile.badgeLabel ?? "",

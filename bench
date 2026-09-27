@@ -320,7 +320,7 @@ def main(argv):
         print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
     elif verb == "downloads":
         print(f"{answer.get('count', 0)} coming in, overall {answer.get('overall', -1):.2f}; button {answer.get('button')} "
-              f"seen={answer.get('seen')} trips={answer.get('trips')} landings={answer.get('landings')} "
+              f"trips={answer.get('trips')} landings={answer.get('landings')} "
               f"finale={answer.get('finale') or '-'} said={answer.get('said') or '-'} dock={answer.get('badge') or '-'}")
         for d in answer.get("items", []):
             left = f" {d['left']}s left" if d.get("left", -1) >= 0 else ""
