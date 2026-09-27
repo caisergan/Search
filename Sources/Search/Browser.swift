@@ -2347,7 +2347,9 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         }
 
         // ⌘-click opens beside this tab and leaves you where you are; ⌘⇧-click
-        // takes you with it.
+        // takes you with it. Settings can turn that round — and ⇧⌘, the
+        // glance's keys out of the box, is the glance's when glancing is on
+        // (see above).
         //
         // The middle button is not judged here. WebKit hands the browser a
         // navigation action for a ⌘-click and none at all for a middle one,
@@ -2377,7 +2379,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         if action.navigationType == .linkActivated,
            ["http", "https"].contains(scheme),
            action.modifierFlags.contains(.command) {
-            open(url, foreground: action.modifierFlags.contains(.shift), from: tab(for: webView))
+            open(url, foreground: action.modifierFlags.contains(.shift) != prefs.commandClickFront, from: tab(for: webView))
             decisionHandler(.cancel)
             return
         }
@@ -2466,8 +2468,14 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         tabs.insert(tab, at: slot(under: from))
         tab.opener = from
         tab.parent = from
-        activeID = tab.id
-        editing = false
+        // In front, unless Settings says to leave it behind. A sign-in window
+        // comes forward regardless: it's waiting on you.
+        if prefs.newWindowFront || tab.popup {
+            activeID = tab.id
+            editing = false
+        } else {
+            Backstage.park(tab.web)
+        }
         // Returning the view is what makes it the target. WebKit loads the
         // request into it itself when the action carries one.
         if let url = action.request.url { tab.setAddressOptimistically(url) }

@@ -411,13 +411,27 @@ struct SettingsPanel: View {
                 Segmented(options: StartLoad.allCases.map { ($0, $0.title) }, selection: $prefs.startLoad)
             }
             Rule()
+            Line("Go to a tab opened with ⌘-click", commandClickDetail) {
+                Switch(on: $prefs.commandClickFront)
+            }
+            Rule()
+            Line("Go to a link opened in a new window", "Open Link in New Window, and a link that opens a window of its own. Off, its tab waits behind the one you're on. A sign-in window still comes to the front.") {
+                Switch(on: $prefs.newWindowFront)
+            }
+            Rule()
             Line("Glance", "Hold \(prefs.glanceTrigger.key) and click a link to look at it over the page instead of opening a tab. esc or a click beside it puts it away; the arrow keeps it as a tab.") {
                 Switch(on: $prefs.glances)
             }
             if prefs.glances {
                 Rule()
-                Line("Glance with", "The key held while clicking. ⌘⇧-click and the middle button still open a tab") {
-                    Segmented(options: GlanceTrigger.allCases.map { ($0, $0.title) }, selection: $prefs.glanceTrigger)
+                Line("Glance with", "Click it, then hold the keys and click it again: any of ⌥, ⇧ and ⌘. The middle button still opens a tab.") {
+                    HStack(spacing: 6) {
+                        if prefs.glanceTrigger != .standard {
+                            Quick("Reset") { prefs.glanceTrigger = .standard }
+                        }
+                        // ⌘ alone is the tab's while ⌘-click goes to it.
+                        GlanceKeysWell(trigger: $prefs.glanceTrigger, commandTaken: prefs.commandClickFront) { browser.announce($0) }
+                    }
                 }
             }
             Rule()
@@ -425,6 +439,15 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.usesSpaces)
             }
         }
+    }
+
+    /// ⌘-click and ⇧⌘-click between them: one goes to the tab, the other
+    /// leaves it behind — unless ⇧⌘ is the glance's.
+    private var commandClickDetail: String {
+        let glanced = prefs.glances && prefs.glanceTrigger.flags == [.shift, .command]
+        return glanced
+            ? "⌘-click opens the link in a new tab and takes you to it. Off, the tab waits behind the one you're on. ⇧⌘-click glances."
+            : "⌘-click opens the link in a new tab and takes you to it; ⇧⌘-click leaves it behind. Off, it's the other way round."
     }
 
     // MARK: - passwords

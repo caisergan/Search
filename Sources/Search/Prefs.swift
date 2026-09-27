@@ -408,9 +408,24 @@ final class Preferences: ObservableObject {
     @Published var glances: Bool {
         didSet { store.set(glances, forKey: "glance") }
     }
-    /// Which key that is. ⌥ unless changed, as in Zen.
+    /// Which keys those are. ⇧⌘ unless changed.
     @Published var glanceTrigger: GlanceTrigger {
         didSet { store.set(glanceTrigger.rawValue, forKey: "glance.trigger") }
+    }
+    /// ⌘-click opens the link in a tab and takes you there; ⌘⇧-click leaves
+    /// it behind. Off unless asked for, when it's the other way round. It
+    /// takes ⌘ from the glance: ⌘ can't mean both.
+    @Published var commandClickFront: Bool {
+        didSet {
+            store.set(commandClickFront, forKey: "links.command.front")
+            if commandClickFront, glanceTrigger.flags == .command { glanceTrigger = .standard }
+        }
+    }
+    /// A link opened in a new window — "Open Link in New Window", or one
+    /// that asks for a window of its own — takes you to its tab. On, as it
+    /// always was; the switch is for leaving it behind.
+    @Published var newWindowFront: Bool {
+        didSet { store.set(newWindowFront, forKey: "links.window.front") }
     }
     /// A video playing on a video site comes out into the floating window
     /// when you go to another tab (Browser.leaving). On, as it always was;
@@ -512,7 +527,9 @@ final class Preferences: ObservableObject {
         welcomed = store.bool(forKey: "welcomed") || store.object(forKey: "glyph") != nil
         usesSpaces = store.bool(forKey: "spaces")
         glances = store.bool(forKey: "glance")
-        glanceTrigger = store.string(forKey: "glance.trigger").flatMap(GlanceTrigger.init) ?? .option
+        glanceTrigger = store.string(forKey: "glance.trigger").flatMap(GlanceTrigger.init(rawValue:)) ?? .standard
+        commandClickFront = store.bool(forKey: "links.command.front")
+        newWindowFront = store.object(forKey: "links.window.front") as? Bool ?? true
         let flicks = store.bool(forKey: "float.flicks")
         floatFlicks = flicks
         Float.flicks = flicks

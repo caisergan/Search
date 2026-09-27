@@ -482,7 +482,8 @@ final class Bench {
             guard let tab = find(request, in: browser), let selector = request["selector"] as? String else { answer(missing(request)); return }
             house(tab)
             let view = tab.web
-            // Keys held through the click: ⌘ for a tab beside, ⌥ for a glance.
+            // Keys held through the click: ⌘ for a tab beside, the glance's
+            // keys (⇧⌘ out of the box) for a glance.
             var flags: NSEvent.ModifierFlags = []
             for name in request["mods"] as? [String] ?? [] {
                 switch name {
