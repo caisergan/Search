@@ -39,14 +39,21 @@ enum Backstage {
         // Never key or main: it exists so that a web view has a window, and
         // for nothing else — unless Claude is working in it (see Room).
         let window = Room(
-            contentRect: NSRect(origin: NSPoint(x: -20000, y: -20000), size: size),
+            contentRect: NSRect(origin: Room.away, size: size),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
         window.isReleasedWhenClosed = false
         window.isExcludedFromWindowsMenu = true
-        window.collectionBehavior = [.transient, .ignoresCycle, .stationary]
+        // In every Space at once and moved by none, as the desktop is. It was
+        // transient — which floats a window along with the app from Space to
+        // Space — and stationary as well, of which AppKit takes one: full
+        // screen took the rooms into the window's own Space and set them down
+        // across the top of the screen, and there they stayed once it was
+        // over, a strip of page along the top of the desktop. Never a tile
+        // either, nor full screen itself.
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone, .fullScreenDisallowsTiling]
         window.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
         window.hasShadow = false
         window.orderBack(nil)
@@ -93,7 +100,29 @@ enum Backstage {
 /// it is key, and the page behaves as the one in front of you does (see
 /// Agent.engage). Only what asks the window itself hears it: AppKit's key
 /// window, where your keys go, is still yours.
+///
+/// It stays off every screen whatever moves it. Nothing here does; AppKit and
+/// macOS have, and a room on a screen is a strip of some page across the top
+/// of the desktop that takes clicks meant for what is under it.
 final class Room: NSWindow {
+    /// Where every room is: far off every screen.
+    static let away = NSPoint(x: -20000, y: -20000)
+
     var claimsKey = false
     override var isKeyWindow: Bool { claimsKey || super.isKeyWindow }
+
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        NotificationCenter.default.addObserver(self, selector: #selector(moved), name: NSWindow.didMoveNotification, object: self)
+    }
+
+    /// Straight back off the screen it was put on — by AppKit, or by macOS
+    /// making room for it in a Space.
+    @objc private func moved() {
+        guard NSScreen.screens.contains(where: { $0.frame.intersects(frame) }) else { return }
+        setFrameOrigin(Room.away)
+    }
+
+    /// AppKit keeps a window on a screen when it can; a room belongs on none.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }

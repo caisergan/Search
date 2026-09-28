@@ -255,11 +255,16 @@ enum Dialogs {
     }
 
     /// The window the page is in, or the browser's window for a tab that
-    /// isn't on stage right now.
+    /// isn't on stage right now — one waiting in a room off every screen (see
+    /// Backstage) included: a sheet there was a question nobody could see,
+    /// and the page stood still until it was answered.
+    @MainActor
     static func window(for webView: WKWebView) -> NSWindow? {
-        webView.window ?? NSApp.mainWindow ?? NSApp.windows.first { $0.contentView != nil && $0.isVisible }
+        if let window = webView.window, !(window is Room) { return window }
+        return Links.browserWindow() ?? NSApp.mainWindow
     }
 
+    @MainActor
     static func show(
         _ alert: NSAlert,
         over webView: WKWebView,
