@@ -921,7 +921,7 @@ final class Browser: NSObject, ObservableObject {
                 self.select(tab)
             }
             NSApp.activate(ignoringOtherApps: true)
-            NSApp.windows.first { $0.contentView != nil }?.makeKeyAndOrderFront(nil)
+            Links.bringWindow()
         }
         floater.onSkip = { [weak self] seconds in
             guard let self, let id = self.floating,

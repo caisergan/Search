@@ -52,16 +52,25 @@ final class Links: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Addresses come in as Apple Events, one each. Taking them straight
+    /// Addresses and files come in as Apple Events. Taking them straight
     /// from the event manager keeps them out of SwiftUI's hands: left to it,
     /// every address handed at launch had the window presented afresh, and
     /// five of them meant five rebuilds of the content before the window
-    /// had shown once.
+    /// had shown once. A file it handled by closing the window and opening
+    /// it again — and a window in full screen came out of that belonging to
+    /// no Space at all: still open, on no screen, with the page nobody could
+    /// see. Set here, before the launch's own event arrives, they stand in
+    /// for AppKit's.
     func applicationWillFinishLaunching(_ notification: Notification) {
         Links.watchForTrouble()
-        NSAppleEventManager.shared().setEventHandler(
+        let events = NSAppleEventManager.shared()
+        events.setEventHandler(
             self, andSelector: #selector(handle(getURL:reply:)),
             forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL)
+        )
+        events.setEventHandler(
+            self, andSelector: #selector(handle(openDocuments:reply:)),
+            forEventClass: AEEventClass(kCoreEventClass), andEventID: AEEventID(kAEOpenDocuments)
         )
     }
 
@@ -76,7 +85,7 @@ final class Links: NSObject, NSApplicationDelegate {
         let plain = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? true
         guard !plain else { return }
         DispatchQueue.main.async {
-            guard !NSApp.windows.contains(where: { $0.contentView != nil && !($0 is NSPanel) }) else { return }
+            guard Links.browserWindow() == nil else { return }
             Links.summon()
         }
     }
@@ -88,24 +97,42 @@ final class Links: NSObject, NSApplicationDelegate {
         Links.take(url)
     }
 
-    /// Files and anything else the system opens with the app: an address, or
-    /// a page on this Mac — an .html or .xhtml double-clicked in the Finder
-    /// once Search is the Mac's browser (it says it can open them, see
-    /// build.sh), which this used to drop without a word.
-    func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.isFileURL || url.scheme?.lowercased().hasPrefix("http") == true {
-            Links.take(url)
+    /// Files the system opens with the app: a page on this Mac — an .html
+    /// or .xhtml double-clicked in the Finder once Search is the Mac's
+    /// browser (it says it can open them, see build.sh), dropped on the Dock
+    /// icon, or opened with Search — or a saved link.
+    @objc private func handle(openDocuments event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let files = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)) else { return }
+        let items = files.numberOfItems > 0 ? (1...files.numberOfItems).compactMap { files.atIndex($0) } : [files]
+        for file in items.compactMap(\.fileURLValue) {
+            if let url = Links.address(of: file) { Links.take(url) }
         }
     }
 
-    /// The Dock icon clicked with the window closed: bring the window back
-    /// rather than doing nothing, which is what a hidden-title-bar SwiftUI
-    /// window does by default.
+    /// Where a file opened with the app goes: a page is itself; a saved link
+    /// (.webloc, which the Finder hands here too) is the address inside it,
+    /// rather than the file drawn as text.
+    private static func address(of file: URL) -> URL? {
+        guard file.pathExtension.lowercased() == "webloc" else { return file }
+        guard let data = try? Data(contentsOf: file),
+              let saved = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let text = saved["URL"] as? String, let url = URL(string: text),
+              url.isFileURL || url.scheme?.lowercased().hasPrefix("http") == true
+        else { return nil }
+        return url
+    }
+
+    /// The Dock icon clicked with the window closed, or put in the Dock:
+    /// bring the window back rather than doing nothing, which is what a
+    /// hidden-title-bar SwiftUI window does by default. Whether macOS says a
+    /// window is showing doesn't decide it — the rooms pages wait in count
+    /// (see Backstage), so it always said one was.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag, let window = NSApp.windows.first(where: { $0.contentView != nil }) {
-            window.makeKeyAndOrderFront(nil)
+        MainActor.assumeIsolated {
+            if let window = Links.browserWindow(), window.isVisible, !window.isMiniaturized { return }
+            Links.bringWindow()
         }
-        return true
+        return false
     }
 
     /// The browser, once it has a window. Anything that came earlier is
@@ -126,14 +153,8 @@ final class Links: NSObject, NSApplicationDelegate {
             }
             browser?.arrive(url)
             // The window closed with the app still running: the link brings
-            // it back, rather than landing in a tab nobody can see. The
-            // window is looked for among the app's own too: a reference that
-            // lapsed opened a second, empty window behind the other app.
-            if let window = window ?? browserWindow() {
-                window.makeKeyAndOrderFront(nil)
-            } else {
-                _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
-            }
+            // it back, rather than landing in a tab nobody can see.
+            bringWindow()
             comeForward()
         }
         flush = { [weak browser] in browser?.flushSession() }
@@ -157,7 +178,7 @@ final class Links: NSObject, NSApplicationDelegate {
     /// started hidden has a window nobody can see yet.
     @MainActor
     static func onceShown(_ then: @escaping () -> Void, tries: Int = 0) {
-        let shown = NSApp.windows.contains { $0.isVisible && $0.contentView != nil }
+        let shown = NSApp.windows.contains { $0.isVisible && $0.contentView != nil && !($0 is Room) }
         if shown || tries > 40 {
             DispatchQueue.main.async(execute: then)
         } else {
@@ -178,13 +199,28 @@ final class Links: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The browser's window, from the app's own list: what `window` points
-    /// at, found again if that reference lapsed.
+    /// The browser's window: what `window` points at, or found again in the
+    /// app's own list if that reference lapsed — which once opened a second,
+    /// empty window behind the other app. Never a room a page waits in (see
+    /// Backstage): a window too, and always open.
     @MainActor
-    private static func browserWindow() -> NSWindow? {
-        let found = NSApp.windows.first { $0.contentView != nil && !($0 is NSPanel) && $0.canBecomeMain }
+    static func browserWindow() -> NSWindow? {
+        if let window { return window }
+        let found = NSApp.windows.first { $0.contentView != nil && !($0 is NSPanel) && !($0 is Room) && $0.canBecomeMain }
         if let found { window = found }
         return found
+    }
+
+    /// The browser's window in front, wherever it is — in a Space of its own,
+    /// full screen, in the Dock — or made again if it was closed.
+    @MainActor
+    static func bringWindow() {
+        guard let window = browserWindow() else {
+            _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
+            return
+        }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
     }
 
     private static func take(_ url: URL) {
