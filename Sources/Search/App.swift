@@ -38,6 +38,8 @@ struct SearchApp: App {
                 Divider()
                 Button("Open Address…") { browser.edit() }
                     .keyboardShortcut(shortcuts.menu(.openAddress))
+                Button("Open File…") { browser.openFile() }
+                    .keyboardShortcut(shortcuts.menu(.openFile))
                 Divider()
                 Button("Close Tab") {
                     if browser.glance != nil {
@@ -198,6 +200,8 @@ struct SearchApp: App {
                     .keyboardShortcut(shortcuts.menu(.addBookmark))
                     .disabled(browser.active?.isBlank ?? true)
                 Button("Show Bookmarks…") { browser.bookmarking = true }
+                Button("Import Bookmarks…") { browser.importBookmarks() }
+                Button("Export Bookmarks…") { browser.exportBookmarks() }
                 Toggle("Show Bookmarks Bar", isOn: Binding(
                     get: { browser.prefs.bookmarksBar },
                     set: { on in withAnimation(Motion.glide) { browser.prefs.bookmarksBar = on } }
@@ -1102,6 +1106,7 @@ struct ContentView: View {
         case .reopenTab: browser.reopen()
         case .newPrivateTab: browser.newShyTab()
         case .openAddress: browser.edit()
+        case .openFile: browser.openFile()
         case .closeTab:
             // A glance first: it is what is in front.
             if browser.glance != nil {

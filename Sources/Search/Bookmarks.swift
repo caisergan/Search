@@ -501,7 +501,11 @@ struct BookmarksPanel: View {
                 ForEach(Chromium.installed()) { source in
                     Pill(source.name) { browser.takeBookmarks(from: source) }
                 }
+                Pill("HTML file…") { browser.importBookmarks() }
                 Spacer()
+                if !bookmarks.isEmpty {
+                    Pill("Export…") { browser.exportBookmarks() }
+                }
                 Text(bookmarks.count == 1 ? "1 bookmark" : "\(bookmarks.count) bookmarks")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.muted)

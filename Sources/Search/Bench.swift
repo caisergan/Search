@@ -1057,6 +1057,41 @@ final class Bench {
                 answer(["window": NSApp.windows.map { "\(type(of: $0))" }, "hidden": NSApp.isHidden])
             }
 
+        case "files":
+            // Files in and out as File › Open File… and the Bookmarks menu
+            // take them, without their panels — or the panel itself, put up
+            // and taken down again. Only on a SEARCH_PROBE run.
+            guard Store.testing else { answer(["error": "files only works on a --test run"]); return }
+            let paths = (request["paths"] as? [String] ?? []).map { URL(fileURLWithPath: $0) }
+            switch request["action"] as? String {
+            case "open":
+                browser.openFiles(paths)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    answer(["active": browser.active?.address?.absoluteString ?? "", "tabs": browser.tabs.count])
+                }
+            case "import":
+                guard let file = paths.first else { answer(["error": "files import needs a path"]); return }
+                let came = browser.importBookmarks(from: file)
+                answer(["came": came, "total": browser.bookmarks.count,
+                        "folders": browser.bookmarks.roots.filter(\.isFolder).map(\.title)])
+            case "export":
+                guard let file = paths.first else { answer(["error": "files export needs a path"]); return }
+                answer(["written": browser.exportBookmarks(to: file), "total": browser.bookmarks.count])
+            case "menu":
+                // The menu bar's lines for them, with their keys, as AppKit has
+                // them — without opening a panel on anybody's screen.
+                func lines(_ title: String) -> [String] {
+                    let menu = NSApp.mainMenu?.items.first { $0.submenu?.title == title }?.submenu
+                    return (menu?.items ?? []).filter { !$0.isSeparatorItem }.map { item in
+                        let keys = item.keyEquivalent.isEmpty ? "" : " \(item.keyEquivalentModifierMask.contains(.command) ? "⌘" : "")\(item.keyEquivalent)"
+                        return item.title + keys + (item.isEnabled ? "" : " (off)")
+                    }
+                }
+                answer(["file": lines("File"), "bookmarks": lines("Bookmarks").prefix(6).map { $0 }])
+            default:
+                answer(["error": "files open PATH…|import PATH|export PATH|menu"])
+            }
+
         case "windowfs":
             // The window in or out of full screen, as the green button does.
             // Only on a SEARCH_PROBE run.

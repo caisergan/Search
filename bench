@@ -72,6 +72,10 @@
     ./bench peek URL|close             test run: the peek panel over the tab in front, as a shift-click opens it
     ./bench window                     test run: open the browser's window if a hidden probe came up without it
     ./bench windowfs                   test run: the window in or out of full screen, as the green button does
+    ./bench files open PATH…|import PATH|export PATH|menu
+                                       test run: pages on this Mac opened as File › Open File… opens them, or
+                                       bookmarks in from or out to an HTML file, without the panels; menu:
+                                       the File and Bookmarks menus' lines, with their keys
     ./bench pages on|off               test run: let a hidden probe's pages be painted, off every screen (for picture)
     ./bench picture PATH               test run: the whole window, pages included, drawn to a PNG (start the probe hidden)
     ./bench film peek|unpeek|fold PATH [N] [SECS]  the window drawn N times while it animates → PATH-00.png… — --test runs only
@@ -284,6 +288,10 @@ def main(argv):
         elif args[0] == "popover" and len(args) == 2: request["action"], request["on"] = "popover", args[1] == "on"
         elif args[0] == "hand" and len(args) == 2: request["action"], request["path"] = "hand", os.path.abspath(args[1])
         else: sys.exit("usage: bench downloads [fetch ID URL | pause|resume|cancel|restart|remove N | clear | quit]")
+    elif verb == "files":
+        if not args or args[0] not in ("open", "import", "export", "menu"): sys.exit("usage: bench files open PATH…|import PATH|export PATH|menu")
+        request["action"] = args[0]
+        request["paths"] = [os.path.abspath(p) for p in args[1:]]
     elif verb == "sync":
         if len(args) > 1 or (args and args[0] not in ("state", "use", "keep", "add")): sys.exit("usage: bench sync [state|use|keep|add]")
         if args: request["action"] = args[0]
