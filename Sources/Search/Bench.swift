@@ -1058,7 +1058,7 @@ final class Bench {
             }
 
         case "permit":
-            // What sites were allowed, the question under the page and the
+            // What sites were allowed, the question at the top of the page and the
             // pop-up notice (see Permissions.swift) — read anywhere, answered
             // only on a SEARCH_PROBE run.
             let kept = SitePermissions.shared

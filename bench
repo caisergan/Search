@@ -73,7 +73,7 @@
     ./bench window                     test run: open the browser's window if a hidden probe came up without it
     ./bench windowfs                   test run: the window in or out of full screen, as the green button does
     ./bench permit [allow|deny|set HOST KIND allow|block|ask|forget [HOST]|popup-open|popup-allow|pause|click-page|click-worker|picture PATH]
-                                       what sites were allowed, the question under the page, the pop-up notice,
+                                       what sites were allowed, the question at the top of the page, the pop-up notice,
                                        what the tab on screen has of the camera, microphone and screen; answering
                                        and changing them only on a --test run, where notifications are kept, not shown
     ./bench front                      test run: the window on screen, in front and key, for a page that only asks
