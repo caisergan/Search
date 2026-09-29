@@ -11,13 +11,16 @@ struct AccountList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let strong = asked.strong {
+                Strong(password: strong) { browser.useStrongPassword() }
+            }
             ForEach(asked.logins) { login in
                 Row(login: login) { browser.choose(login) }
             }
             HStack(spacing: 6) {
                 Image(systemName: "key")
                     .font(.system(size: 9, weight: .medium))
-                Text("From your keychain")
+                Text(asked.strong != nil ? "Offered to your keychain once you've signed up" : "From your keychain")
                     .font(.system(size: 10.5))
                 Spacer(minLength: 0)
             }
@@ -37,6 +40,43 @@ struct AccountList: View {
         // Just under the box, left edges lined up. The offset is from the
         // stage's top-left, which is also the web view's.
         .offset(x: asked.spot.minX, y: asked.spot.maxY + 6)
+    }
+
+    /// A password made for the box: shown, since it is new and nobody's
+    /// yet, in the keychain's monospace, and put in both boxes with a click.
+    private struct Strong: View {
+        let password: String
+        let use: () -> Void
+        @State private var hovering = false
+
+        var body: some View {
+            Button(action: use) {
+                HStack(spacing: 10) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Palette.ink)
+                        .frame(width: 22, height: 22)
+                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Use Strong Password")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(Palette.ink)
+                        Text(password)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(Palette.muted)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(hovering ? Palette.hover : .clear)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .animation(Motion.quick, value: hovering)
+        }
     }
 
     private struct Row: View {

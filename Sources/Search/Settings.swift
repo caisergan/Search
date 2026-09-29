@@ -482,6 +482,10 @@ struct SettingsPanel: View {
                     Switch(on: $prefs.fillsPasswords)
                 }
                 Rule()
+                Line("Suggest strong passwords", "Where a site asks for a new password, one made for it hangs from the box") {
+                    Switch(on: $prefs.suggestsPasswords)
+                }
+                Rule()
                 Line(
                     "Offer passkeys",
                     !prefs.passkeysPossible
@@ -500,6 +504,18 @@ struct SettingsPanel: View {
                             browser.announce("Every site can ask again")
                         }
                     }
+                }
+            }
+            Card {
+                Line("Addresses and cards", "Filled into a form's boxes with a click — a card only after Touch ID, never its security code") {
+                    Pill("Open…") {
+                        browser.tuning = false
+                        browser.fillingForms = true
+                    }
+                }
+                Rule()
+                Line("Fill in addresses and cards", "Click a form's name, address or card box and what you keep hangs from it") {
+                    Switch(on: $prefs.fillsForms)
                 }
             }
             Card {

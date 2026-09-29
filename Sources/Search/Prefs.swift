@@ -337,6 +337,14 @@ final class Preferences: ObservableObject {
     @Published var fillsPasswords: Bool {
         didSet { store.set(fillsPasswords, forKey: "passwords.fill") }
     }
+    /// Offer the addresses and cards kept under a form's boxes (see AutoFill.swift).
+    @Published var fillsForms: Bool {
+        didSet { store.set(fillsForms, forKey: "autofill.forms") }
+    }
+    /// Offer a strong password where a site asks for a new one.
+    @Published var suggestsPasswords: Bool {
+        didSet { store.set(suggestsPasswords, forKey: "passwords.suggest") }
+    }
     /// The first launch has been walked through. Until then the welcome
     /// stands over the window.
     @Published var welcomed: Bool {
@@ -528,6 +536,8 @@ final class Preferences: ObservableObject {
         asksWhereToSave = store.bool(forKey: "downloads.ask")
         savesPasswords = store.object(forKey: "passwords.save") as? Bool ?? true
         fillsPasswords = store.object(forKey: "passwords.fill") as? Bool ?? true
+        fillsForms = store.object(forKey: "autofill.forms") as? Bool ?? true
+        suggestsPasswords = store.object(forKey: "passwords.suggest") as? Bool ?? true
         // Anyone who already has a session was here before the welcome
         // existed; they are not asked to sit through it.
         welcomed = store.bool(forKey: "welcomed") || store.object(forKey: "glyph") != nil

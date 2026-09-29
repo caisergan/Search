@@ -72,6 +72,9 @@
     ./bench peek URL|close             test run: the peek panel over the tab in front, as a shift-click opens it
     ./bench window                     test run: open the browser's window if a hidden probe came up without it
     ./bench windowfs                   test run: the window in or out of full screen, as the green button does
+    ./bench autofill [add-contact KEY=VALUE… | add-card NUMBER MM/YYYY [NAME] | pick N | strong | clear | picture PATH]
+                                       addresses and cards kept, and what hangs from the box the caret is in;
+                                       adding, picking and clearing only on a --test run
     ./bench pages on|off               test run: let a hidden probe's pages be painted, off every screen (for picture)
     ./bench picture PATH               test run: the whole window, pages included, drawn to a PNG (start the probe hidden)
     ./bench film peek|unpeek|fold PATH [N] [SECS]  the window drawn N times while it animates → PATH-00.png… — --test runs only
@@ -284,6 +287,20 @@ def main(argv):
         elif args[0] == "popover" and len(args) == 2: request["action"], request["on"] = "popover", args[1] == "on"
         elif args[0] == "hand" and len(args) == 2: request["action"], request["path"] = "hand", os.path.abspath(args[1])
         else: sys.exit("usage: bench downloads [fetch ID URL | pause|resume|cancel|restart|remove N | clear | quit]")
+    elif verb == "autofill":
+        if args:
+            request["action"] = args[0]
+            if args[0] == "add-contact":
+                request["fields"] = dict(a.split("=", 1) for a in args[1:])
+            elif args[0] == "add-card":
+                if len(args) < 3: sys.exit("usage: bench autofill add-card NUMBER MM/YYYY [NAME]")
+                month, year = args[2].split("/")
+                request["fields"] = {"number": args[1], "month": month, "year": year, "name": " ".join(args[3:])}
+            elif args[0] == "pick":
+                request["n"] = int(args[1]) if len(args) > 1 else 0
+            elif args[0] == "picture":
+                if len(args) != 2: sys.exit("usage: bench autofill picture PATH")
+                request["path"] = os.path.abspath(args[1])
     elif verb == "sync":
         if len(args) > 1 or (args and args[0] not in ("state", "use", "keep", "add")): sys.exit("usage: bench sync [state|use|keep|add]")
         if args: request["action"] = args[0]

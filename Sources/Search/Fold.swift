@@ -168,7 +168,7 @@ struct Fold: View {
     /// clicks landing on the panel's dimmed ground instead.
     private var covered: Bool {
         browser.tuning || browser.recalling || browser.hoarding || browser.bookmarking
-            || browser.managing || browser.welcoming || browser.reviewing
+            || browser.managing || browser.fillingForms || browser.welcoming || browser.reviewing
     }
 
     private var lightsOff: Bool {
