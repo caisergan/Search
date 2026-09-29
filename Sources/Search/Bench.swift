@@ -1057,6 +1057,29 @@ final class Bench {
                 answer(["window": NSApp.windows.map { "\(type(of: $0))" }, "hidden": NSApp.isHidden])
             }
 
+        case "translate":
+            // The page on screen, translated or put back as View › Translate
+            // does it, and what the translator knows of it. A test run marks
+            // each piece instead of translating it (see Translate.swift).
+            let translator = Translator.shared
+            guard let tab = find(request, in: browser) ?? browser.active else { answer(["error": "no tab"]); return }
+            switch request["action"] as? String {
+            case "on":
+                guard Store.testing else { answer(["error": "translate on only works on a --test run"]); return }
+                translator.translate(tab, browser: browser)
+            case "off":
+                translator.showOriginal(tab)
+            case "read":
+                translator.read(tab, browser: browser)
+            default: break
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                let progress = translator.progress[tab.id]
+                answer(["language": translator.read[tab.id]?.code ?? "", "target": translator.target.languageCode?.identifier ?? "",
+                        "translated": translator.translated.contains(tab.id), "offered": translator.offered == tab.id,
+                        "sent": progress?.sent ?? 0, "done": progress?.done ?? 0])
+            }
+
         case "windowfs":
             // The window in or out of full screen, as the green button does.
             // Only on a SEARCH_PROBE run.

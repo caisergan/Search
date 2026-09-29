@@ -2648,6 +2648,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // A tab waking from sleep: the new document is in, and a moment
         // after it is on screen the picture of the old one can go.
         tab.uncover(after: 0.45)
+        // Translated, it was the last page (see Translate.swift).
+        Translator.shared.forget(tab.id)
     }
 
     /// The download button of WebKit's own PDF viewer: the file, handed
@@ -2686,6 +2688,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // be turned on a moment later, and a tab that then has to wait for a
         // fetch looks broken.
         Favicons.shared.fetch(for: tab)
+        // What the page is written in, and whether to offer it in yours.
+        Translator.shared.read(tab, browser: self)
         guard !tab.shy, !tab.bench else { return }
         history.record(url, title: tab.title)
     }

@@ -161,6 +161,7 @@ struct SiteCard: View {
 
     /// One step in: the connection, said in full.
     @State private var deeper: Bool
+    @ObservedObject private var translator = Translator.shared
     /// Whether this Mac trusts the site's certificate. Unknown until it has
     /// been asked, off the main thread: asking can go to the network.
     @State private var certified: Bool?
@@ -207,6 +208,11 @@ struct SiteCard: View {
             }
             if let safety {
                 Row(safety.title, submenu: true) { deeper = true }
+            }
+            if translator.available {
+                Row(translator.translated.contains(tab.id) ? "Show Original" : "Translate to \(translator.targetName)") {
+                    after { browser.toggleTranslation() }
+                }
             }
             Row("Copy Address", keys: "⇧⌘C") { after { browser.copyAddress() } }
             Separator()

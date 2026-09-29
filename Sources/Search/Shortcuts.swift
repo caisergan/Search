@@ -126,7 +126,7 @@ struct Keys: Hashable, Codable {
 enum Command: String, CaseIterable, Identifiable {
     case newTab, newPrivateTab, reopenTab, openAddress, closeTab, duplicateTab
     case back, forward, nextTab, previousTab, searchTabs
-    case reload, hardReload, emptyCacheReload, readingMode, floatVideo, stopSound, print, savePage
+    case reload, hardReload, emptyCacheReload, readingMode, translatePage, floatVideo, stopSound, print, savePage
     case find, findNext, findPrevious
     case copyAddress, pasteAndGo, addBookmark
     case sidebar, foldSidebar
@@ -157,7 +157,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .newTab, .newPrivateTab, .reopenTab, .openAddress, .closeTab, .duplicateTab,
              .nextTab, .previousTab, .searchTabs:
             return .tabs
-        case .back, .forward, .reload, .hardReload, .emptyCacheReload, .readingMode, .floatVideo, .stopSound, .print, .savePage,
+        case .back, .forward, .reload, .hardReload, .emptyCacheReload, .readingMode, .translatePage, .floatVideo, .stopSound, .print, .savePage,
              .copyAddress, .pasteAndGo, .addBookmark:
             return .page
         case .find, .findNext, .findPrevious, .hideElements, .undoHide, .hiddenOnSite:
@@ -188,6 +188,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .hardReload: return "Hard reload"
         case .emptyCacheReload: return "Empty cache and reload"
         case .readingMode: return "Reading mode"
+        case .translatePage: return "Translate the page, or show the original"
         case .floatVideo: return "Float video"
         case .stopSound: return "Stop sound in tab"
         case .print: return "Print"
@@ -236,6 +237,8 @@ enum Command: String, CaseIterable, Identifiable {
         case .emptyCacheReload: return nil
         // ⇧⌘R until the hard reload took it, as Chrome has it.
         case .readingMode: return Keys("r", option: true)
+        // Offered at the top of a page in another language; a key of your own if you want one.
+        case .translatePage: return nil
         case .floatVideo: return Keys("p", shift: true)
         case .stopSound: return Keys("m", shift: true)
         case .print: return Keys("p")
