@@ -132,6 +132,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <string>Websites you visit can ask to use your camera. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Websites you visit can ask to use your microphone. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
+  <key>NSLocationUsageDescription</key>
+  <string>Websites you visit can ask where you are — a map, the weather, a shop nearby. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Websites you visit can ask where you are — a map, the weather, a shop nearby. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
   <key>NSDownloadsFolderUsageDescription</key>
   <string>Files you download are saved to your Downloads folder.</string>
 </dict>

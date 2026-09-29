@@ -11,6 +11,7 @@ struct SettingsPanel: View {
 
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var shield = Shield.shared
+    @ObservedObject private var permissions = SitePermissions.shared
     @State private var isDefault = Links.isDefault
     @State private var syncing = SettingsSync.on
     @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
@@ -554,8 +555,19 @@ struct SettingsPanel: View {
                     }
                 }
                 Rule()
-                Line("Camera and microphone", "What each site was allowed or refused") {
-                    Pill("Forget choices") { browser.forgetCaptureChoices() }
+                Line("Site permissions", "What sites were allowed or refused — camera, microphone, location, notifications, pop-ups. Change one on the site's card, from its tab") {
+                    Pill("Forget all") { browser.forgetSitePermissions() }
+                        .disabled(permissions.sites.isEmpty)
+                }
+            }
+            if !permissions.sites.isEmpty {
+                Card {
+                    ForEach(Array(permissions.hosts.enumerated()), id: \.element) { index, host in
+                        if index > 0 { Rule() }
+                        Line(host.hasPrefix("www.") ? String(host.dropFirst(4)) : host, answers(for: host)) {
+                            Pill("Forget") { permissions.forget(host) }
+                        }
+                    }
                 }
             }
             Card {
@@ -572,6 +584,13 @@ struct SettingsPanel: View {
                 }
             }
         }
+    }
+
+    /// What a site was told, in a line: "Camera allowed · Location blocked".
+    private func answers(for host: String) -> String {
+        Permission.keptKinds.compactMap { kind in
+            permissions.choice(kind, for: host).map { "\(kind.title) \($0 == .allow ? "allowed" : "blocked")" }
+        }.joined(separator: " · ")
     }
 
     // MARK: - about

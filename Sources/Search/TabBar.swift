@@ -472,6 +472,9 @@ private struct TabPill: View {
                         .font(.system(size: 9))
                         .foregroundStyle(colour.opacity(0.7))
                 }
+                if tab.capture.any {
+                    CaptureMark(tab: tab)
+                }
                 Text(tab.label)
                     .font(.system(size: prefs.tabSize.text))
                     .lineLimit(1)

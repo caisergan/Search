@@ -8,9 +8,17 @@ import Combine
 
 @MainActor
 final class Browser: NSObject, ObservableObject {
-    @Published private(set) var tabs: [Tab] = []
+    @Published private(set) var tabs: [Tab] = [] {
+        // A closed tab's question goes with it.
+        didSet { if !asks.isEmpty { refreshAsking() } }
+    }
     @Published var activeID: Tab.ID? {
         didSet {
+            // A tab's question waits for the tab (see Permissions.swift).
+            if oldValue != activeID {
+                if !asks.isEmpty { refreshAsking() }
+                if blockedPopup != nil { blockedPopup = nil }
+            }
             // The tab just left is the tab just looked at. Whether a tab has
             // gone unwatched long enough to sleep is counted from here, not
             // from when it was first picked.
@@ -508,42 +516,21 @@ final class Browser: NSObject, ObservableObject {
         history.recent()
     }
 
-    // MARK: - the camera and the microphone
+    // MARK: - what sites may use
 
-    /// A page asking to see or hear you, waiting for an answer. WebKit hands
-    /// over a decision handler and holds the page until it is called — so this
-    /// keeps the handler and the question together, and never drops either.
-    struct CaptureAsk: Equatable, Identifiable {
-        let host: String
-        let wants: String
-        var id: String { host + wants }
-    }
+    /// The question at the top of the page — a site asking for the camera, the
+    /// microphone, where you are, notifications or your screen — and every
+    /// one waiting behind it (see Permissions.swift).
+    @Published var asking: PermissionAsk?
+    var asks: [PermissionAsk] = []
+    /// A window a page tried to open on its own, just stopped.
+    @Published var blockedPopup: BlockedPopup?
 
-    @Published private(set) var asking: CaptureAsk?
-    private var decide: ((WKPermissionDecision) -> Void)?
-    private var askedAbout = ""
-
-    func allowCapture() { answerCapture(.grant) }
-    func denyCapture() { answerCapture(.deny) }
-
-    private func answerCapture(_ decision: WKPermissionDecision) {
-        guard let decide else { return }
-        // Remembered per site, so a call you take every week asks once.
-        Store.settings.set(decision == .grant, forKey: "capture." + askedAbout)
-        decide(decision)
-        self.decide = nil
-        askedAbout = ""
-        asking = nil
-    }
-
-    /// Everything a site has been allowed or refused, for the day you want to
-    /// change your mind.
-    func forgetCaptureChoices() {
-        for key in Store.settings.dictionaryRepresentation().keys
-        where key.hasPrefix("capture.") {
-            Store.settings.removeObject(forKey: key)
-        }
-        announce("Camera and microphone choices forgotten")
+    /// Everything every site has been allowed or refused, for the day you
+    /// want to change your mind.
+    func forgetSitePermissions() {
+        SitePermissions.shared.forgetAll()
+        announce("Every site will ask again")
     }
 
     // MARK: - pinning
@@ -2437,6 +2424,9 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         for action: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
+        // A window opened by the page on its own, without a click or a key,
+        // only where pop-ups were let through (see Permissions.swift).
+        guard mayOpen(action, from: webView) else { return nil }
         // From a glance, under the page the glance was taken from.
         let from = glance?.tab.built === webView ? glance?.from : tab(for: webView)?.id ?? activeID
         // WebKit's copy of the opener's configuration still holds the
@@ -2565,8 +2555,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         type: WKMediaCaptureType,
         decisionHandler: @escaping (WKPermissionDecision) -> Void
     ) {
-        let host = origin.host.isEmpty ? (tab(for: webView)?.address?.host() ?? "This page") : origin.host
-        let key = "\(host)|\(type.rawValue)"
+        let host = SitePermissions.host(of: origin, page: webView)
 
         // A page in one of Claude's tabs never gets the camera or the
         // microphone, whatever was once allowed for its site: nobody is there
@@ -2578,20 +2567,9 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             return
         }
 
-        if let remembered = Store.settings.object(forKey: "capture." + key) as? Bool {
-            decisionHandler(remembered ? .grant : .deny)
-            return
-        }
-        // One question at a time. A second page asking while the first is still
-        // waiting is refused rather than queued behind it.
-        guard decide == nil else {
-            decisionHandler(.deny)
-            return
-        }
-
-        decide = decisionHandler
-        askedAbout = key
-        asking = CaptureAsk(host: host, wants: Browser.name(for: type))
+        // Remembered per site, so a call you take every week asks once; a
+        // second question while one is up waits its turn (see Permissions.swift).
+        ask(Permission.kinds(for: type), host: host, from: webView) { decisionHandler($0 ? .grant : .deny) }
     }
 
     private static func name(for type: WKMediaCaptureType) -> String {

@@ -78,6 +78,18 @@ enum Web {
     /// through the configuration it is made with, which only WebKit's own
     /// names reach. Where those names are missing, a plain pool as before.
     static let pool: WKProcessPool = {
+        let pool = madePool()
+        // Pages' notifications come to Search to be shown, and the first
+        // process is told which sites may before it starts (see
+        // Permissions.swift).
+        MainActor.assumeIsolated { WebNotifications.shared.provide(for: pool) }
+        // The first one now, rather than when the first page wants it.
+        let warm = NSSelectorFromString("_warmInitialProcess")
+        if pool.responds(to: warm) { pool.perform(warm) }
+        return pool
+    }()
+
+    private static func madePool() -> WKProcessPool {
         let initialize = NSSelectorFromString("_initWithConfiguration:")
         guard let kind = NSClassFromString("_WKProcessPoolConfiguration") as? NSObject.Type,
               WKProcessPool.instancesRespond(to: initialize)
@@ -92,12 +104,8 @@ enum Web {
         else { return WKProcessPool() }
         typealias Make = @convention(c) (AnyObject, Selector, AnyObject) -> Unmanaged<WKProcessPool>
         let make = unsafeBitCast(blank.method(for: initialize), to: Make.self)
-        let pool = make(blank, initialize, configuration).takeRetainedValue()
-        // The first one now, rather than when the first page wants it.
-        let warm = NSSelectorFromString("_warmInitialProcess")
-        if pool.responds(to: warm) { pool.perform(warm) }
-        return pool
-    }()
+        return make(blank, initialize, configuration).takeRetainedValue()
+    }
 
     /// `space`: the space the tab belongs to, when it is not the one on
     /// screen — a parked row made ahead of time (see Spaces.swift).
@@ -111,6 +119,8 @@ enum Web {
         // cookies, its own sign-ins, and nothing left behind when it closes.
         // With spaces on, each space's tabs share a store of that space's.
         config.websiteDataStore = store ?? (shy ? .nonPersistent() : MainActor.assumeIsolated { Spaces.store(for: space ?? Spaces.current) })
+        // Its sites' notifications come to Search to be shown (see Permissions.swift).
+        MainActor.assumeIsolated { WebNotifications.shared.watch(config.websiteDataStore) }
         config.processPool = Web.pool
         // Chrome extensions see every page but a private one, unless Settings
         // › Extensions says they may. The controller has to be there when the
@@ -126,11 +136,14 @@ enum Web {
         // page comes back.
         config.applicationNameForUserAgent = Web.userAgentName
         config.allowsAirPlayForMediaPlayback = true
-        // On by default on macOS: a page could open a new tab, and take you
-        // to it, whenever it liked — on load, on a timer. Off, window.open
-        // works only from a click or a key, as Safari's pop-up blocking has
-        // it; a sign-in window opened by its button still opens.
-        config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        // A page could open a new tab, and take you to it, whenever it liked
+        // — on load, on a timer. WebKit is left to let every window.open
+        // through to the browser, which lets one through only from a click
+        // or a key, as Safari's pop-up blocking has it, or where pop-ups were
+        // allowed; a sign-in window opened by its button still opens. Stopped
+        // here, WebKit said nothing of it; stopped by the browser, the page
+        // is told the same null, and you are told too (see Permissions.swift).
+        config.preferences.javaScriptCanOpenWindowsAutomatically = true
         config.mediaTypesRequiringUserActionForPlayback = .audio
         if Store.testing, !Store.measuring { config.preferences.inactiveSchedulingPolicy = .none }
         inspector(config.preferences)
@@ -336,6 +349,41 @@ final class Tab: ObservableObject, Identifiable {
     /// True while something on the page is making noise, so the row can say
     /// which tab it is coming from.
     @Published var noisy = false
+    /// The camera, the microphone or the screen the page has, so the row can
+    /// say which tab is watching or listening (see Permissions.swift).
+    @Published private(set) var capture = Capture()
+
+    /// What WebKit says the page has now.
+    func readCapture() {
+        guard let web = built else {
+            if capture.any { capture = Capture() }
+            return
+        }
+        var now = Capture(camera: web.cameraCaptureState, microphone: web.microphoneCaptureState)
+        let display = NSSelectorFromString("_displayCaptureState")
+        if web.responds(to: display) {
+            typealias Read = @convention(c) (AnyObject, Selector) -> Int
+            now.screen = WKMediaCaptureState(rawValue: unsafeBitCast(web.method(for: display), to: Read.self)(web, display)) ?? .none
+        }
+        if now != capture { capture = now }
+    }
+
+    /// The indicator in the row pressed: everything the page has goes quiet —
+    /// the camera dark, the microphone deaf, the screen held — and comes back
+    /// on the next press. The page keeps the devices, as it would with its
+    /// own mute buttons; closing the tab or the call gives them back.
+    func toggleCapturePause() {
+        guard let web = built, capture.any else { return }
+        let to: WKMediaCaptureState = capture.live ? .muted : .active
+        if web.cameraCaptureState != .none { web.setCameraCaptureState(to) }
+        if web.microphoneCaptureState != .none { web.setMicrophoneCaptureState(to) }
+        let set = NSSelectorFromString("_setDisplayCaptureState:completionHandler:")
+        if capture.screen != .none, web.responds(to: set) {
+            typealias Write = @convention(c) (AnyObject, Selector, Int, @escaping @convention(block) () -> Void) -> Void
+            unsafeBitCast(web.method(for: set), to: Write.self)(web, set, to.rawValue, {})
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.readCapture() }
+    }
     /// Silenced by hand from its speaker or its menu: the page plays on and
     /// is not heard. WebKit keeps the mute on the view from one page to the
     /// next, so it is only set again on a view built new, as a sleeping tab
@@ -1298,6 +1346,7 @@ final class Tab: ObservableObject, Identifiable {
     private func discard() {
         watch = []
         ears.stop()
+        if capture.any { capture = Capture() }
         guard let web = built else { return }
         built = nil
         let controller = web.configuration.userContentController
