@@ -364,6 +364,9 @@ final class Downloads: NSObject, ObservableObject {
         }
     }
 
+    /// Whether there is anything for `clear()` to take off.
+    var clearable: Bool { items.contains { !$0.active && $0.state != .paused } }
+
     /// Everything not still coming in, off the list.
     func clear() {
         let going = items.filter { $0.active || $0.state == .paused }

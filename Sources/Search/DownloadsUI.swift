@@ -441,7 +441,7 @@ struct DownloadsList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack {
                 Text("Downloads")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Palette.ink)
@@ -452,10 +452,15 @@ struct DownloadsList: View {
                         .foregroundStyle(Palette.muted)
                         .contentTransition(.numericText())
                 }
+                if downloads.clearable {
+                    Pill("Clear list") { withAnimation(Motion.settle) { downloads.clear() } }
+                        .help("Only the list: the files stay where they are")
+                        .transition(.opacity)
+                }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 13)
-            .padding(.bottom, 4)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
 
             if recent.isEmpty {
                 Text("Nothing downloaded yet.")
@@ -885,7 +890,7 @@ struct DownloadsPanel: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.muted)
                     .contentTransition(.numericText())
-                if downloads.items.contains(where: { !$0.active && $0.state != .paused }) {
+                if downloads.clearable {
                     Pill("Clear list") { withAnimation(Motion.settle) { downloads.clear() } }
                         .help("Only the list: the files stay where they are")
                 }
