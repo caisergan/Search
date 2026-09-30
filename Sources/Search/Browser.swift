@@ -206,7 +206,7 @@ final class Browser: NSObject, ObservableObject {
         findLeft()
         // There is no public way to call off a find, but letting go of the
         // selection is what taking the highlight away amounts to.
-        active?.web.evaluateJavaScript("window.getSelection().removeAllRanges()")
+        active?.web.evaluateQuietly("window.getSelection().removeAllRanges()", in: .page)
         if let web = active?.built, PageFind.counts(web) { PageFind.forget(in: web) }
     }
 
@@ -272,7 +272,7 @@ final class Browser: NSObject, ObservableObject {
         }
         switch job {
         case .begin:
-            web.evaluateInSearch(PageFind.begin) { [weak self, weak web] kind in
+            web.evaluateQuietly(PageFind.begin) { [weak self, weak web] kind, _ in
                 MainActor.assumeIsolated {
                     guard let self, let web, self.findRunning?.turn == turn else { return }
                     self.findCounted = (kind as? String).map { !$0.lowercased().contains("pdf") } ?? false
@@ -285,7 +285,7 @@ final class Browser: NSObject, ObservableObject {
             // Numbered only while the selection is still the match the last
             // step left: a click in the page since, and WebKit goes on from
             // there with a number that no longer means anything.
-            web.evaluateInSearch(PageFind.still) { [weak self] same in
+            web.evaluateQuietly(PageFind.still) { [weak self] same, _ in
                 MainActor.assumeIsolated {
                     if (same as? Bool) != true { self?.findCounted = false }
                     ask(!forward)
@@ -311,7 +311,7 @@ final class Browser: NSObject, ObservableObject {
         missed = false
         let turn = running.turn
         let over = count < 0 || count > PageFind.most
-        web.evaluateInSearch(PageFind.keep) { [weak self] held in
+        web.evaluateQuietly(PageFind.keep) { [weak self] held, _ in
             MainActor.assumeIsolated {
                 guard let self, self.findRunning?.turn == turn else { return }
                 if (held as? Bool) != true { self.findCounted = false }

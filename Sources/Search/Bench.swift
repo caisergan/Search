@@ -992,7 +992,9 @@ final class Bench {
                   var e = s.getRangeAt(0).startContainer.parentElement; return (e && e.id ? e.id + ':' : '') + s.toString(); })()
                 """
                 let web = browser.active?.built
-                web?.evaluateJavaScript(selection) { value, _ in
+                // Asked quietly: looked at the public way, the page would
+                // count as touched for having been looked at.
+                web?.evaluateQuietly(selection, in: .page) { value, _ in
                     MainActor.assumeIsolated {
                         answer(["finding": browser.finding, "needle": browser.needle, "missed": browser.missed,
                                 "said": browser.tally?.said ?? "", "count": browser.tally?.count ?? -1,
