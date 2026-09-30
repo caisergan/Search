@@ -30,6 +30,7 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- A video or a sound opened by its own address — a link to an .mp4 or an .mp3 — plays without "The page didn't load" standing over it. WebKit hands such a file to its player and ends the load that fetched it, which Search took for a failure: the video played, sound and all, under the message.
 - A page on this Mac opens where you can see it. An .html double-clicked in the Finder, dropped on the Dock icon or opened with Search was handed to SwiftUI, which closed the window to open it again: in full screen the window came out of that in no Space at all — Search still running, on no screen, and the page nowhere. Files now come straight to Search, as links already did, and the window stays as it was, full screen included, with the page in a new tab in front. A saved link (.webloc) opens the address in it, not the file as text.
 - The windows tabs wait in while you aren't looking at them stay off every screen and out of every Space. Full screen used to take them into its own and set them down across the top of the screen, where they stayed, a strip of page along the top of the desktop. Because they counted as a window showing, the Dock icon did nothing for a window that was closed or in the Dock; it brings it back now. And a tab you aren't looking at that asks something — an alert, a sign-in, a file to choose — asks it on the window, where it used to wait on one nobody could see, the page stopped until it was answered.
 
