@@ -641,7 +641,11 @@ final class Tab: ObservableObject, Identifiable {
                 MainActor.assumeIsolated { self?.progress = self?.built?.estimatedProgress ?? 0 }
             },
             web.observe(\.isLoading, options: [.new]) { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.loading = self?.built?.isLoading ?? false }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.loading = self.built?.isLoading ?? false
+                    if !self.loading { self.before = nil }
+                }
             },
             web.observe(\.canGoBack, options: [.new]) { [weak self] _, _ in
                 MainActor.assumeIsolated { self?.canGoBack = self?.built?.canGoBack ?? false }
@@ -909,6 +913,10 @@ final class Tab: ObservableObject, Identifiable {
             onCross(self, url)
             return
         }
+        // What the tab says of the page it is on, kept until the next one is
+        // in: a page that asks before it is left may be stayed on (see
+        // `stayed`).
+        before = built?.url == nil ? nil : (address, title, reading, reader)
         // Set straight away rather than waiting for the observer: the tab has to
         // stop being blank in the same frame the field disappears, or the empty
         // state flashes back for an instant on its way out.
@@ -928,6 +936,25 @@ final class Tab: ObservableObject, Identifiable {
         cover = nil
         adoptIcon()
         web.open(url)
+    }
+
+    /// What the tab said of its page as `go(to:)` sent it elsewhere, for as
+    /// long as that load is under way: once it has ended, in a page or
+    /// without one, there is nothing left to go back on.
+    private var before: (address: URL?, title: String, reading: Double, reader: Bool)?
+
+    /// The page asked whether it might be left, and you stayed (see
+    /// Dialogs.swift). Sent somewhere by `go(to:)`, the tab had already taken
+    /// the new address and dropped its title; it says again what its page
+    /// is. A page that was leaving on its own took nothing off the tab.
+    func stayed() {
+        guard let before else { return }
+        self.before = nil
+        address = before.address
+        title = before.title
+        reading = before.reading
+        reader = before.reader
+        adoptIcon()
     }
 
     /// Brought back from the last session: everything the row needs to draw it,
@@ -1951,6 +1978,19 @@ extension WKWebView {
         } else {
             load(URLRequest(url: url))
         }
+    }
+
+    /// Asks the page whether it may be closed, as Safari asks one: WebKit's
+    /// own question, by a name outside the public framework. True: nothing
+    /// to ask, it can go now. False: the page listens for being left and is
+    /// being asked — `webViewDidClose` follows if it may go, after the
+    /// question a page holding unsaved changes raises (see Dialogs.swift) if
+    /// it has one. A WebKit without the name closes as it always did.
+    func tryClose() -> Bool {
+        let selector = NSSelectorFromString("_tryClose")
+        guard responds(to: selector) else { return true }
+        typealias Try = @convention(c) (AnyObject, Selector) -> ObjCBool
+        return unsafeBitCast(method(for: selector), to: Try.self)(self, selector).boolValue
     }
 
     /// JavaScript run in Search's own world (see Web.world), where its page

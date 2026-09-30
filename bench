@@ -58,8 +58,12 @@
     ./bench place ID INDEX             put a tab at another place in the row
     ./bench pin ID essential|line|none|close   a square, a pinned line or neither; close puts it down
     ./bench pin clear                  Clear: every tab that is neither goes
-    ./bench close-after ID [close]     test run: Close Tabs Below (or to the Right) from that tab's menu — what
-                                       it is called and how many tabs it would close; close: closes them
+    ./bench leave [stay|go]            test run: the question a page with unsaved changes raises before it is
+                                       left or its tab closed — whether one is up and what it says; stay and
+                                       go answer it as its buttons do
+    ./bench close-after ID [close|others]  test run: Close Tabs Below (or to the Right) from that tab's menu —
+                                       what it is called and how many tabs it would close; close: closes
+                                       them; others: Close Other Tabs, the line above it
     ./bench field TEXT [type] [go]     test run: TEXT pasted into the address field (type: a key at a time),
                                        each timed until the window has caught up; go: then Return, timed
                                        until the page is loading
@@ -250,9 +254,12 @@ def main(argv):
         if args == ["clear"]: request["how"] = "clear"
         elif len(args) == 2 and args[1] in ("essential", "line", "none", "close"): request["id"], request["how"] = args
         else: sys.exit("usage: bench pin ID essential|line|none|close, or bench pin clear")
+    elif verb == "leave":
+        if args not in ([], ["stay"], ["go"]): sys.exit("usage: bench leave [stay|go]")
+        if args: request["action"] = args[0]
     elif verb == "close-after":
-        if not 1 <= len(args) <= 2 or (len(args) == 2 and args[1] != "close"): sys.exit("usage: bench close-after ID [close]")
-        request["id"], request["close"] = args[0], len(args) == 2
+        if not 1 <= len(args) <= 2 or (len(args) == 2 and args[1] not in ("close", "others")): sys.exit("usage: bench close-after ID [close|others]")
+        request["id"], request["close"], request["others"] = args[0], args[1:] == ["close"], args[1:] == ["others"]
     elif verb == "field":
         if not args or any(a not in ("type", "go") for a in args[1:]): sys.exit("usage: bench field TEXT [type] [go]")
         request["text"] = args[0]

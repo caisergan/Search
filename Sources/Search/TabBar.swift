@@ -69,7 +69,7 @@ struct TabBar: View {
                                                 width: width(in: geo.size.width),
                                                 room: geo.size.width - Metrics.lights - 12,
                                                 pill: pill,
-                                                close: { browser.close(tab) }
+                                                close: { browser.close(tab, asking: true) }
                                             )
                                             .modifier(Carried(index: index, count: browser.tabs.count, step: step, vertical: false, space: "strip") {
                                                 browser.move(tab, to: $0)

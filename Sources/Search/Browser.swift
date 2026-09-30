@@ -660,7 +660,9 @@ final class Browser: NSObject, ObservableObject {
     /// in Zen. The squares and the pinned lines stay, and you land on the
     /// one of them you last looked at — or on a new tab, with none awake.
     func clearTabs() {
-        let going = tabs.filter { $0.place == .loose }
+        // Each page is asked whether it may go (see `mayGo`); one that is
+        // still being asked goes when it has answered, or stays.
+        let going = tabs.filter { $0.place == .loose && mayGo($0) }
         guard !going.isEmpty else { return }
         cancelTabEdit()
         if let floating, going.contains(where: { $0.id == floating }) { land() }
@@ -669,7 +671,8 @@ final class Browser: NSObject, ObservableObject {
             if let index = tabs.firstIndex(where: { $0.id == tab.id }) { remember(tab, at: index) }
             tab.close()
         }
-        tabs.removeAll { $0.place == .loose }
+        let gone = Set(going.map(\.id))
+        tabs.removeAll { gone.contains($0.id) }
         if wasActive {
             activeID = nil
             if let back = tabs.filter({ !$0.asleep }).max(by: { $0.touched < $1.touched }) {
@@ -1316,8 +1319,14 @@ final class Browser: NSObject, ObservableObject {
 
     /// ⌘W, or the cross on the tab. Closing the last one leaves a blank tab
     /// behind; closing that blank tab closes the window.
-    func close(_ tab: Tab) {
+    ///
+    /// `asking`: closed by hand, so its page is asked first whether it may go
+    /// (see `mayGo`), as every browser asks one holding unsaved changes. Not
+    /// for a tab a script, an extension or the page itself closes.
+    func close(_ tab: Tab, asking: Bool = false) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        if asking, !mayGo(tab) { return }
+        parting.remove(tab.id)
 
         // A tab whose page is out in the little window takes the window with
         // it. Left alone, the window would go on holding a page belonging to a
@@ -1384,10 +1393,42 @@ final class Browser: NSObject, ObservableObject {
         select(keep)
         // The list is read once: closing walks the row and can add to it.
         for tab in tabs.filter({ $0.id != keep.id }) {
-            close(tab)
+            close(tab, asking: true)
         }
         select(keep)
     }
+
+    /// Tabs closed by hand whose pages are being asked whether they may go,
+    /// until each has answered.
+    private(set) var parting: Set<Tab.ID> = []
+
+    /// Whether a tab being closed by hand can go now. A page that listens
+    /// for being left is asked by WebKit first (tryClose): one with nothing
+    /// to say answers within moments, through `webViewDidClose`, and the
+    /// close is finished from there; one holding unsaved changes has you
+    /// asked (Dialogs.swift), and stays if you say so. A tab asleep, empty,
+    /// or a script's has nobody to ask.
+    private func mayGo(_ tab: Tab) -> Bool {
+        guard !tab.bench, !tab.isBlank, let web = tab.built else { return true }
+        // Asked already: ⌘W again, while the question is up, asks nothing new.
+        guard !parting.contains(tab.id) else { return false }
+        if web.tryClose() { return true }
+        parting.insert(tab.id)
+        return false
+    }
+
+    /// The question was answered with Stay: the tab is not closing after all.
+    func stays(_ tab: Tab) { parting.remove(tab.id) }
+
+    /// Pages given a load of our own to refuse, and pages just told to be
+    /// stayed on (see Dialogs.swift, `stayed`). By the view itself, held
+    /// weakly: neither outlives it.
+    let refusing = NSHashTable<WKWebView>.weakObjects()
+    let staying = NSHashTable<WKWebView>.weakObjects()
+    /// The questions waiting to be asked, one at a time, and the one that
+    /// is up (see Dialogs.swift, `askToLeave`).
+    var leaveAsks: [LeaveAsk] = []
+    var leaveAsking: LeaveAsk?
 
     /// Every ordinary tab after this one: below it in the column, to its
     /// right in the row across the top — Close Tabs to the Right, as every
@@ -1401,7 +1442,7 @@ final class Browser: NSObject, ObservableObject {
         // Closed where it stood, the next in the row would have come on
         // screen, woken, and been closed in its turn, all the way down.
         if going.contains(where: { $0.id == activeID }) { select(tab) }
-        for tab in going { close(tab) }
+        for tab in going { close(tab, asking: true) }
     }
 
     /// The tabs `closeAfter` closes — for the menus, which offer it only
@@ -2077,7 +2118,7 @@ final class Browser: NSObject, ObservableObject {
         tab.onPickTrouble = { [weak self] _, reason in
             self?.announce("Couldn't hide that — \(reason)")
         }
-        tab.onSwipeClose = { [weak self] tab in self?.close(tab) }
+        tab.onSwipeClose = { [weak self] tab in self?.close(tab, asking: true) }
 
         // The line at the bottom doubles as the zoom read-out: it keeps being
         // rewritten while you pinch and fades a moment after you stop. Put
@@ -2375,6 +2416,12 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         decidePolicyFor action: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
+        // A load of our own, made only to be refused (see `stayed`).
+        if refusing.contains(webView), action.navigationType == .other, action.targetFrame?.isMainFrame ?? true {
+            refusing.remove(webView)
+            decisionHandler(.cancel)
+            return
+        }
         // "Download Image", "Download Linked File" from the page's own
         // context menu, and a link with the `download` attribute all arrive
         // as an ordinary-looking action with this one flag set. Answered
@@ -2701,6 +2748,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     /// reload to fetch, because there is no longer an address to fetch.
     func webViewDidClose(_ webView: WKWebView) {
         guard let tab = tab(for: webView) else { return }
+        // Not the page closing itself: a tab closed by hand, whose page was
+        // asked whether it might go (see `mayGo`) and may. Closed as ⌘W
+        // closes — a pinned tab put down, not unpinned as below.
+        if parting.remove(tab.id) != nil {
+            close(tab)
+            return
+        }
         // Back to whoever opened it, so you land where you started the sign-in
         // rather than wherever the row happens to put you.
         if let opener = tab.opener, let home = tabs.first(where: { $0.id == opener }) {

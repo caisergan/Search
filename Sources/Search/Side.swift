@@ -587,7 +587,7 @@ struct SideBar: View {
             tab: tab,
             live: tab.id == browser.activeID,
             pill: pill,
-            close: { browser.close(tab) }
+            close: { browser.close(tab, asking: true) }
         )
         .padding(.bottom, SideBar.gap)
         .offset(y: held ? startY + travel - top(of: tab) : 0)
@@ -806,9 +806,9 @@ private struct PinSquare: View {
             if live { browser.editLetter(tab) } else { browser.select(tab) }
         })
         // Put down, like ⌘W: close() is what knows a pin isn't removed.
-        .overlay { MiddleClick { browser.close(tab) } }
+        .overlay { MiddleClick { browser.close(tab, asking: true) } }
         .onHover { hovering = $0 }
-        .contextMenu { TabMenu(browser: browser, tab: tab, close: { browser.close(tab) }) }
+        .contextMenu { TabMenu(browser: browser, tab: tab, close: { browser.close(tab, asking: true) }) }
         .help(tab.label)
         .animation(Motion.quick, value: hovering)
         .transition(.scale(scale: 0.8).combined(with: .opacity))

@@ -220,6 +220,103 @@ extension Browser {
         }
     }
 
+    // MARK: - a page that asks before it is left
+
+    /// A page holding something unsaved — a message half written, a form, an
+    /// upload under way — says so with a beforeunload handler, and every
+    /// browser asks before leaving it: closing its tab, going somewhere else
+    /// in it, reloading it. WebKit asks an app that isn't Safari through a
+    /// name outside the public framework; with nobody answering to it, the
+    /// page was left without a word, and what was in it was gone.
+    ///
+    /// The words are the browser's own, as in Safari and Chrome — what a
+    /// page wrote for this has not been shown in years, a page could say
+    /// anything there — and WebKit asks only of a page you have touched.
+    @objc(_webView:runBeforeUnloadConfirmPanelWithMessage:initiatedByFrame:completionHandler:)
+    func webView(
+        _ webView: WKWebView,
+        runBeforeUnloadConfirmPanelWithMessage message: NSString?,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        let tab = tab(for: webView)
+        // A tab of Claude's is left as it always was: nobody is there to ask.
+        if tab?.bench == true { return completionHandler(true) }
+        // Just told to stay: WebKit asks once more while the page is put
+        // back as it was (see `stayed`), and the answer hasn't changed.
+        if staying.contains(webView) { return completionHandler(false) }
+        let host = frame.securityOrigin.host.isEmpty ? (webView.backForwardList.currentItem?.url.host() ?? "") : frame.securityOrigin.host
+        leaveAsks.append(LeaveAsk(web: webView, tab: tab?.id, host: host) { [weak self, weak webView] leave in
+            completionHandler(leave)
+            guard let self, let webView, !leave else { return }
+            self.stayed(webView)
+        })
+        askToLeave()
+    }
+
+    /// One question at a time, each over its own page: closing several tabs
+    /// at once can raise several, and a sheet for a tab that isn't the one on
+    /// screen would be a question about a page nobody can see.
+    private func askToLeave() {
+        guard leaveAsking == nil, !leaveAsks.isEmpty else { return }
+        let ask = leaveAsks.removeFirst()
+        guard let web = ask.web else {
+            // The page went while its question waited.
+            ask.answer(true)
+            return askToLeave()
+        }
+        let tab = ask.tab.flatMap { id in tabs.first { $0.id == id } }
+        let closing = tab.map { parting.contains($0.id) } ?? false
+        if closing, let tab, tab.id != activeID { select(tab) }
+        let site = ask.host.hasPrefix("www.") ? String(ask.host.dropFirst(4)) : ask.host
+        let alert = NSAlert()
+        alert.messageText = closing ? "Close this tab?" : "Leave this page?"
+        alert.informativeText = (site.isEmpty ? "This page" : site) + " may be holding changes you haven't saved."
+        alert.addButton(withTitle: closing ? "Close" : "Leave")
+        // Escape stays, whatever the button is called.
+        alert.addButton(withTitle: "Stay").keyEquivalent = "\u{1b}"
+        ask.alert = alert
+        ask.finish = { [weak self] leave in
+            ask.finish = nil
+            ask.answer(leave)
+            self?.leaveAsking = nil
+            self?.askToLeave()
+        }
+        leaveAsking = ask
+        // A test run started hidden has no window a sheet could come down
+        // on — the app took one put up there for its last window closing,
+        // and quit. There the question waits for the bench (see `leave`).
+        guard !(Store.testing && NSApp.isHidden) else { return }
+        Dialogs.show(alert, over: web) { answer in ask.finish?(answer == .alertFirstButtonReturn) }
+    }
+
+    /// You chose to stay. A tab that was closing isn't any more. A page that
+    /// was being sent elsewhere by Search itself — an address typed, Back, a
+    /// reload — is a page WebKit goes on calling loading, under the address
+    /// it was asked for and never went to, for as long as nothing else is
+    /// loaded: what makes it let go is another load, so it is given one of
+    /// its own page, refused as it is asked for (see decidePolicyFor), and
+    /// the tab says again what its page is.
+    private func stayed(_ webView: WKWebView) {
+        let tab = tab(for: webView)
+        if let tab, parting.contains(tab.id) {
+            stays(tab)
+            return
+        }
+        tab?.stayed()
+        guard let here = webView.backForwardList.currentItem?.url,
+              webView.isLoading || webView.url != here
+        else { return }
+        staying.add(webView)
+        refusing.add(webView)
+        webView.open(here)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self, weak webView] in
+            guard let self, let webView else { return }
+            self.staying.remove(webView)
+            self.refusing.remove(webView)
+        }
+    }
+
     // MARK: - a page whose process went away
 
     /// WebKit runs each page in a process of its own, and the system kills
@@ -229,6 +326,11 @@ extension Browser {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard let tab = tab(for: webView) else { return }
         tab.fullscreenGone()
+        // Being closed, and waiting on a page that can no longer answer.
+        if parting.contains(tab.id) {
+            close(tab)
+            return
+        }
         // In front of you: straight back, a reload beats a white page with a
         // button on it. Behind another tab: the moment you come back to it.
         if tab.id == activeID, !tab.isBlank {
@@ -237,6 +339,36 @@ extension Browser {
             tab.stale = true
         }
     }
+}
+
+/// A page asking whether it may be left, waiting for its turn to be asked.
+/// WebKit holds the page until the handler it gave is called, so the handler
+/// is kept with the question and called once, whatever becomes of it.
+@MainActor
+final class LeaveAsk {
+    weak var web: WKWebView?
+    let tab: Tab.ID?
+    let host: String
+    /// The sheet, while it is up, and what either of its buttons does.
+    var alert: NSAlert?
+    var finish: ((Bool) -> Void)?
+    private var reply: ((Bool) -> Void)?
+
+    init(web: WKWebView, tab: Tab.ID?, host: String, reply: @escaping (Bool) -> Void) {
+        self.web = web
+        self.tab = tab
+        self.host = host
+        self.reply = reply
+    }
+
+    func answer(_ leave: Bool) {
+        let reply = reply
+        self.reply = nil
+        reply?(leave)
+    }
+
+    /// WebKit raises an exception for a handler let go of without an answer.
+    deinit { reply?(true) }
 }
 
 enum Dialogs {

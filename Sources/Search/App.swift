@@ -43,7 +43,7 @@ struct SearchApp: App {
                     if browser.glance != nil {
                         browser.closeGlance()
                     } else if let tab = browser.active {
-                        browser.close(tab)
+                        browser.close(tab, asking: true)
                     }
                 }
                     .keyboardShortcut(shortcuts.menu(.closeTab))
@@ -1111,7 +1111,7 @@ struct ContentView: View {
             } else if browser.peekTab != nil {
                 browser.closePeek()
             } else if let tab = browser.active {
-                browser.close(tab)
+                browser.close(tab, asking: true)
             }
         case .duplicateTab: browser.duplicate()
         case .back: browser.back()

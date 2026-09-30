@@ -1006,15 +1006,41 @@ final class Bench {
                 answer(["before": before, "after": tab.address?.absoluteString ?? ""])
             }
 
+        case "leave":
+            // The question a page raises before it is left, or before its
+            // tab is closed by hand (see Dialogs.swift): whether one is up,
+            // what it says and over which tab, and how many wait behind it.
+            // `stay` and `go` answer it as its two buttons do. Only on a
+            // SEARCH_PROBE run.
+            guard Store.testing else { answer(["error": "leave only works on a --test run"]); return }
+            if let act = request["action"] as? String, let ask = browser.leaveAsking {
+                // The sheet itself where there is one, as a click on its
+                // button ends it; hidden, there is none (see askToLeave).
+                if let sheet = ask.alert?.window, let under = sheet.sheetParent {
+                    under.endSheet(sheet, returnCode: act == "go" ? .alertFirstButtonReturn : .alertSecondButtonReturn)
+                } else {
+                    ask.finish?(act == "go")
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                let ask = browser.leaveAsking
+                answer(["asking": ask != nil, "says": ask?.alert?.messageText ?? "", "detail": ask?.alert?.informativeText ?? "",
+                        "buttons": ask?.alert?.buttons.map(\.title) ?? [], "waiting": browser.leaveAsks.count,
+                        "tab": ask?.tab.map { String($0.uuidString.prefix(8)).lowercased() } ?? "",
+                        "sheet": ask?.alert?.window.sheetParent != nil, "closing": browser.parting.count])
+            }
+
         case "close-after":
             // Close Tabs Below, or to the Right, as a tab's menu has it:
             // what the menu calls it and how many tabs it would close —
-            // and, asked to, the closing. Only on a SEARCH_PROBE run: it
-            // closes tabs.
+            // and, asked to, the closing, or Close Other Tabs from the same
+            // menu. Only on a SEARCH_PROBE run: it closes tabs.
             guard Store.testing else { answer(["error": "close-after only works on a --test run"]); return }
             guard let tab = find(request, in: browser) else { answer(missing(request)); return }
             let going = browser.tabsAfter(tab).count
             if request["close"] as? Bool == true { browser.closeAfter(tab) }
+            // "others": the line above it in the same menu, Close Other Tabs.
+            if request["others"] as? Bool == true { browser.closeOthers(but: tab) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 // And the Tabs menu's own line for it, as the menu bar has
                 // it for the tab on screen.
