@@ -437,12 +437,17 @@ struct ContentView: View {
                             PopupNotice(blocked: blocked, browser: browser)
                                 .transition(.move(edge: .top).combined(with: .opacity))
                         }
+                        if browser.locationRefused {
+                            LocationNotice(browser: browser)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
                     .padding(.top, 10)
                     .padding(.horizontal, 16)
                 }
                 .animation(Motion.settle, value: browser.asking)
                 .animation(Motion.settle, value: browser.blockedPopup)
+                .animation(Motion.settle, value: browser.locationRefused)
                 .animation(Motion.quick, value: browser.suggesting)
                 .overlay(alignment: browser.prefs.zoomSpot.alignment) { zoomNote }
                 .overlay {

@@ -82,7 +82,11 @@ enum Web {
         // Pages' notifications come to Search to be shown, and the first
         // process is told which sites may before it starts (see
         // Permissions.swift).
-        MainActor.assumeIsolated { WebNotifications.shared.provide(for: pool) }
+        MainActor.assumeIsolated {
+            WebNotifications.shared.provide(for: pool)
+            // And where the Mac is, for pages allowed to know (see Location.swift).
+            LocationFeed.shared.provide(for: pool)
+        }
         // The first one now, rather than when the first page wants it.
         let warm = NSSelectorFromString("_warmInitialProcess")
         if pool.responds(to: warm) { pool.perform(warm) }

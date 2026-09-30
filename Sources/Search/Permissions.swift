@@ -403,6 +403,50 @@ struct PopupNotice: View {
     }
 }
 
+/// A site you let know where you are asked, and macOS said Search may not:
+/// where to change that, since nothing in Search can.
+struct LocationNotice: View {
+    let browser: Browser
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "location.slash")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Palette.muted)
+            Text("macOS doesn't let Search use your location")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Palette.ink)
+                .lineLimit(1)
+            Button {
+                browser.locationRefused = false
+                LocationFeed.openSettings()
+            } label: {
+                Text("Open Settings")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.ground)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 4)
+                    .background(Palette.ink, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            Button { browser.locationRefused = false } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Palette.muted)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .background(Palette.ground, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 16, y: 5)
+    }
+}
+
 // MARK: - asking
 
 extension Browser {

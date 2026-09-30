@@ -1071,6 +1071,14 @@ final class Bench {
                 ]
                 if Store.testing { out["notified"] = WebNotifications.shared.shown }
                 if let tab = browser.active { out["capture"] = ["camera": tab.capture.camera.rawValue, "microphone": tab.capture.microphone.rawValue, "screen": tab.capture.screen.rawValue] }
+                // Where the Mac is, as macOS lets Search know it (see Location.swift).
+                var location: [String: Any] = ["macOS": LocationFeed.shared.authorization, "refused": browser.locationRefused,
+                                               "provider": LocationFeed.shared.installed, "asked": LocationFeed.shared.asked]
+                if let handed = LocationFeed.shared.handed {
+                    location["accuracy"] = Int(handed.accuracy)
+                    location["secondsAgo"] = Int(-handed.at.timeIntervalSinceNow)
+                }
+                out["location"] = location
                 return out
             }
             let action = request["action"] as? String ?? "state"

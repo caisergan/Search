@@ -525,6 +525,9 @@ final class Browser: NSObject, ObservableObject {
     var asks: [PermissionAsk] = []
     /// A window a page tried to open on its own, just stopped.
     @Published var blockedPopup: BlockedPopup?
+    /// A page allowed to know where you are asked, and macOS said Search may
+    /// not (see Location.swift).
+    @Published var locationRefused = false
 
     /// Everything every site has been allowed or refused, for the day you
     /// want to change your mind.
@@ -877,6 +880,7 @@ final class Browser: NSObject, ObservableObject {
         Updater.shared.checkIfDue { [weak self] line in self?.announce(line) }
         // Settings › General › Sync settings through iCloud Drive (see Sync.swift).
         SettingsSync.start { [weak self] line in self?.announce(line) }
+        LocationFeed.shared.onRefused = { [weak self] in self?.locationRefused = true }
         FormRelay.passkeysOffered = prefs.passkeys
 
         // The History menu lists what the history holds, and the menu is drawn
