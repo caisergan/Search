@@ -940,6 +940,29 @@ final class Tab: ObservableObject, Identifiable {
         adoptIcon()
     }
 
+    /// Reopened after it was closed (⇧⌘T, or History › Recently Closed): as
+    /// a tab that slept wakes, with the back list it had and at the place it
+    /// was scrolled to — Back goes back, as it does in every other browser,
+    /// where it used to come back as its last address and nothing behind
+    /// it. With nothing kept of it, it goes to the address.
+    func reopen(_ url: URL, title: String, memory: Any?) {
+        guard let memory else { return go(to: url) }
+        restore(url: url, title: title)
+        self.memory = memory
+        wake()
+    }
+
+    /// The page's own history as it stands, for whoever keeps the tab after
+    /// it is closed: taken from the page, or, asleep, what sleep kept. Only
+    /// of a page the web gave — an extension's page belongs to a view made
+    /// for that extension, and a reopened tab isn't one.
+    var remembered: Any? {
+        guard let scheme = address?.scheme?.lowercased(), ["http", "https", "file"].contains(scheme) else { return nil }
+        guard let built else { return memory }
+        // A view with no document behind its address has nothing to hand on.
+        return built.backForwardList.currentItem == nil ? nil : built.interactionState
+    }
+
     /// True for a tab that has a place and an address but is holding no page —
     /// brought back from the last session, or put down with ⌘W while pinned.
     var asleep: Bool { pending != nil }

@@ -838,8 +838,15 @@ final class Browser: NSObject, ObservableObject {
         let url: URL
         let title: String
         let index: Int
+        /// The page's own history as it closed — its back list, and where
+        /// it was scrolled to — so it comes back as the tab it was and not
+        /// only as its last address. Nil for a page there is none to take
+        /// from: one that never loaded, an extension's.
+        var memory: Any?
 
         var label: String { title.isEmpty ? Address.pretty(url) : title }
+
+        static func == (a: Ghost, b: Ghost) -> Bool { a.id == b.id }
     }
 
     private var bag = Set<AnyCancellable>()
@@ -1383,12 +1390,14 @@ final class Browser: NSObject, ObservableObject {
         activeID = tab.id
         editing = false
         typed = ""
-        tab.go(to: ghost.url)
+        tab.reopen(ghost.url, title: ghost.title, memory: ghost.memory)
     }
 
+    /// Before the tab is thrown away: its page is asked for its history
+    /// while there is still a page to ask.
     private func remember(_ tab: Tab, at index: Int) {
         guard !tab.shy, let url = tab.address else { return }
-        ghosts.append(Ghost(url: url, title: tab.title, index: index))
+        ghosts.append(Ghost(url: url, title: tab.title, index: index, memory: tab.remembered))
         if ghosts.count > 12 { ghosts.removeFirst() }
     }
 
