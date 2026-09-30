@@ -840,7 +840,7 @@ final class Tab: ObservableObject, Identifiable {
             }
             return
         }
-        web.evaluateInSearch("!!(window.__officeForms && window.__officeForms.hasPassword())") { [weak self] still in
+        web.evaluateQuietly("!!(window.__officeForms && window.__officeForms.hasPassword())") { [weak self] still, _ in
             MainActor.assumeIsolated {
                 guard let self, let sent = self.sent else { return }
                 // The box is still there: a refused sign-in, or the second
@@ -1037,9 +1037,9 @@ final class Tab: ObservableObject, Identifiable {
     /// nothing: a PDF, an image, a page whose process has already gone.
     func unsaved(_ done: @escaping (Bool) -> Void) {
         guard let built else { return done(false) }
-        built.evaluateInSearch(
+        built.evaluateQuietly(
             "!!(window.__officeForms && window.__officeForms.unsaved && window.__officeForms.unsaved())"
-        ) { value in
+        ) { value, _ in
             MainActor.assumeIsolated { done((value as? Bool) == true) }
         }
     }
@@ -1074,7 +1074,7 @@ final class Tab: ObservableObject, Identifiable {
               let data = try? JSONSerialization.data(withJSONObject: ["installed": installed, "busy": busy.map { $0 as Any } ?? NSNull()]),
               let json = String(data: data, encoding: .utf8)
         else { return }
-        built.evaluateInSearch("window.__officeStore && window.__officeStore.state(\(json))")
+        built.evaluateQuietly("window.__officeStore && window.__officeStore.state(\(json))")
     }
 
     /// The picture comes off the moment there is something better under it
@@ -1148,7 +1148,7 @@ final class Tab: ObservableObject, Identifiable {
                 web.open(url)
                 return
             }
-            web.evaluateJavaScript("document.readyState") { [weak self] _, error in
+            web.evaluateQuietly("document.readyState", in: .page) { [weak self] _, error in
                 MainActor.assumeIsolated {
                     guard let self, let error = error as NSError? else { return }
                     guard error.domain == WKErrorDomain,
@@ -1178,7 +1178,7 @@ final class Tab: ObservableObject, Identifiable {
             web.open(address)
             return
         }
-        web.evaluateJavaScript("document.readyState") { [weak self] _, error in
+        web.evaluateQuietly("document.readyState", in: .page) { [weak self] _, error in
             MainActor.assumeIsolated {
                 guard let self, let error = error as NSError? else { return }
                 guard error.domain == WKErrorDomain,
@@ -1999,6 +1999,38 @@ extension WKWebView {
     func evaluateInSearch(_ js: String, then: ((Any?) -> Void)? = nil) {
         evaluateJavaScript(js, in: nil, in: Web.world) { result in
             then?(try? result.get())
+        }
+    }
+
+    /// JavaScript the app runs on its own account — reading something from
+    /// the page, or putting something of its own there — with nothing you
+    /// did in the page behind it. `evaluateJavaScript` runs what it is given
+    /// as though you had just clicked there, and a page you have touched is
+    /// let do what one you haven't is not: it may ask before it is left,
+    /// and it is told it has been used (`navigator.userActivation`). WebKit
+    /// runs a script without that for whoever asks by a name outside the
+    /// public framework; a WebKit without the name is asked the public way,
+    /// and the page counts as touched, as it always did. In Search's own
+    /// world unless another is named, and answered as `evaluateJavaScript`
+    /// answers: the value, or the error.
+    func evaluateQuietly(_ js: String, in world: WKContentWorld? = nil, then: ((Any?, Error?) -> Void)? = nil) {
+        let world = world ?? Web.world
+        let selector = NSSelectorFromString("_evaluateJavaScript:withSourceURL:inFrame:inContentWorld:withUserGesture:completionHandler:")
+        guard responds(to: selector) else {
+            evaluateJavaScript(js, in: nil, in: world) { result in
+                switch result {
+                case .success(let value): then?(value, nil)
+                case .failure(let error): then?(nil, error)
+                }
+            }
+            return
+        }
+        typealias Evaluate = @convention(c) (
+            AnyObject, Selector, NSString, NSURL?, WKFrameInfo?, WKContentWorld, ObjCBool,
+            @escaping @convention(block) (Any?, NSError?) -> Void
+        ) -> Void
+        unsafeBitCast(method(for: selector), to: Evaluate.self)(self, selector, js as NSString, nil, nil, world, false) { value, error in
+            then?(value, error)
         }
     }
 }

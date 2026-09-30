@@ -1117,7 +1117,7 @@ final class Browser: NSObject, ObservableObject {
                 guard let self else { return }
                 for tab in tabs + parkedTabs {
                     tab.arm(hiding: curtain.css(on: curtain.host(of: tab.address)))
-                    tab.built?.evaluateInSearch(on ? AutoScroll.script : AutoScroll.off)
+                    tab.built?.evaluateQuietly(on ? AutoScroll.script : AutoScroll.off)
                 }
             }
             .store(in: &bag)
@@ -1130,7 +1130,7 @@ final class Browser: NSObject, ObservableObject {
                 if !on { linkStatus.dismiss() }
                 for tab in tabs + parkedTabs {
                     tab.arm(hiding: curtain.css(on: curtain.host(of: tab.address)))
-                    tab.built?.evaluateJavaScript(on ? HoveredLink.script : HoveredLink.off, in: nil, in: .defaultClient)
+                    tab.built?.evaluateQuietly(on ? HoveredLink.script : HoveredLink.off, in: .defaultClient)
                 }
             }
             .store(in: &bag)

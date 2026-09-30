@@ -232,6 +232,9 @@ extension Browser {
     /// The words are the browser's own, as in Safari and Chrome — what a
     /// page wrote for this has not been shown in years, a page could say
     /// anything there — and WebKit asks only of a page you have touched.
+    /// What the app reads from a page on its own would count as that, and
+    /// every page opened would be one you had touched: it is read another
+    /// way (see `evaluateQuietly` in Tab.swift).
     @objc(_webView:runBeforeUnloadConfirmPanelWithMessage:initiatedByFrame:completionHandler:)
     func webView(
         _ webView: WKWebView,
