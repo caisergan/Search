@@ -77,7 +77,7 @@ final class Translator: ObservableObject {
         // The answer is for this page only: a tab that has gone on to
         // another since keeps what that one will say.
         let page = generation[tab.id, default: 0]
-        web.evaluateInSearch(Translator.sample) { [weak self, weak tab, weak browser] value in
+        web.evaluateQuietly(Translator.sample) { [weak self, weak tab, weak browser] value, _ in
             guard let self, let tab, let browser, let found = value as? [String: Any],
                   generation[tab.id, default: 0] == page
             else { return }
@@ -138,7 +138,7 @@ final class Translator: ObservableObject {
         progress[tab.id] = (0, 0)
         open(from: source)
         pages[tab.id] = Page(web: web)
-        web.evaluateInSearch(TranslateScript.source)
+        web.evaluateQuietly(TranslateScript.source)
     }
 
     /// The page as it was, and what arrives from now on left alone.
@@ -146,7 +146,7 @@ final class Translator: ObservableObject {
         translated.remove(tab.id)
         progress[tab.id] = nil
         pages[tab.id] = nil
-        tab.built?.evaluateInSearch("window.__searchTranslate ? window.__searchTranslate.restore() : false")
+        tab.built?.evaluateQuietly("window.__searchTranslate ? window.__searchTranslate.restore() : false")
     }
 
     /// A new page in the tab, or no page at all any more — the tab closed,
@@ -233,7 +233,7 @@ final class Translator: ObservableObject {
               let data = try? JSONSerialization.data(withJSONObject: results.map { [$0.0, $0.1] }),
               let json = String(data: data, encoding: .utf8)
         else { return }
-        web.evaluateInSearch("window.__searchTranslate && window.__searchTranslate.apply(\(json))")
+        web.evaluateQuietly("window.__searchTranslate && window.__searchTranslate.apply(\(json))")
         let now = progress[tab] ?? (0, 0)
         progress[tab] = (now.sent, now.done + results.count)
     }

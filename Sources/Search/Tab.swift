@@ -1944,6 +1944,38 @@ extension WKWebView {
             then?(try? result.get())
         }
     }
+
+    /// JavaScript the app runs on its own account — reading something from
+    /// the page, or putting something of its own there — with nothing you
+    /// did in the page behind it. `evaluateJavaScript` runs what it is given
+    /// as though you had just clicked there, and a page you have touched is
+    /// let do what one you haven't is not: it may ask before it is left,
+    /// and it is told it has been used (`navigator.userActivation`). WebKit
+    /// runs a script without that for whoever asks by a name outside the
+    /// public framework; a WebKit without the name is asked the public way,
+    /// and the page counts as touched, as it always did. In Search's own
+    /// world unless another is named, and answered as `evaluateJavaScript`
+    /// answers: the value, or the error.
+    func evaluateQuietly(_ js: String, in world: WKContentWorld? = nil, then: ((Any?, Error?) -> Void)? = nil) {
+        let world = world ?? Web.world
+        let selector = NSSelectorFromString("_evaluateJavaScript:withSourceURL:inFrame:inContentWorld:withUserGesture:completionHandler:")
+        guard responds(to: selector) else {
+            evaluateJavaScript(js, in: nil, in: world) { result in
+                switch result {
+                case .success(let value): then?(value, nil)
+                case .failure(let error): then?(nil, error)
+                }
+            }
+            return
+        }
+        typealias Evaluate = @convention(c) (
+            AnyObject, Selector, NSString, NSURL?, WKFrameInfo?, WKContentWorld, ObjCBool,
+            @escaping @convention(block) (Any?, NSError?) -> Void
+        ) -> Void
+        unsafeBitCast(method(for: selector), to: Evaluate.self)(self, selector, js as NSString, nil, nil, world, false) { value, error in
+            then?(value, error)
+        }
+    }
 }
 
 /// A connection opened ahead of a page — its name looked up, TCP and TLS
