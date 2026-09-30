@@ -302,9 +302,11 @@ struct SiteCard: View {
     private func permitted(_ host: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Header(title: SiteCard.site(tab.address!))
-            ForEach(Permission.keptKinds) { kind in
-                Choosing(kind: kind, choice: permissions.choice(kind, for: host)) { choice in
-                    permissions.set(choice, kind, for: host)
+            // A private tab's answers are its own, and notifications aren't
+            // offered there (see Permissions.swift).
+            ForEach(Permission.keptKinds.filter { !(tab.shy && $0 == .notifications) }) { kind in
+                Choosing(kind: kind, choice: browser.choice(kind, for: host, in: tab)) { choice in
+                    browser.keep(choice, kind, for: host, in: tab)
                     changed = true
                 }
             }
@@ -319,7 +321,7 @@ struct SiteCard: View {
                 Row("Reload to Apply", keys: "⌘R") { after { browser.reload() } }
             }
             Row("Reset Permissions") {
-                permissions.forget(host)
+                browser.forgetPermissions(for: host, in: tab)
                 changed = true
             }
             Row("Back") { allowing = false }

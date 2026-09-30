@@ -13,6 +13,12 @@ import WebKit
 // or forgotten in Settings › Privacy. It stays on this Mac: none of it is
 // among the settings that sync (see Sync.swift), since it grants something.
 //
+// A private tab's answers are its own: what is kept for a site holds there
+// too, but what is answered there stays with that tab and goes with it —
+// the settings never hear which sites a private tab was on. Notifications
+// aren't offered there at all, as in Chrome's and Safari's private windows:
+// one is only shown for a site the settings allow.
+//
 // WebKit asks an app that isn't Safari for all but the camera and the
 // microphone only through names outside the public framework. They are
 // answered here by those names; a WebKit that stopped asking would leave
@@ -453,9 +459,9 @@ extension Browser {
     /// Answered at once from what is kept, or asked at the top of the page. A site
     /// refused anything it asked for is refused the lot.
     func ask(_ kinds: [Permission], host: String, from page: WKWebView, answer: @escaping (Bool) -> Void) {
-        let kept = SitePermissions.shared
+        let tab = tab(for: page)
         if kinds.allSatisfy(\.kept) {
-            let choices = kinds.map { kept.choice($0, for: host) }
+            let choices = kinds.map { choice($0, for: host, in: tab) }
             if choices.contains(.block) { return answer(false) }
             if choices.allSatisfy({ $0 == .allow }) { return answer(true) }
         }
@@ -467,11 +473,39 @@ extension Browser {
         refreshAsking()
     }
 
+    /// What a site was answered, as a tab knows it: for a private tab, what
+    /// it was answered in that tab first, then what is kept for the site.
+    /// Notifications a private tab has no kept answer for are refused there
+    /// (see the top of this file).
+    func choice(_ kind: Permission, for host: String, in tab: Tab?) -> Choice? {
+        if let tab, tab.shy, let said = tab.answers[host]?[kind] { return said }
+        if let kept = SitePermissions.shared.choice(kind, for: host) { return kept }
+        return tab?.shy == true && kind == .notifications ? .block : nil
+    }
+
+    /// An answer kept — or, with nil, forgotten: for the site, in the
+    /// settings; given in a private tab, with that tab alone.
+    func keep(_ choice: Choice?, _ kind: Permission, for host: String, in tab: Tab?) {
+        guard let tab, tab.shy else { return SitePermissions.shared.set(choice, kind, for: host) }
+        guard kind.kept, !host.isEmpty else { return }
+        var answers = tab.answers[host] ?? [:]
+        answers[kind] = choice
+        tab.answers[host] = answers.isEmpty ? nil : answers
+    }
+
+    /// Reset Permissions on the site's card: asked again from now on. In a
+    /// private tab, only what that tab was answered.
+    func forgetPermissions(for host: String, in tab: Tab?) {
+        guard let tab, tab.shy else { return SitePermissions.shared.forget(host) }
+        tab.answers[host] = nil
+    }
+
     /// The card's buttons. Kept for the site, unless it was your screen.
     func answerAsk(_ yes: Bool) {
         guard let ask = asking else { return }
+        let asker = ask.page.flatMap { self.tab(for: $0) }
         for kind in ask.kinds where kind.kept {
-            SitePermissions.shared.set(yes ? .allow : .block, kind, for: ask.host)
+            keep(yes ? .allow : .block, kind, for: ask.host, in: asker)
         }
         asks.removeAll { $0 === ask }
         ask.answer(yes)
@@ -507,14 +541,21 @@ extension Browser {
         guard let host = (webView.url?.host() ?? action.sourceFrame.securityOrigin.host).nilIfEmpty?.lowercased() else {
             return false
         }
-        switch SitePermissions.shared.choice(.popups, for: host) {
+        return mayPop(action.request.url, on: host, from: tab(for: webView))
+    }
+
+    /// A window a page of `host` opens on its own, in `tab`: let through
+    /// where the site was allowed, stopped where it was blocked, and
+    /// stopped with a notice saying so where nothing was answered yet.
+    func mayPop(_ url: URL?, on host: String, from tab: Tab?) -> Bool {
+        switch choice(.popups, for: host, in: tab) {
         case .allow:
             return true
         case .block:
             return false
         case nil:
-            if let tab = tab(for: webView), tab.id == activeID {
-                blockedPopup = BlockedPopup(host: host, url: action.request.url, tab: tab.id)
+            if let tab, tab.id == activeID {
+                blockedPopup = BlockedPopup(host: host, url: url, tab: tab.id)
                 let shown = blockedPopup?.id
                 DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
                     if self?.blockedPopup?.id == shown { self?.blockedPopup = nil }
@@ -536,7 +577,7 @@ extension Browser {
     func allowPopups() {
         guard let blocked = blockedPopup else { return }
         blockedPopup = nil
-        SitePermissions.shared.set(.allow, .popups, for: blocked.host)
+        keep(.allow, .popups, for: blocked.host, in: tabs.first { $0.id == blocked.tab })
         announce("Pop-ups allowed on \(blocked.site)")
     }
 
@@ -583,8 +624,9 @@ extension Browser {
     @objc(_webView:queryPermission:forOrigin:completionHandler:)
     func queryPermission(_ webView: WKWebView, name: String, origin: WKSecurityOrigin, completionHandler: @escaping (Int) -> Void) {
         let host = SitePermissions.host(of: origin, page: webView)
-        guard let kind = Permission(queried: name), tab(for: webView)?.bench != true else { return completionHandler(0) }
-        switch SitePermissions.shared.choice(kind, for: host) {
+        let tab = tab(for: webView)
+        guard let kind = Permission(queried: name), tab?.bench != true else { return completionHandler(0) }
+        switch choice(kind, for: host, in: tab) {
         case .allow: completionHandler(1)
         case .block: completionHandler(2)
         case nil: completionHandler(0)

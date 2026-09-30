@@ -357,6 +357,12 @@ final class Tab: ObservableObject, Identifiable {
     /// say which tab is watching or listening (see Permissions.swift).
     @Published private(set) var capture = Capture()
 
+    /// What sites were answered in this tab while it is a private one, by
+    /// host: kept with the tab and gone with it, never in the settings (see
+    /// Permissions.swift). A tab that keeps nothing keeps no list of where
+    /// it was asked for the camera either.
+    @Published var answers: [String: [Permission: Choice]] = [:]
+
     /// What WebKit says the page has now.
     func readCapture() {
         guard let web = built else {

@@ -72,10 +72,11 @@
     ./bench peek URL|close             test run: the peek panel over the tab in front, as a shift-click opens it
     ./bench window                     test run: open the browser's window if a hidden probe came up without it
     ./bench windowfs                   test run: the window in or out of full screen, as the green button does
-    ./bench permit [allow|deny|set HOST KIND allow|block|ask|forget [HOST]|popup-open|popup-allow|pause|click-page|click-worker|picture PATH]
+    ./bench permit [allow|deny|set HOST KIND allow|block|ask|forget [HOST]|popup-open|popup-allow|pause|click-page|click-worker|picture PATH|ask KIND|pop]
                                        what sites were allowed, the question at the top of the page, the pop-up notice,
                                        what the tab on screen has of the camera, microphone and screen; answering
-                                       and changing them only on a --test run, where notifications are kept, not shown
+                                       and changing them only on a --test run, where notifications are kept, not shown;
+                                       ask KIND and pop: the page on screen asking for it, or opening a window by itself
     ./bench front                      test run: the window on screen, in front and key, for a page that only asks
                                        for the camera, location or the screen while focused (pages on puts it away)
     ./bench pages on|off               test run: let a hidden probe's pages be painted, off every screen (for picture)
@@ -300,6 +301,8 @@ def main(argv):
                 request["host"], request["kind"], request["choice"] = args[1], args[2], args[3]
             elif args[0] == "forget" and len(args) == 2:
                 request["host"] = args[1]
+            elif args[0] == "ask" and len(args) == 2:
+                request["kind"] = args[1]
             elif args[0] == "picture":
                 if len(args) != 2: sys.exit("usage: bench permit picture PATH")
                 request["path"] = os.path.abspath(args[1])

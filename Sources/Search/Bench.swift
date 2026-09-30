@@ -1070,6 +1070,16 @@ final class Bench {
                     "sites": kept.sites.mapValues { answers in Dictionary(uniqueKeysWithValues: answers.map { ($0.key.rawValue, $0.value.rawValue) }) },
                 ]
                 if Store.testing { out["notified"] = WebNotifications.shared.shown }
+                // The tab on screen: what its site may use as that tab knows
+                // it, and what it was answered there as a private tab —
+                // which the settings never hear of (see Permissions.swift).
+                if let tab = browser.active, let host = tab.address?.host()?.lowercased() {
+                    out["here"] = Dictionary(uniqueKeysWithValues: Permission.keptKinds.compactMap { kind in
+                        browser.choice(kind, for: host, in: tab).map { (kind.rawValue, $0.rawValue) }
+                    })
+                    out["own"] = Dictionary(uniqueKeysWithValues: (tab.answers[host] ?? [:]).map { ($0.key.rawValue, $0.value.rawValue) })
+                }
+                out["answered"] = Bench.permitAnswer.map { $0 as Any } ?? NSNull()
                 if let tab = browser.active { out["capture"] = ["camera": tab.capture.camera.rawValue, "microphone": tab.capture.microphone.rawValue, "screen": tab.capture.screen.rawValue] }
                 // Where the Mac is, as macOS lets Search know it (see Location.swift).
                 var location: [String: Any] = ["macOS": LocationFeed.shared.authorization, "refused": browser.locationRefused,
@@ -1094,6 +1104,21 @@ final class Bench {
                 kept.set(Choice(rawValue: request["choice"] as? String ?? ""), kind, for: host.lowercased())
             case "forget":
                 if let host = request["host"] as? String { kept.forget(host.lowercased()) } else { kept.forgetAll() }
+            case "ask":
+                // The page in the tab on screen asking for something, handed
+                // over as WebKit hands it: a page WebKit doesn't take for
+                // focused — every page of a probe started hidden — is never
+                // let ask at all.
+                guard let tab = browser.active, let host = tab.address?.host()?.lowercased(),
+                      let kind = (request["kind"] as? String).flatMap(Permission.init(rawValue:))
+                else { answer(["error": "permit ask KIND, with a page on screen"]); return }
+                Bench.permitAnswer = nil
+                browser.ask([kind], host: host, from: tab.web) { Bench.permitAnswer = $0 }
+            case "pop":
+                // And opening a window by itself, without a click or a key.
+                guard let tab = browser.active, let host = tab.address?.host()?.lowercased()
+                else { answer(["error": "permit pop, with a page on screen"]); return }
+                Bench.permitAnswer = browser.mayPop(URL(string: "https://example.com/opened-by-itself"), on: host, from: tab)
             case "popup-open": browser.openBlockedPopup()
             case "popup-allow": browser.allowPopups()
             case "pause": browser.active?.toggleCapturePause()
@@ -1722,6 +1747,9 @@ final class Bench {
             answer(["error": "unknown"])
         }
     }
+
+    /// What the last `permit ask` or `permit pop` was answered, once it was.
+    static var permitAnswer: Bool?
 
     /// The tab a request names, among the ones the bench opened itself. The
     /// bench is how this browser is driven while somebody is using it, and
