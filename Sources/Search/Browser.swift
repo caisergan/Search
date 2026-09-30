@@ -1352,6 +1352,31 @@ final class Browser: NSObject, ObservableObject {
         select(keep)
     }
 
+    /// Every ordinary tab after this one: below it in the column, to its
+    /// right in the row across the top — Close Tabs to the Right, as every
+    /// other browser's tab menu has it. Pinned tabs come before the ordinary
+    /// ones and are never among them; from a pinned tab, every ordinary one
+    /// is after it. A script's tabs are the script's to close.
+    func closeAfter(_ tab: Tab) {
+        let going = tabsAfter(tab)
+        guard !going.isEmpty else { return }
+        // The tab on screen among them: this one takes the screen first.
+        // Closed where it stood, the next in the row would have come on
+        // screen, woken, and been closed in its turn, all the way down.
+        if going.contains(where: { $0.id == activeID }) { select(tab) }
+        for tab in going { close(tab) }
+    }
+
+    /// The tabs `closeAfter` closes — for the menus, which offer it only
+    /// when there are any.
+    func tabsAfter(_ tab: Tab) -> [Tab] {
+        guard let here = tabs.firstIndex(where: { $0.id == tab.id }) else { return [] }
+        return tabs[(here + 1)...].filter { $0.place == .loose && !$0.bench }
+    }
+
+    /// What the menus call it: the tabs are a column or a row.
+    var closeAfterTitle: String { prefs.sidebar ? "Close Tabs Below" : "Close Tabs to the Right" }
+
     /// A link let go of over the tabs becomes a tab among them.
     func take(_ providers: [NSItemProvider]) -> Bool {
         var took = false

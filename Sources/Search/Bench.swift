@@ -1006,6 +1006,26 @@ final class Bench {
                 answer(["before": before, "after": tab.address?.absoluteString ?? ""])
             }
 
+        case "close-after":
+            // Close Tabs Below, or to the Right, as a tab's menu has it:
+            // what the menu calls it and how many tabs it would close —
+            // and, asked to, the closing. Only on a SEARCH_PROBE run: it
+            // closes tabs.
+            guard Store.testing else { answer(["error": "close-after only works on a --test run"]); return }
+            guard let tab = find(request, in: browser) else { answer(missing(request)); return }
+            let going = browser.tabsAfter(tab).count
+            if request["close"] as? Bool == true { browser.closeAfter(tab) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                // And the Tabs menu's own line for it, as the menu bar has
+                // it for the tab on screen.
+                let tabsMenu = NSApp.mainMenu?.items.first { $0.title == "Tabs" }?.submenu
+                if let main = NSApp.mainMenu { NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: main) }
+                if let tabsMenu { tabsMenu.delegate?.menuNeedsUpdate?(tabsMenu) }
+                let item = tabsMenu?.items.first { $0.title == browser.closeAfterTitle }
+                answer(["title": browser.closeAfterTitle, "after": going, "tabs": browser.tabs.count,
+                        "menu": item.map { $0.isEnabled ? "enabled" : "disabled" } ?? "missing"])
+            }
+
         case "place":
             // A tab put at another place in the row, as a drag would.
             guard let id = request["id"] as? String, let to = request["to"] as? Int,

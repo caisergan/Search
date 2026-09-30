@@ -190,6 +190,8 @@ struct SearchApp: App {
                 Divider()
                 Button("Close Other Tabs") { if let tab = browser.active { browser.closeOthers(but: tab) } }
                     .disabled(browser.tabs.count < 2)
+                Button(browser.closeAfterTitle) { if let tab = browser.active { browser.closeAfter(tab) } }
+                    .disabled(browser.active.map { browser.tabsAfter($0).isEmpty } ?? true)
                 Button("Stop Sound in Tab") { browser.pauseMedia() }
                     .keyboardShortcut(shortcuts.menu(.stopSound))
             }

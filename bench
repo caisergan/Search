@@ -58,6 +58,8 @@
     ./bench place ID INDEX             put a tab at another place in the row
     ./bench pin ID essential|line|none|close   a square, a pinned line or neither; close puts it down
     ./bench pin clear                  Clear: every tab that is neither goes
+    ./bench close-after ID [close]     test run: Close Tabs Below (or to the Right) from that tab's menu — what
+                                       it is called and how many tabs it would close; close: closes them
     ./bench field TEXT [type] [go]     test run: TEXT pasted into the address field (type: a key at a time),
                                        each timed until the window has caught up; go: then Return, timed
                                        until the page is loading
@@ -248,6 +250,9 @@ def main(argv):
         if args == ["clear"]: request["how"] = "clear"
         elif len(args) == 2 and args[1] in ("essential", "line", "none", "close"): request["id"], request["how"] = args
         else: sys.exit("usage: bench pin ID essential|line|none|close, or bench pin clear")
+    elif verb == "close-after":
+        if not 1 <= len(args) <= 2 or (len(args) == 2 and args[1] != "close"): sys.exit("usage: bench close-after ID [close]")
+        request["id"], request["close"] = args[0], len(args) == 2
     elif verb == "field":
         if not args or any(a not in ("type", "go") for a in args[1:]): sys.exit("usage: bench field TEXT [type] [go]")
         request["text"] = args[0]
