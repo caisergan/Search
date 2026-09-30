@@ -19,6 +19,8 @@ final class Browser: NSObject, ObservableObject {
             // came on screen — ⌘T, or this one closed (see Fullscreen.swift).
             fullscreenStays()
             linkStatus.dismiss()
+            // The find bar's count was of the page just left.
+            findLeft()
             tabs.first { $0.id == old }?.touch()
             // A glance belongs to the page it was taken from, and goes when
             // that page does.
@@ -156,10 +158,40 @@ final class Browser: NSObject, ObservableObject {
     // MARK: - looking for something on the page
 
     @Published var finding = false
-    @Published var needle = "" { didSet { look(forward: true) } }
+    @Published var needle = "" { didSet { look(forward: true, anew: true) } }
     /// Set when the page doesn't hold what was asked for.
     @Published private(set) var missed = false
     @Published private(set) var findFocus = 0
+    /// How many the page holds and which one is shown, beside the field;
+    /// nil with nothing looked for, or a WebKit that doesn't count.
+    @Published private(set) var tally: FindTally?
+    /// WebKit's answers to a find (see PageFind). Its own, kept here.
+    private lazy var findEars: FindEars = {
+        let ears = FindEars()
+        ears.found = { [weak self] web, text, count, index in self?.heard(web, text, count: count, at: index) }
+        ears.missed = { [weak self] web, text in self?.heard(web, text, count: nil, at: 0) }
+        return ears
+    }()
+    /// The number WebKit gives for the match can be taken: the word was
+    /// begun at the top of this page, and every step since was the find's.
+    private var findCounted = false
+    /// A find has begun on the page on screen. Another tab, or another page
+    /// in this one, begins again.
+    private var findBegun = false
+
+    /// A word begun at the top of the page, or a step to the next match or
+    /// the one before.
+    private enum FindJob { case begin, step(forward: Bool) }
+    /// One at a time, in the order asked. WebKit answers a find with the
+    /// word and nothing else to tell two answers apart, and each find begins
+    /// where the selection is: a second one sent before the first was
+    /// answered — a key typed on the heels of another, Return held down —
+    /// is a number given to the wrong match.
+    private var findJobs: [FindJob] = []
+    /// The one under way, until WebKit has answered and the page has kept
+    /// the match.
+    private var findRunning: (text: String, web: WKWebView, turn: Int)?
+    private var findTurn = 0
 
     func openFind() {
         guard active?.isBlank == false else { return }
@@ -171,24 +203,128 @@ final class Browser: NSObject, ObservableObject {
         guard finding else { return }
         finding = false
         needle = ""
-        missed = false
+        findLeft()
         // There is no public way to call off a find, but letting go of the
         // selection is what taking the highlight away amounts to.
         active?.web.evaluateJavaScript("window.getSelection().removeAllRanges()")
+        if let web = active?.built, PageFind.counts(web) { PageFind.forget(in: web) }
     }
 
-    func look(forward: Bool) {
+    /// The page on screen is another one now — another tab, or this one gone
+    /// somewhere: the numbers were the last page's, and the next find begins
+    /// again at its top.
+    func findLeft() {
+        findBegun = false
+        findJobs = []
+        findRunning = nil
+        if tally != nil { tally = nil }
+        if missed { missed = false }
+    }
+
+    func look(forward: Bool) { look(forward: forward, anew: false) }
+
+    /// `anew`: another word than before. It begins at the top of the page,
+    /// which is what lets the matches be numbered (see PageFind).
+    private func look(forward: Bool, anew: Bool) {
         guard let web = active?.web, !needle.isEmpty else {
             missed = false
+            tally = nil
+            findJobs = []
             return
         }
-        let configuration = WKFindConfiguration()
-        configuration.backwards = !forward
-        configuration.caseSensitive = false
-        configuration.wraps = true
-        web.find(needle, configuration: configuration) { [weak self] result in
-            MainActor.assumeIsolated { self?.missed = !result.matchFound }
+        guard PageFind.counts(web) else {
+            let configuration = WKFindConfiguration()
+            configuration.backwards = !forward
+            configuration.caseSensitive = false
+            configuration.wraps = true
+            web.find(needle, configuration: configuration) { [weak self] result in
+                MainActor.assumeIsolated { self?.missed = !result.matchFound }
+            }
+            return
         }
+        if anew || !findBegun {
+            // A new word takes the place of whatever was still waiting, and
+            // of the words typed before it that never got their turn.
+            findBegun = true
+            findJobs = [.begin]
+        } else if findJobs.count < 8 {
+            // Return held down runs no further ahead than this.
+            findJobs.append(.step(forward: forward))
+        }
+        runFind()
+    }
+
+    private func runFind() {
+        guard findRunning == nil, !findJobs.isEmpty, let web = active?.built, !needle.isEmpty else { return }
+        let job = findJobs.removeFirst()
+        let text = needle
+        findTurn += 1
+        let turn = findTurn
+        findRunning = (text, web, turn)
+        // Never left waiting on a page that doesn't answer.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, findRunning?.turn == turn else { return }
+            findDone()
+        }
+        let ask: (Bool) -> Void = { [weak self, weak web] back in
+            guard let self, let web, self.findRunning?.turn == turn else { return }
+            PageFind.look(for: text, backwards: back, in: web, heard: self.findEars)
+        }
+        switch job {
+        case .begin:
+            web.evaluateInSearch(PageFind.begin) { [weak self, weak web] kind in
+                MainActor.assumeIsolated {
+                    guard let self, let web, self.findRunning?.turn == turn else { return }
+                    self.findCounted = (kind as? String).map { !$0.lowercased().contains("pdf") } ?? false
+                    PageFind.forget(in: web)
+                    ask(false)
+                }
+            }
+        case .step(let forward):
+            guard findCounted else { return ask(!forward) }
+            // Numbered only while the selection is still the match the last
+            // step left: a click in the page since, and WebKit goes on from
+            // there with a number that no longer means anything.
+            web.evaluateInSearch(PageFind.still) { [weak self] same in
+                MainActor.assumeIsolated {
+                    if (same as? Bool) != true { self?.findCounted = false }
+                    ask(!forward)
+                }
+            }
+        }
+    }
+
+    /// WebKit's answer to the find under way: not there (`count` nil), or
+    /// how many there are and the number of the one shown — taken once the
+    /// page has said the match is in its own text, where a count from the
+    /// top puts it.
+    private func heard(_ web: WKWebView, _ text: String, count: Int?, at index: Int) {
+        guard let running = findRunning, running.web === web, running.text == text else { return }
+        // Another word typed meanwhile: its turn is next, and says its own.
+        guard text == needle else { return findDone() }
+        guard let count else {
+            missed = true
+            tally = FindTally(count: 0, place: nil)
+            findDone()
+            return
+        }
+        missed = false
+        let turn = running.turn
+        let over = count < 0 || count > PageFind.most
+        web.evaluateInSearch(PageFind.keep) { [weak self] held in
+            MainActor.assumeIsolated {
+                guard let self, self.findRunning?.turn == turn else { return }
+                if (held as? Bool) != true { self.findCounted = false }
+                let known = self.findCounted && !over && (0..<count).contains(index)
+                self.tally = FindTally(count: over ? PageFind.most + 1 : count, place: known ? index + 1 : nil)
+                self.findDone()
+            }
+        }
+    }
+
+    private func findDone() {
+        findRunning = nil
+        runFind()
     }
 
     /// ⌘⇧M. Whatever is making noise in this tab stops making noise.
@@ -2639,7 +2775,10 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         guard let tab = tab(for: webView) else { return }
         // A new document: whatever was full screen in the window went with the old one.
         tab.fullscreenGone()
-        if tab.id == activeID { linkStatus.dismiss() }
+        if tab.id == activeID {
+            linkStatus.dismiss()
+            findLeft()
+        }
         tab.failure = nil
         tab.typing = false
         // Whatever you last set this site to, before it draws a single frame
