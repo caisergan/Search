@@ -63,12 +63,20 @@ enum Backstage {
 
     /// A page with nowhere else to be, laid out at the stage's size. A page
     /// that is already in a window — the stage, the float, a little window —
-    /// is left where it is.
+    /// is left where it is. One Claude gave a size of its own keeps it: laid
+    /// out at the stage's after you had looked at it, a phone's page took
+    /// itself for a wide screen's until Claude next used it, and what it
+    /// read then was half of each.
     static func park(_ page: NSView) {
         guard page.window == nil else { return }
         let content = window.contentView
-        page.frame = content?.bounds ?? NSRect(origin: .zero, size: size)
-        page.autoresizingMask = [.width, .height]
+        if let fixed = Agent.fixedSize(of: page) {
+            page.frame = NSRect(origin: .zero, size: fixed)
+            page.autoresizingMask = []
+        } else {
+            page.frame = content?.bounds ?? NSRect(origin: .zero, size: size)
+            page.autoresizingMask = [.width, .height]
+        }
         content?.addSubview(page)
     }
 

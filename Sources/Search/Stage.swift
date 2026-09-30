@@ -270,7 +270,46 @@ final class StageView: NSView {
         guard let layer, layer.cornerRadius != corner else { return }
         layer.cornerRadius = corner
         layer.cornerCurve = .continuous
-        layer.masksToBounds = corner > 0
+        layer.masksToBounds = corner > 0 || sized
+    }
+
+    /// Showing a page at a size of its own rather than the stage's (see
+    /// `place`): the stage clips it — larger than the stage, it would draw
+    /// over the tabs and the address field — and shows what is around it in
+    /// the colour macOS gives the space around a page.
+    private var sized = false
+
+    private func sizing(_ on: Bool) {
+        guard on != sized else { return }
+        sized = on
+        wantsLayer = true
+        layer?.masksToBounds = on || (layer?.cornerRadius ?? 0) > 0
+        paintAround()
+    }
+
+    private func paintAround() {
+        var color: CGColor?
+        if sized { effectiveAppearance.performAsCurrentDrawingAppearance { color = NSColor.underPageBackgroundColor.cgColor } }
+        layer?.backgroundColor = color
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        paintAround()
+    }
+
+    /// Where the page goes: the whole stage, or — for a tab Claude gave a
+    /// size of its own, a phone's or a tablet's — that size, in the middle,
+    /// the way a browser's responsive design mode shows a page. Larger than
+    /// the stage, it keeps its top left in view: the top of a page is what
+    /// anyone looks for first. Whole points, so the page isn't drawn between
+    /// pixels.
+    private static func place(_ page: NSView, in bounds: NSRect) -> (frame: NSRect, sized: Bool) {
+        guard let fixed = Agent.fixedSize(of: page) else { return (bounds, false) }
+        let x = fixed.width < bounds.width ? ((bounds.width - fixed.width) / 2).rounded(.down) : 0
+        // Not flipped: y counts up from the bottom.
+        let y = fixed.height < bounds.height ? ((bounds.height - fixed.height) / 2).rounded(.down) : bounds.height - fixed.height
+        return (NSRect(x: bounds.minX + x, y: bounds.minY + y, width: fixed.width, height: fixed.height), true)
     }
 
     private func settle() {
@@ -296,7 +335,7 @@ final class StageView: NSView {
             if let page = view as? PageView { Backstage.park(page) }
         }
 
-        guard let wanted, window != nil else { return }
+        guard let wanted, window != nil else { return sizing(false) }
         if wanted.superview !== self {
             // A web view can have only one superview, so taking it back is how
             // it is taken back.
@@ -315,7 +354,15 @@ final class StageView: NSView {
         // side as this view changes size; setting the page's frame here would
         // cover the inspector.
         if !(docked && subviews.contains(where: Self.isInspector)) {
-            wanted.frame = bounds
+            let place = Self.place(wanted, in: bounds)
+            wanted.frame = place.frame
+            // Between layouts — the window dragged larger — a page at a size
+            // of its own keeps it, where it is, rather than being stretched
+            // with the stage until this puts it right.
+            wanted.autoresizingMask = place.sized ? [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin] : [.width, .height]
+            sizing(place.sized)
+        } else {
+            sizing(false)
         }
     }
 
