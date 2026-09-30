@@ -145,6 +145,9 @@ enum Spaces {
 struct Parked {
     var tabs: [Tab]
     var active: Tab.ID?
+    /// The tabs the row was opened without (see Browser.lastRow), to be
+    /// offered as closed ones when it first comes on screen.
+    var left: [Browser.Ghost] = []
 }
 
 extension Browser {
@@ -183,6 +186,7 @@ extension Browser {
         Store.settings.set(id.uuidString, forKey: "space.current")
         if let back = parked.removeValue(forKey: id), !back.tabs.isEmpty {
             showRow(back.tabs, active: back.active)
+            recall(back.left)
             if let active, !active.wake() { active.revive() }
             wakePinned()
         } else {

@@ -985,19 +985,24 @@ final class Browser: NSObject, ObservableObject {
 
     /// The row of tabs the space on screen had last time, or one empty tab.
     func restoreSession() {
-        let saved = Session.read(space: spaceID)
-        guard !saved.tabs.isEmpty else {
-            // A blank tab costs nothing until it is asked for its page. Its
-            // web view — and with it WebKit's helper processes — is built a
-            // moment after the window is up, so that the first address typed
-            // finds everything already running, and the first frame never
-            // had to share the CPU with it.
+        let (saved, left) = lastRow(of: spaceID)
+        recall(left)
+        // A blank tab costs nothing until it is asked for its page. Its web
+        // view — and with it WebKit's helper processes — is built a moment
+        // after the window is up, so that the first address typed finds
+        // everything already running, and the first frame never had to
+        // share the CPU with it.
+        func blank() {
             let tab = Tab()
             adopt(tab)
+            activeID = tab.id
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak tab] in
                 guard let tab, tab.isBlank else { return }
                 _ = tab.web
             }
+        }
+        guard !saved.tabs.isEmpty else {
+            blank()
             return
         }
         for entry in saved.tabs {
@@ -1013,6 +1018,14 @@ final class Browser: NSObject, ObservableObject {
             adopt(Tab())
             return
         }
+        guard prefs.restoresTabs else {
+            // A fresh start: a new tab on screen, after the pinned ones,
+            // which load as Settings › Tabs › Load with Search says.
+            tabs = Browser.ordered(tabs)
+            blank()
+            wakePinned()
+            return
+        }
         // Where you were is kept by tab, not by index, through the reorder.
         let looked = tabs[min(max(0, saved.active), tabs.count - 1)].id
         tabs = Browser.ordered(tabs)
@@ -1022,6 +1035,30 @@ final class Browser: NSObject, ObservableObject {
         // and nothing else loads until it is looked at.
         tabs[here].wake()
         wakePinned()
+    }
+
+    /// A space's row as its session left it — or, with Settings › Tabs ›
+    /// Open with the tabs from last time off, only what was pinned of it:
+    /// the Essentials and the pinned lines are places kept, not pages left
+    /// open. The tabs left out are handed back as closed ones, the one
+    /// that was on screen last of them, so that ⇧⌘T brings back first what
+    /// you were looking at (see `recall`).
+    private func lastRow(of space: UUID) -> (row: Session.Shape, left: [Ghost]) {
+        let saved = Session.read(space: space)
+        guard !prefs.restoresTabs else { return (saved, []) }
+        var left = saved.tabs.enumerated().filter { $0.element.pin == nil && $0.element.kept != true }
+        if let looked = left.firstIndex(where: { $0.offset == saved.active }) { left.append(left.remove(at: looked)) }
+        let gone = left.compactMap { place, entry in
+            URL(string: entry.url).map { Ghost(url: $0, title: entry.title, index: place) }
+        }
+        return (Session.Shape(tabs: saved.tabs.filter { $0.pin != nil || $0.kept == true }, active: 0), gone)
+    }
+
+    /// Tabs a row was opened without, into Recently Closed — as its row
+    /// comes on screen, so ⇧⌘T in a space brings back that space's.
+    func recall(_ left: [Ghost]) {
+        guard !left.isEmpty else { return }
+        ghosts = Array((ghosts + left).suffix(12))
     }
 
     /// The few settings that something else has to be told about. The rest are
@@ -1786,7 +1823,7 @@ final class Browser: NSObject, ObservableObject {
     /// on screen: tabs with an address and no page yet, which cost next to
     /// nothing until one is looked at (see Spaces.swift).
     func loadRow(_ space: UUID) -> Parked {
-        let saved = Session.read(space: space)
+        let (saved, left) = lastRow(of: space)
         var row: [Tab] = []
         for entry in saved.tabs {
             guard let url = URL(string: entry.url) else { continue }
@@ -1796,6 +1833,12 @@ final class Browser: NSObject, ObservableObject {
             tab.pin = entry.pin
             tab.kept = entry.pin == nil && entry.kept == true
             row.append(tab)
+        }
+        guard prefs.restoresTabs || row.isEmpty else {
+            // A fresh start here too: a new tab after what was pinned.
+            let fresh = Tab(configuration: Web.configuration(space: space))
+            prepare(fresh)
+            return Parked(tabs: Browser.ordered(row) + [fresh], active: fresh.id, left: left)
         }
         let active = row.indices.contains(saved.active) ? row[saved.active].id : row.first?.id
         return Parked(tabs: Browser.ordered(row), active: active)
