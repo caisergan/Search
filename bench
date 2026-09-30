@@ -69,6 +69,8 @@
                                        (NAME: that browser picked under Bring Tabs from)
     ./bench bookmark URL [new]         test run: a bookmark picked from the list, timed until it loads
                                        (new: into a new tab, whose page isn't built yet)
+    ./bench history [clear]            test run: how many places the History window lists and how many
+                                       its file holds right now; clear: History › Clear History first
     ./bench peek URL|close             test run: the peek panel over the tab in front, as a shift-click opens it
     ./bench window                     test run: open the browser's window if a hidden probe came up without it
     ./bench windowfs                   test run: the window in or out of full screen, as the green button does
@@ -257,6 +259,9 @@ def main(argv):
         if len(args) not in (1, 2) or (len(args) == 2 and args[1] != "new"): sys.exit("usage: bench bookmark URL [new]")
         request["url"] = args[0]
         request["new"] = len(args) == 2
+    elif verb == "history":
+        if args not in ([], ["clear"]): sys.exit("usage: bench history [clear]")
+        if args: request["action"] = "clear"
     elif verb == "menu":
         if args not in ([], ["open"]): sys.exit("usage: bench menu [open]")
         request["open"] = args == ["open"]

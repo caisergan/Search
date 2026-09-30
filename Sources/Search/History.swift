@@ -250,10 +250,13 @@ final class History: ObservableObject {
         save()
     }
 
+    /// Clear History. Written before this returns, not a moment later: a
+    /// history cleared and the app quit in the same breath came back whole
+    /// at the next launch, the file never having heard of it.
     func forget() {
         visits = [:]
         folded = [:]
-        save()
+        write(now: true)
     }
 
     /// Everywhere you have been, newest first, for the window that shows it.
@@ -290,10 +293,12 @@ final class History: ObservableObject {
             }
     }
 
+    /// One place taken off the list. On its way to the file at once, with no
+    /// wait for other changes to gather: it was asked to be gone.
     func forget(_ key: String) {
         visits[key] = nil
         folded[key] = nil
-        save()
+        write()
     }
 
     /// The last eight places, newest first; worked out again only once the
@@ -492,31 +497,53 @@ final class History: ObservableObject {
         if rekeyed { save() }
     }
 
+    /// One write at a time, in the order they were asked for. On a queue that
+    /// runs several at once, an older list still being encoded could reach
+    /// the file after a newer one — after the empty one Clear History had
+    /// just written, putting back what was cleared.
+    private static let disk = DispatchQueue(label: "com.officecommun.search.history", qos: .utility)
+
     /// Coalesced: a busy minute of browsing writes the file once, not thirty
     /// times, and never on the main thread.
     private func save() {
         guard !saving else { return }
         saving = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self else { return }
-            saving = false
-            let now = Date()
-            // A cap, so the file can't grow without end. What goes is what has
-            // been visited least and longest ago. Ten thousand, now that each
-            // video and each search is a place of its own: 2.5 MB, read in
-            // about 20 ms at launch.
-            let list = self.visits.values
-                .sorted { self.frecency($0, now: now) > self.frecency($1, now: now) }
-                .prefix(10_000)
-                .map { $0 }
-            DispatchQueue.global(qos: .utility).async {
-                guard let data = try? JSONEncoder().encode(list) else { return }
-                try? FileManager.default.createDirectory(
-                    at: History.folder, withIntermediateDirectories: true
-                )
-                try? data.write(to: History.file, options: .atomic)
-            }
+            // Already written, by a quit or by something forgotten meanwhile.
+            guard let self, saving else { return }
+            write()
         }
+    }
+
+    /// The history as it stands, to its file. `now` writes before returning
+    /// — behind whatever write is already on its way, so it is the one the
+    /// file is left with — for what can't be left to a queue: a history just
+    /// cleared, and the app quitting.
+    private func write(now: Bool = false) {
+        saving = false
+        let moment = Date()
+        // A cap, so the file can't grow without end. What goes is what has
+        // been visited least and longest ago. Ten thousand, now that each
+        // video and each search is a place of its own: 2.5 MB, read in
+        // about 20 ms at launch.
+        let list = visits.values
+            .sorted { frecency($0, now: moment) > frecency($1, now: moment) }
+            .prefix(10_000)
+            .map { $0 }
+        let folder = History.folder, file = History.file
+        let put: @Sendable () -> Void = {
+            guard let data = try? JSONEncoder().encode(list) else { return }
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? data.write(to: file, options: .atomic)
+        }
+        if now { History.disk.sync(execute: put) } else { History.disk.async(execute: put) }
+    }
+
+    /// The app is quitting. Quitting doesn't wait for a timer or for a
+    /// queue: the page visited a second ago, and anything forgotten since,
+    /// reach the file here or not at all (see Session.write).
+    func flush() {
+        if saving { write(now: true) } else { History.disk.sync {} }
     }
 
     /// Somewhere to start on the first day, before there is any history to go
