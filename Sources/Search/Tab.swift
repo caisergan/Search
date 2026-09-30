@@ -1304,6 +1304,8 @@ final class Tab: ObservableObject, Identifiable {
         ears.stop()
         guard let web = built else { return }
         built = nil
+        // What was translated was this page (see Translate.swift).
+        Translator.shared.forget(id)
         let controller = web.configuration.userContentController
         Web.release(controller)
         controller.removeAllUserScripts()

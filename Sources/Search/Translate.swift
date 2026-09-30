@@ -137,7 +137,7 @@ final class Translator: ObservableObject {
         translated.insert(tab.id)
         progress[tab.id] = (0, 0)
         open(from: source)
-        pages[tab.id] = web
+        pages[tab.id] = Page(web: web)
         web.evaluateInSearch(TranslateScript.source)
     }
 
@@ -149,7 +149,8 @@ final class Translator: ObservableObject {
         tab.built?.evaluateInSearch("window.__searchTranslate ? window.__searchTranslate.restore() : false")
     }
 
-    /// A new page in the tab: the translation was the last one's.
+    /// A new page in the tab, or no page at all any more — the tab closed,
+    /// put down or asleep: the translation was the last one's.
     func forget(_ tab: Tab.ID) {
         generation[tab, default: 0] += 1
         translated.remove(tab)
@@ -184,7 +185,11 @@ final class Translator: ObservableObject {
     }
 
     /// The pages being translated, by tab, to be handed their pieces back.
-    private var pages: [Tab.ID: WKWebView] = [:]
+    /// Never what keeps one: held here outright, a translated page outlived
+    /// its tab — closed or put to sleep, it went on running where nobody
+    /// could see it, its timers, its requests and its sound with it.
+    private var pages: [Tab.ID: Page] = [:]
+    private struct Page { weak var web: WKWebView? }
     /// The translation macOS is doing: from what, into the Mac's language.
     @Published private(set) var configuration: AnyObject?
     private var source: Locale.Language??
@@ -224,7 +229,7 @@ final class Translator: ObservableObject {
 
     /// Translations, back into their page.
     private func deliver(_ results: [(Int, String)], to tab: Tab.ID) {
-        guard translated.contains(tab), let web = pages[tab],
+        guard translated.contains(tab), let web = pages[tab]?.web,
               let data = try? JSONSerialization.data(withJSONObject: results.map { [$0.0, $0.1] }),
               let json = String(data: data, encoding: .utf8)
         else { return }
@@ -271,9 +276,9 @@ final class Translator: ObservableObject {
         batches = nil
         source = nil
         configuration = nil
-        let pages = translated
-        for tab in pages { progress[tab] = nil }
+        for tab in translated { progress[tab] = nil }
         translated = []
+        pages = [:]
         trouble = "Couldn't translate this page"
         let said = trouble
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
