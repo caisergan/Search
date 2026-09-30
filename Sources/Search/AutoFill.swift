@@ -11,7 +11,9 @@ import WebKit
 // box's own setter, with the events typing would fire, as a sign-in is
 // filled (see Forms.swift). Fields are known by what the page says they are
 // for (autocomplete="email", "cc-number"…) and otherwise by their names,
-// labels and hints, in English and Turkish.
+// labels and hints, in English and Turkish — a card's only in a form that
+// asks for its number, since a month and a year on their own are a date of
+// birth as often as an expiry.
 //
 // Everything is kept in the macOS keychain, one item for the addresses and
 // one for the cards, readable by Search alone. A card is filled only after
@@ -255,6 +257,41 @@ final class AutoFillRelay: NSObject, WKScriptMessageHandler {
         return null;
       }
       function category(kind) { return !kind ? null : /^card/.test(kind) ? 'card' : 'address'; }
+      // A card's boxes are a card's only beside its number, unless the page
+      // says so itself (autocomplete="cc-…"). Read by their words alone, a
+      // month and a year are a date of birth as often as an expiry — "Ay"
+      // and "Yıl" on any sign-up form — and "expiry" is a passport's too.
+      function saysCard(el) { return /(^|\\s)cc-/.test((el.getAttribute('autocomplete') || '').toLowerCase()); }
+      function indexOf(found, el) {
+        for (var i = 0; i < found.length; i++) if (found[i][0] === el) return i;
+        return -1;
+      }
+      // The card number a box goes with, as a place among the form's boxes,
+      // or -1 with none: the last one at or before it — a card's boxes
+      // follow its number — or the first, for what comes before any.
+      function cardNumber(found, at) {
+        var first = -1, last = -1;
+        for (var i = 0; i < found.length; i++) {
+          if (found[i][1] !== 'cardNumber') continue;
+          if (first < 0) first = i;
+          if (i <= at) last = i;
+        }
+        return last >= 0 ? last : first;
+      }
+      // Whether the box at `at` is one the card goes into: of its kind, the
+      // one nearest its number, and after it rather than before. A form
+      // that asks for a date of birth as well has two months and two
+      // years, and only one of each is the card's.
+      function cardBox(found, at) {
+        if (at < 0) return false;
+        var number = cardNumber(found, at), kind = found[at][1];
+        if (number < 0) return saysCard(found[at][0]);
+        var far = function (n) { return n >= number ? n - number : number - n + 0.5; };
+        for (var n = 0; n < found.length; n++) {
+          if (n !== at && found[n][1] === kind && cardNumber(found, n) === number && far(n) < far(at)) return false;
+        }
+        return true;
+      }
       function scope(el) { return el.form || (el.closest && el.closest('form')) || document; }
       function fields(root) {
         var found = [], all = root.querySelectorAll('input, select, textarea');
@@ -281,6 +318,7 @@ final class AutoFillRelay: NSObject, WKScriptMessageHandler {
           for (var i = 0; i < found.length; i++) if (category(found[i][1]) === cat) same++;
           // One box on its own that merely looks like a name is no form.
           if (signIn(root) || (cat === 'address' && same < 2 && !(el.getAttribute('autocomplete') || '').trim())) cat = null;
+          if (cat === 'card' && !cardBox(found, indexOf(found, el))) cat = null;
         }
         here = cat ? el : null;
         var r = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
@@ -325,9 +363,16 @@ final class AutoFillRelay: NSObject, WKScriptMessageHandler {
           var from = here || document.activeElement;
           if (!from) return 0;
           var filled = 0, found = fields(scope(from));
+          // A card goes into one box of each kind (see cardBoxes). With no
+          // number in the form, only into the boxes the page itself calls
+          // a card's.
+          var at = indexOf(found, from);
+          if (cat === 'card' && !cardBox(found, at)) return 0;
           for (var i = 0; i < found.length; i++) {
             var el = found[i][0], kind = found[i][1];
             if (category(kind) !== cat) continue;
+            // Of two cards on a page, the one the caret is in.
+            if (cat === 'card' && !(cardBox(found, i) && cardNumber(found, i) === cardNumber(found, at))) continue;
             var value = kind === 'cardExpiry' ? (values.cardMonth && values.cardYear ? expiry(el, values.cardMonth, values.cardYear) : null)
               : kind === 'cardYear' && (el.getAttribute('maxlength') === '2' || /yy(?!yy)/i.test(el.getAttribute('placeholder') || '')) ? String(values.cardYear || '').slice(-2)
               : values[kind];
