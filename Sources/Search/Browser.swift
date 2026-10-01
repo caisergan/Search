@@ -2633,8 +2633,11 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     func webViewDidClose(_ webView: WKWebView) {
         guard let tab = tab(for: webView) else { return }
         // Back to whoever opened it, so you land where you started the sign-in
-        // rather than wherever the row happens to put you.
-        if let opener = tab.opener, let home = tabs.first(where: { $0.id == opener }) {
+        // rather than wherever the row happens to put you — if it was the one
+        // in front of you. One closing out of sight leaves you where you are:
+        // a sign-in window of Claude's, done with behind your back, brought
+        // Claude's tab over the page you were on.
+        if tab.id == activeID, let opener = tab.opener, let home = tabs.first(where: { $0.id == opener }) {
             select(home)
         }
         tab.pin = nil
