@@ -2437,8 +2437,9 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         for action: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
+        let opener = tab(for: webView)
         // From a glance, under the page the glance was taken from.
-        let from = glance?.tab.built === webView ? glance?.from : tab(for: webView)?.id ?? activeID
+        let from = glance?.tab.built === webView ? glance?.from : opener?.id ?? activeID
         // WebKit's copy of the opener's configuration still holds the
         // opener's user content controller — its scripts and its message
         // handlers. Shared, the new tab claimed the opener's handlers as its
@@ -2446,9 +2447,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // right-click on a picture on X, after following a link out of it,
         // did nothing at all. Each tab gets a controller of its own.
         configuration.userContentController = WKUserContentController()
-        // From a tab of Claude's: Claude's too, beside it, out of your way
-        // and not in front (see Agent.swift).
-        if let opener = tab(for: webView), opener.bench {
+        // From a tab of Claude's that Claude works in out of sight: Claude's
+        // too, beside it, out of your way and not in front (see Agent.swift).
+        // The one in front of you is yours to use, though, and a window opened
+        // from it comes to you as from any tab, below. Held back with Claude's,
+        // a sign-in window never showed: Continue with Google on a page Claude
+        // had opened did nothing anyone could see, however often it was pressed.
+        if let opener, opener.bench, opener.id != activeID {
             let tab = Tab(bench: true, configuration: configuration)
             prepare(tab)
             tabs.append(tab)
@@ -2460,7 +2465,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             Bench.shared.house(tab)
             return web
         }
-        let tab = Tab(shy: tab(for: webView)?.shy ?? false, configuration: configuration)
+        let tab = Tab(shy: opener?.shy ?? false, bench: opener?.bench ?? false, configuration: configuration)
         tab.popup = windowFeatures.width != nil || windowFeatures.height != nil
             || windowFeatures.toolbarsVisibility?.boolValue == false
         prepare(tab)
@@ -2468,6 +2473,9 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         tabs.insert(tab, at: slot(under: from))
         tab.opener = from
         tab.parent = from
+        // Opened from Claude's, it is Claude's still, and Claude hears of it
+        // with its next answer.
+        if let opener, opener.bench { Agent.popups.append((opener.id, tab.id)) }
         // In front, unless Settings says to leave it behind. A sign-in window
         // comes forward regardless: it's waiting on you.
         if prefs.newWindowFront || tab.popup {
