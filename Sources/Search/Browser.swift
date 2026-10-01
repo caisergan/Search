@@ -1445,6 +1445,15 @@ final class Browser: NSObject, ObservableObject {
         return tab
     }
 
+    /// A link you opened behind the page you are on — ⌘-click, the middle
+    /// button. Nothing in front of you changes, so a line at the bottom says
+    /// the click did something. Tabs an extension or another app opens
+    /// behind say nothing: you didn't just ask for them.
+    func openBehind(_ url: URL, from source: Tab?) {
+        open(url, foreground: false, from: source)
+        announce("Opened in a background tab")
+    }
+
     /// A tab for a page opened out of `source`, not yet anywhere.
     private func tab(going url: URL, from source: Tab?) -> Tab {
         let page = Browser.extensionConfiguration(for: url)
@@ -1928,7 +1937,7 @@ final class Browser: NSObject, ObservableObject {
         // The middle button on a link opens it beside the tab you are on, as
         // it does in every other browser (see MiddleRelay).
         // From a private tab, the new one is private too, as for ⌘-click.
-        tab.onMiddleClick = { [weak self] tab, url in self?.open(url, foreground: false, from: tab) }
+        tab.onMiddleClick = { [weak self] tab, url in self?.openBehind(url, from: tab) }
         tab.onCross = { [weak self] tab, url in self?.replace(tab, going: url) }
         // A page reached without a load is kept like one reached with it, or
         // the video you went on to from another is nowhere in the history.
@@ -2379,7 +2388,11 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         if action.navigationType == .linkActivated,
            ["http", "https"].contains(scheme),
            action.modifierFlags.contains(.command) {
-            open(url, foreground: action.modifierFlags.contains(.shift) != prefs.commandClickFront, from: tab(for: webView))
+            if action.modifierFlags.contains(.shift) != prefs.commandClickFront {
+                open(url, foreground: true, from: tab(for: webView))
+            } else {
+                openBehind(url, from: tab(for: webView))
+            }
             decisionHandler(.cancel)
             return
         }
@@ -2475,6 +2488,9 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             editing = false
         } else {
             Backstage.park(tab.web)
+            // Only a click opens a window here (pages can't on their own,
+            // see Tab), so this one was asked for too: say where it went.
+            announce("Opened in a background tab")
         }
         // Returning the view is what makes it the target. WebKit loads the
         // request into it itself when the action carries one.
