@@ -230,14 +230,16 @@ struct Fold: View {
         let distance = prefs.sidebar ? point.x : size.height - point.y
         if browser.peeking {
             pass()
-            // Only this window counts, not another app's window over it. One
-            // of this app's own windows, such as a popover opened from the
+            // Only this window counts, not another app's window over it —
+            // except on the way to the traffic lights (see `near`). One of
+            // this app's own windows, such as a popover opened from the
             // column, counts as the column.
             let under = Fold.under(screen, in: window)
             let onWindow = under == .window
             let onOwnPanel = under == .panel
             let reach = prefs.sidebar ? prefs.sideWidth : Metrics.strip
             let over = onOwnPanel || (onWindow && inWindow && distance < reach)
+                || Fold.near(point, in: size, column: prefs.sidebar, reach: reach)
             if over != inside { inside = over }
             // With a button held — the column's edge pulled wider, a tab
             // carried along it — the pointer may stray past the column
@@ -253,6 +255,31 @@ struct Fold: View {
         } else {
             pass()
         }
+    }
+
+    /// How far past the window's edge the pointer may stray, by the traffic
+    /// lights, before the column or the strip counts as left.
+    private static let slack: CGFloat = 40
+
+    /// On the way to the traffic lights, whatever is under the pointer.
+    /// They sit in the column's corner some fifteen points below the
+    /// window's top edge, and a hand reaching for them goes past it as often
+    /// as not: into the menu bar, which full screen brings down above the
+    /// window (33 to 37 points on a Mac with a notch) or lays over its top,
+    /// or off the window's left side. There the screen answers with the menu
+    /// bar's window or the desktop rather than this one, and the column went
+    /// in under the hand, the lights with it: the yellow or the green button
+    /// took several tries to reach. So a band along the window's top, inside
+    /// and out, over the column's width — the strip's, across the window —
+    /// and one down the window's left side beside the column count as the
+    /// column, whatever is there. Further out, or over the page, it goes as
+    /// it did.
+    private static func near(_ point: NSPoint, in size: NSSize, column: Bool, reach: CGFloat) -> Bool {
+        let alongTop = point.y > size.height - slack && point.y < size.height + slack
+            && point.x > -slack && point.x < (column ? reach : size.width + slack)
+        let offSide = column && point.x < 0 && point.x > -slack
+            && point.y > -slack && point.y < size.height + slack
+        return alongTop || offSide
     }
 
     /// The pointer on the edge: out at once, or after the wait Settings
