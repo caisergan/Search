@@ -124,6 +124,7 @@ struct Fold: View {
             watch()
         }
         .onDisappear { pointer.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: Fold.steered)) { _ in follow() }
         // A column folded for good is folded before there is a window to
         // hide the lights of; they go once there is one.
         .background(WindowSetup { window in
@@ -189,6 +190,26 @@ struct Fold: View {
     /// Whether the edge is being watched, for the bench.
     private(set) static var watching = false
 
+    /// What is under the pointer, as the column sees it: this window, one of
+    /// the app's own panels (a popover from the column counts as the
+    /// column), or anything else.
+    enum Under { case window, panel, other }
+
+    /// For the bench: a pointer of its own, put at a point by hand, with what
+    /// is under it said rather than asked of the screen, which shows a test
+    /// run behind whatever the person running it has in front. Their own
+    /// pointer goes on moving meanwhile and is not looked at. Test runs only
+    /// (see Bench, `pointer`).
+    static var virtual: (screen: NSPoint, under: Under)?
+    static let steered = Notification.Name("search.fold.steered")
+
+    private static func under(_ screen: NSPoint, in window: NSWindow) -> Under {
+        if let virtual { return virtual.under }
+        let top = NSWindow.windowNumber(at: screen, belowWindowWithWindowNumber: 0)
+        if top == window.windowNumber { return .window }
+        return NSApp.windows.contains { $0.windowNumber == top } ? .panel : .other
+    }
+
     /// Opens or closes the column from the pointer's actual position, on
     /// every move. Hover events weren't enough: a view that appears under a
     /// still pointer never gets "entered", so it never gets "exited" either,
@@ -201,7 +222,7 @@ struct Fold: View {
             if browser.peeking { peek(false) }
             return
         }
-        let screen = NSEvent.mouseLocation
+        let screen = Fold.virtual?.screen ?? NSEvent.mouseLocation
         let point = window.convertPoint(fromScreen: screen)
         let size = window.frame.size
         let inWindow = point.x >= 0 && point.x < size.width && point.y >= 0 && point.y < size.height
@@ -212,23 +233,22 @@ struct Fold: View {
             // Only this window counts, not another app's window over it. One
             // of this app's own windows, such as a popover opened from the
             // column, counts as the column.
-            let top = NSWindow.windowNumber(at: screen, belowWindowWithWindowNumber: 0)
-            let onWindow = top == window.windowNumber
-            let onOwnPanel = !onWindow && NSApp.windows.contains { $0.windowNumber == top }
+            let under = Fold.under(screen, in: window)
+            let onWindow = under == .window
+            let onOwnPanel = under == .panel
             let reach = prefs.sidebar ? prefs.sideWidth : Metrics.strip
             let over = onOwnPanel || (onWindow && inWindow && distance < reach)
             if over != inside { inside = over }
             // With a button held — the column's edge pulled wider, a tab
             // carried along it — the pointer may stray past the column
             // without the column going in under the hand. The next move
-            // after it is let go settles it.
-            if !over, NSEvent.pressedMouseButtons != 0 { return }
+            // after it is let go settles it. The bench's pointer holds none.
+            if !over, Fold.virtual == nil, NSEvent.pressedMouseButtons != 0 { return }
             peek(over)
         } else if inWindow, distance < Fold.edge {
             // Which window is under the pointer is asked only here, at the
             // edge: another app's window over it doesn't bring the column out.
-            guard NSWindow.windowNumber(at: screen, belowWindowWithWindowNumber: 0) == window.windowNumber
-            else { return pass() }
+            guard Fold.under(screen, in: window) == .window else { return pass() }
             if arriving == nil { arrive() }
         } else {
             pass()
