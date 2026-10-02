@@ -161,21 +161,30 @@ struct SiteCard: View {
 
     /// One step in: the connection, said in full.
     @State private var deeper: Bool
+    /// One step in: what the site may use.
+    @State private var allowing: Bool
+    /// Something changed there that the open page only hears of when it is
+    /// loaded again.
+    @State private var changed = false
+    @ObservedObject private var permissions = SitePermissions.shared
     /// Whether this Mac trusts the site's certificate. Unknown until it has
     /// been asked, off the main thread: asking can go to the network.
     @State private var certified: Bool?
 
-    init(browser: Browser, tab: Tab, deeper: Bool = false, close: @escaping () -> Void) {
+    init(browser: Browser, tab: Tab, deeper: Bool = false, allowing: Bool = false, close: @escaping () -> Void) {
         self.browser = browser
         self.tab = tab
         self.close = close
         _deeper = State(initialValue: deeper)
+        _allowing = State(initialValue: allowing)
     }
 
     var body: some View {
         Group {
             if deeper, let safety {
                 security(safety)
+            } else if allowing, let host {
+                permitted(host)
             } else {
                 front
             }
@@ -185,6 +194,7 @@ struct SiteCard: View {
         .fixedSize()
         .transition(.opacity)
         .animation(Motion.quick, value: deeper)
+        .animation(Motion.quick, value: allowing)
         .onAppear(perform: certify)
     }
 
@@ -207,6 +217,9 @@ struct SiteCard: View {
             }
             if let safety {
                 Row(safety.title, submenu: true) { deeper = true }
+            }
+            if host != nil {
+                Row("Permissions", submenu: true) { allowing = true }
             }
             Row("Copy Address", keys: "⇧⌘C") { after { browser.copyAddress() } }
             Separator()
@@ -269,6 +282,100 @@ struct SiteCard: View {
                 }
             }
             Row("Back") { deeper = false }
+        }
+    }
+
+    // MARK: - what the site may use
+
+    /// The site as its permissions are kept: the page's own host, for a page
+    /// that came over the web.
+    private var host: String? {
+        guard let url = tab.address, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let host = url.host()?.lowercased(), !host.isEmpty
+        else { return nil }
+        return host
+    }
+
+    /// Each thing a site may ask for, with what it was answered — Ask until
+    /// then — and a menu to change it; what the page has right now, to hold
+    /// quiet; and a way to have it all asked again.
+    private func permitted(_ host: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Header(title: SiteCard.site(tab.address!))
+            // A private tab's answers are its own, and notifications aren't
+            // offered there (see Permissions.swift).
+            ForEach(Permission.keptKinds.filter { !(tab.shy && $0 == .notifications) }) { kind in
+                Choosing(kind: kind, choice: browser.choice(kind, for: host, in: tab)) { choice in
+                    browser.keep(choice, kind, for: host, in: tab)
+                    changed = true
+                }
+            }
+            if tab.capture.any {
+                Separator()
+                Row(tab.capture.live ? "Pause Camera and Microphone" : "Resume Camera and Microphone") {
+                    tab.toggleCapturePause()
+                }
+            }
+            Separator()
+            if changed {
+                Row("Reload to Apply", keys: "⌘R") { after { browser.reload() } }
+            }
+            Row("Reset Permissions") {
+                browser.forgetPermissions(for: host, in: tab)
+                changed = true
+            }
+            Row("Back") { allowing = false }
+        }
+    }
+
+    /// One thing the site may use, as a menu line: its name, and what it was
+    /// answered at the end. A click opens the three answers, the kept one
+    /// ticked.
+    private struct Choosing: View {
+        let kind: Permission
+        let choice: Choice?
+        let pick: (Choice?) -> Void
+
+        @State private var hovering = false
+
+        private var said: String {
+            switch choice {
+            case .allow: return "Allow"
+            case .block: return "Block"
+            case nil: return kind == .popups ? "Block and Notify" : "Ask"
+            }
+        }
+
+        var body: some View {
+            HStack(spacing: 6) {
+                Image(systemName: kind.symbol)
+                    .font(.system(size: 11))
+                    .frame(width: 16)
+                    .foregroundStyle(hovering ? Color.white : Color(nsColor: .secondaryLabelColor))
+                Text(kind.title)
+                    .font(MenuMetrics.font)
+                    .foregroundStyle(hovering ? Color.white : Color(nsColor: .labelColor))
+                    .fixedSize()
+                Spacer(minLength: 24)
+                Text(said)
+                    .font(MenuMetrics.font)
+                    .foregroundStyle(hovering ? Color.white : Color(nsColor: .secondaryLabelColor))
+                    .fixedSize()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(hovering ? Color.white : Color(nsColor: .tertiaryLabelColor))
+            }
+            .padding(.leading, MenuMetrics.text - MenuMetrics.inset - 4)
+            .padding(.trailing, MenuMetrics.trailing - MenuMetrics.inset)
+            .frame(height: MenuMetrics.row)
+            .background(
+                RoundedRectangle(cornerRadius: MenuMetrics.highlight, style: .continuous)
+                    .fill(hovering ? MenuMetrics.selection : .clear)
+            )
+            .padding(.horizontal, MenuMetrics.inset)
+            .contentShape(Rectangle())
+            .onTapGesture { ChoiceMenu.show(kind: kind, current: choice, pick: pick) }
+            .onHover { hovering = $0 }
         }
     }
 
@@ -489,5 +596,43 @@ enum MenuMetrics {
     static let edge = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             ? NSColor.white.withAlphaComponent(0.18) : NSColor.black.withAlphaComponent(0.26)
+    }
+}
+
+/// The three answers to what a site may use, as a menu at the pointer.
+@MainActor
+private final class ChoiceMenu: NSObject {
+    private let pick: (Choice?) -> Void
+
+    private init(pick: @escaping (Choice?) -> Void) {
+        self.pick = pick
+    }
+
+    static func show(kind: Permission, current: Choice?, pick: @escaping (Choice?) -> Void) {
+        let target = ChoiceMenu(pick: pick)
+        let menu = NSMenu()
+        let answers: [(String, Choice?)] = [
+            (kind == .popups ? "Block and Notify" : "Ask", nil),
+            ("Allow", .allow),
+            ("Block", .block),
+        ]
+        for (index, answer) in answers.enumerated() {
+            let item = NSMenuItem(title: answer.0, action: #selector(chosen(_:)), keyEquivalent: "")
+            item.target = target
+            item.tag = index
+            item.state = answer.1 == current ? .on : .off
+            menu.addItem(item)
+        }
+        target.answers = answers.map(\.1)
+        // Tracked here and now; the target lives for as long as the menu is up.
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        withExtendedLifetime(target) {}
+    }
+
+    private var answers: [Choice?] = []
+
+    @objc private func chosen(_ item: NSMenuItem) {
+        guard answers.indices.contains(item.tag) else { return }
+        pick(answers[item.tag])
     }
 }

@@ -22,7 +22,7 @@
     ./bench extensions                 installed extensions, loaded or not, with their warnings
     ./bench little URL|keep|close      a small window for a link (made unseen), kept into the row, or closed
     ./bench sync [state|use|keep]      settings through iCloud Drive: what it has; use another Mac's (opens again), keep this one's — --test runs only
-    ./bench site PATH [security]       the site card for the tab on screen, drawn to a PNG
+    ./bench site PATH [security|permissions]  the site card for the tab on screen, drawn to a PNG
     ./bench ext-add ID|LINK [--yes]    install from the Chrome Web Store (--yes only in a --test run)
     ./bench ext-folder PATH [--yes]    install an unpacked extension
     ./bench ext-press ID               press its button
@@ -76,6 +76,13 @@
                                        test run: pages on this Mac opened as File › Open File… opens them, or
                                        bookmarks in from or out to an HTML file, without the panels; menu:
                                        the File and Bookmarks menus' lines, with their keys
+    ./bench permit [allow|deny|set HOST KIND allow|block|ask|forget [HOST]|popup-open|popup-allow|pause|click-page|click-worker|picture PATH|ask KIND|pop]
+                                       what sites were allowed, the question at the top of the page, the pop-up notice,
+                                       what the tab on screen has of the camera, microphone and screen; answering
+                                       and changing them only on a --test run, where notifications are kept, not shown;
+                                       ask KIND and pop: the page on screen asking for it, or opening a window by itself
+    ./bench front                      test run: the window on screen, in front and key, for a page that only asks
+                                       for the camera, location or the screen while focused (pages on puts it away)
     ./bench pages on|off               test run: let a hidden probe's pages be painted, off every screen (for picture)
     ./bench picture PATH               test run: the whole window, pages included, drawn to a PNG (start the probe hidden)
     ./bench film peek|unpeek|fold PATH [N] [SECS]  the window drawn N times while it animates → PATH-00.png… — --test runs only
@@ -223,9 +230,11 @@ def main(argv):
         if len(args) != 1: sys.exit("usage: bench little URL|keep|close")
         request["what"] = args[0]
     elif verb == "site":
-        if not 1 <= len(args) <= 2: sys.exit("usage: bench site PATH [security]")
+        if not 1 <= len(args) <= 2: sys.exit("usage: bench site PATH [security|permissions]")
         request["path"] = os.path.abspath(args[0])
-        if len(args) == 2: request["security"] = args[1] == "security"
+        if len(args) == 2:
+            request["security"] = args[1] == "security"
+            request["permissions"] = args[1] == "permissions"
     elif verb == "column":
         if not 1 <= len(args) <= 2: sys.exit("usage: bench column PATH [HEIGHT]")
         request["path"] = os.path.abspath(args[0])
@@ -292,10 +301,23 @@ def main(argv):
         if not args or args[0] not in ("open", "import", "export", "menu"): sys.exit("usage: bench files open PATH…|import PATH|export PATH|menu")
         request["action"] = args[0]
         request["paths"] = [os.path.abspath(p) for p in args[1:]]
+    elif verb == "permit":
+        if args:
+            request["action"] = args[0]
+            if args[0] == "set":
+                if len(args) != 4: sys.exit("usage: bench permit set HOST KIND allow|block|ask")
+                request["host"], request["kind"], request["choice"] = args[1], args[2], args[3]
+            elif args[0] == "forget" and len(args) == 2:
+                request["host"] = args[1]
+            elif args[0] == "ask" and len(args) == 2:
+                request["kind"] = args[1]
+            elif args[0] == "picture":
+                if len(args) != 2: sys.exit("usage: bench permit picture PATH")
+                request["path"] = os.path.abspath(args[1])
     elif verb == "sync":
         if len(args) > 1 or (args and args[0] not in ("state", "use", "keep", "add")): sys.exit("usage: bench sync [state|use|keep|add]")
         if args: request["action"] = args[0]
-    elif verb in ("window", "windowfs"):
+    elif verb in ("window", "windowfs", "front"):
         pass
     elif verb == "pages":
         if len(args) != 1 or args[0] not in ("on", "off"): sys.exit("usage: bench pages on|off")

@@ -427,6 +427,31 @@ struct ContentView: View {
                             .transition(.opacity)
                     }
                 }
+                // A site asking for something of yours, and a window it tried
+                // to open by itself: at the top of its page, where Chrome and
+                // Safari ask, not at the foot where nobody looks.
+                .overlay(alignment: .top) {
+                    VStack(spacing: 8) {
+                        if let ask = browser.asking {
+                            PermissionCard(ask: ask, browser: browser)
+                                .id(ask.id)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                        if let blocked = browser.blockedPopup, blocked.tab == tab.id {
+                            PopupNotice(blocked: blocked, browser: browser)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                        if browser.locationRefused {
+                            LocationNotice(browser: browser)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    .padding(.top, 10)
+                    .padding(.horizontal, 16)
+                }
+                .animation(Motion.settle, value: browser.asking)
+                .animation(Motion.settle, value: browser.blockedPopup)
+                .animation(Motion.settle, value: browser.locationRefused)
                 .animation(Motion.quick, value: browser.suggesting)
                 .overlay(alignment: browser.prefs.zoomSpot.alignment) { zoomNote }
                 .overlay {
@@ -484,10 +509,7 @@ struct ContentView: View {
     private var bars: some View {
         VStack(spacing: 8) {
             announcement
-            if let ask = browser.asking {
-                captureAsking(ask)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+
             if let offer = browser.offering {
                 keepAsking(offer)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -500,7 +522,7 @@ struct ContentView: View {
         }
         .padding(.bottom, 30)
         .animation(Motion.settle, value: browser.veiling)
-        .animation(Motion.settle, value: browser.asking)
+
         .animation(Motion.settle, value: browser.offering)
     }
 
@@ -699,40 +721,6 @@ struct ContentView: View {
             .background(Palette.ground, in: Capsule())
             .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
             .shadow(color: .black.opacity(0.10), radius: 18, y: 6)
-    }
-
-    /// A page asking to see or hear you. Named by the site, in its own words,
-    /// with the answer remembered so it is asked once and not every call.
-    private func captureAsking(_ ask: Browser.CaptureAsk) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: ask.wants == "microphone" ? "mic" : "video")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Palette.muted)
-            Text("\(ask.host) wants to use your \(ask.wants)")
-                .font(.system(size: 12.5))
-                .foregroundStyle(Palette.ink)
-            Button { browser.allowCapture() } label: {
-                Text("Allow")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.ground)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 5)
-                    .background(Palette.ink, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            Button { browser.denyCapture() } label: {
-                Text("Don't allow")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.muted)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.leading, 16)
-        .padding(.trailing, 10)
-        .padding(.vertical, 9)
-        .background(Palette.ground, in: Capsule())
-        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
-        .shadow(color: .black.opacity(0.12), radius: 20, y: 6)
     }
 
     /// Offered once, answered once. The password is never shown back to you —

@@ -929,6 +929,9 @@ private struct SideRow: View {
                         .font(.system(size: 9))
                         .foregroundStyle(colour.opacity(0.7))
                 }
+                if tab.capture.any {
+                    CaptureMark(tab: tab)
+                }
                 Text(tab.label)
                     .font(.system(size: prefs.tabSize.text))
                     .lineLimit(1)
@@ -1180,6 +1183,30 @@ struct Speaker: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(tab.muted ? "Unmute Tab" : "Mute Tab")
+        .animation(Motion.quick, value: hovering)
+    }
+}
+
+/// A tab using the camera, the microphone or the screen says so, in red,
+/// before its name — whichever tab it is, on screen or not. A press holds
+/// them all quiet, and another brings them back (see Tab.toggleCapturePause).
+struct CaptureMark: View {
+    @ObservedObject var tab: Tab
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: tab.toggleCapturePause) {
+            Image(systemName: tab.capture.symbol)
+                .font(.system(size: 8.5, weight: .semibold))
+                .foregroundStyle(tab.capture.live ? Color(nsColor: .systemRed) : Palette.muted)
+                .frame(width: 15, height: 15)
+                .background(Palette.ink.opacity(hovering ? 0.07 : 0), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(tab.capture.help)
         .animation(Motion.quick, value: hovering)
     }
 }

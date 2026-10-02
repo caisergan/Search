@@ -1091,6 +1091,102 @@ final class Bench {
             default:
                 answer(["error": "files open PATH…|import PATH|export PATH|menu"])
             }
+        case "permit":
+            // What sites were allowed, the question at the top of the page and the
+            // pop-up notice (see Permissions.swift) — read anywhere, answered
+            // only on a SEARCH_PROBE run.
+            let kept = SitePermissions.shared
+            func state() -> [String: Any] {
+                var out: [String: Any] = [
+                    "asking": browser.asking.map { ["host": $0.host, "kinds": $0.kinds.map(\.rawValue), "question": $0.question] as [String: Any] } ?? NSNull(),
+                    "waiting": browser.asks.count,
+                    "popup": browser.blockedPopup.map { ["host": $0.host, "url": $0.url?.absoluteString ?? ""] as [String: Any] } ?? NSNull(),
+                    "sites": kept.sites.mapValues { answers in Dictionary(uniqueKeysWithValues: answers.map { ($0.key.rawValue, $0.value.rawValue) }) },
+                ]
+                if Store.testing { out["notified"] = WebNotifications.shared.shown }
+                // The tab on screen: what its site may use as that tab knows
+                // it, and what it was answered there as a private tab —
+                // which the settings never hear of (see Permissions.swift).
+                if let tab = browser.active, let host = tab.address?.host()?.lowercased() {
+                    out["here"] = Dictionary(uniqueKeysWithValues: Permission.keptKinds.compactMap { kind in
+                        browser.choice(kind, for: host, in: tab).map { (kind.rawValue, $0.rawValue) }
+                    })
+                    out["own"] = Dictionary(uniqueKeysWithValues: (tab.answers[host] ?? [:]).map { ($0.key.rawValue, $0.value.rawValue) })
+                }
+                out["answered"] = Bench.permitAnswer.map { $0 as Any } ?? NSNull()
+                if let tab = browser.active { out["capture"] = ["camera": tab.capture.camera.rawValue, "microphone": tab.capture.microphone.rawValue, "screen": tab.capture.screen.rawValue] }
+                // Where the Mac is, as macOS lets Search know it (see Location.swift).
+                var location: [String: Any] = ["macOS": LocationFeed.shared.authorization, "refused": browser.locationRefused,
+                                               "provider": LocationFeed.shared.installed, "asked": LocationFeed.shared.asked]
+                if let handed = LocationFeed.shared.handed {
+                    location["accuracy"] = Int(handed.accuracy)
+                    location["secondsAgo"] = Int(-handed.at.timeIntervalSinceNow)
+                }
+                out["location"] = location
+                return out
+            }
+            let action = request["action"] as? String ?? "state"
+            guard action == "state" || Store.testing else { answer(["error": "permit \(action) only works on a --test run"]); return }
+            switch action {
+            case "allow", "deny":
+                guard browser.asking != nil else { answer(["error": "nothing is being asked"]); return }
+                browser.answerAsk(action == "allow")
+            case "set":
+                guard let host = request["host"] as? String, let kind = (request["kind"] as? String).flatMap(Permission.init(rawValue:)) else {
+                    answer(["error": "permit set HOST KIND allow|block|ask"]); return
+                }
+                kept.set(Choice(rawValue: request["choice"] as? String ?? ""), kind, for: host.lowercased())
+            case "forget":
+                if let host = request["host"] as? String { kept.forget(host.lowercased()) } else { kept.forgetAll() }
+            case "ask":
+                // The page in the tab on screen asking for something, handed
+                // over as WebKit hands it: a page WebKit doesn't take for
+                // focused — every page of a probe started hidden — is never
+                // let ask at all.
+                guard let tab = browser.active, let host = tab.address?.host()?.lowercased(),
+                      let kind = (request["kind"] as? String).flatMap(Permission.init(rawValue:))
+                else { answer(["error": "permit ask KIND, with a page on screen"]); return }
+                Bench.permitAnswer = nil
+                browser.ask([kind], host: host, from: tab.web) { Bench.permitAnswer = $0 }
+            case "pop":
+                // And opening a window by itself, without a click or a key.
+                guard let tab = browser.active, let host = tab.address?.host()?.lowercased()
+                else { answer(["error": "permit pop, with a page on screen"]); return }
+                Bench.permitAnswer = browser.mayPop(URL(string: "https://example.com/opened-by-itself"), on: host, from: tab)
+            case "popup-open": browser.openBlockedPopup()
+            case "popup-allow": browser.allowPopups()
+            case "pause": browser.active?.toggleCapturePause()
+            case "picture":
+                // The question and the pop-up notice as they are drawn over
+                // the page, light and dark, to a PNG — without a window.
+                guard let path = request["path"] as? String else { answer(["error": "permit picture PATH"]); return }
+                let sample = browser.asking ?? browser.tabs.first?.built.map { PermissionAsk(host: "maps.example.com", kinds: [.location], page: $0) { _ in } }
+                let notice = BlockedPopup(host: "www.example.com", url: URL(string: "https://example.com/window"), tab: browser.activeID ?? UUID())
+                let card = HStack(alignment: .top, spacing: 24) {
+                    ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
+                        VStack(spacing: 8) {
+                            if let sample { PermissionCard(ask: sample, browser: browser) }
+                            PopupNotice(blocked: notice, browser: browser)
+                        }
+                        .padding(24)
+                        .frame(width: 560)
+                        .background(scheme == .dark ? Color(white: 0.12) : Color(white: 0.96))
+                        .environment(\.colorScheme, scheme)
+                    }
+                }
+                let renderer = ImageRenderer(content: card)
+                renderer.scale = 2
+                guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+                      let png = rep.representation(using: .png, properties: [:])
+                else { answer(["error": "nothing drawn"]); return }
+                try? png.write(to: URL(fileURLWithPath: path))
+                answer(["path": path])
+                return
+            case "click-page": WebNotifications.shared.clickLast(from: "page", browser: browser)
+            case "click-worker": WebNotifications.shared.clickLast(from: "worker", browser: browser)
+            default: break
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { answer(state()) }
 
         case "windowfs":
             // The window in or out of full screen, as the green button does.
@@ -1099,6 +1195,18 @@ final class Bench {
             window.toggleFullScreen(nil)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 answer(["fullScreen": window.styleMask.contains(.fullScreen)])
+            }
+
+        case "front":
+            // The test window on screen and in front, key, for a page that
+            // only asks for something while it is focused — the camera, where
+            // you are, the screen. `pages on` puts it away again.
+            guard Store.testing, let window = Links.window else { answer(["error": "front only works on a --test run"]); return }
+            NSApp.unhide(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                answer(["key": window.isKeyWindow, "active": NSApp.isActive])
             }
 
         case "pages":
@@ -1395,8 +1503,9 @@ final class Bench {
             guard let path = request["path"] as? String else { answer(["error": "site needs a path"]); return }
             guard let tab = browser.active, !tab.isBlank else { answer(["error": "no page on screen"]); return }
             let deeper = request["security"] as? Bool == true
+            let allowing = request["permissions"] as? Bool == true
             // On the ground: off screen there is no glass to stand on.
-            let host = NSHostingView(rootView: AnyView(SiteCard(browser: browser, tab: tab, deeper: deeper) {}.fixedSize().background(Palette.ground)))
+            let host = NSHostingView(rootView: AnyView(SiteCard(browser: browser, tab: tab, deeper: deeper, allowing: allowing) {}.fixedSize().background(Palette.ground)))
             host.frame = NSRect(origin: .zero, size: host.fittingSize)
             let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
             window.appearance = NSApp.effectiveAppearance
@@ -1672,6 +1781,9 @@ final class Bench {
             answer(["error": "unknown"])
         }
     }
+
+    /// What the last `permit ask` or `permit pop` was answered, once it was.
+    static var permitAnswer: Bool?
 
     /// The tab a request names, among the ones the bench opened itself. The
     /// bench is how this browser is driven while somebody is using it, and

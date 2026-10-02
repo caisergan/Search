@@ -121,14 +121,17 @@ final class DownloadsMac: NSObject {
 
 extension DownloadsMac: UNUserNotificationCenterDelegate {
     /// Only a download's is shown in front of Search — and only in the
-    /// background is one sent. An extension's is left as it was.
+    /// background is one sent — and a site's, which a site sends whenever it
+    /// has something to say, as it would in Chrome (see Permissions.swift).
+    /// An extension's is left as it was.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        let ours = notification.request.identifier.hasPrefix("download.")
-        completionHandler(ours ? [.banner, .list] : [])
+        let id = notification.request.identifier
+        if id.hasPrefix("web.") { return completionHandler([.banner, .list, .sound]) }
+        completionHandler(id.hasPrefix("download.") ? [.banner, .list] : [])
     }
 
     /// A click on one shows the file.
@@ -137,6 +140,14 @@ extension DownloadsMac: UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let identifier = response.notification.request.identifier
+        if identifier.hasPrefix("web.") {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { WebNotifications.shared.clicked(identifier, browser: Downloads.shared.browser) }
+                completionHandler()
+            }
+            return
+        }
         let id = (response.notification.request.content.userInfo["download"] as? String).flatMap(UUID.init)
         DispatchQueue.main.async {
             if let id, let item = Downloads.shared.item(id) {
