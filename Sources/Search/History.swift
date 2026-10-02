@@ -293,12 +293,14 @@ final class History: ObservableObject {
             }
     }
 
-    /// One place taken off the list. On its way to the file at once, with no
-    /// wait for other changes to gather: it was asked to be gone.
+    /// One place taken off the list. Coalesced like a visit: an extension
+    /// clearing history forgets one place at a time, thousands in a row, and
+    /// a write each sorted the whole history on the main thread every time.
+    /// A quit meanwhile still writes it (see `flush`).
     func forget(_ key: String) {
         visits[key] = nil
         folded[key] = nil
-        write()
+        save()
     }
 
     /// The last eight places, newest first; worked out again only once the
