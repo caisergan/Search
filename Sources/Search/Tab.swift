@@ -28,7 +28,7 @@ enum Web {
     /// included, and registering a name twice is a hard crash.
     @MainActor static func release(_ controller: WKUserContentController) {
         for name in [ScrollRelay.name, VeilRelay.name, FormRelay.name, ImageRelay.name,
-                     StoreRelay.name, PasskeyRelay.name, MiddleRelay.name] {
+                     StoreRelay.name, PasskeyRelay.name, MiddleRelay.name, TranslateRelay.name] {
             controller.removeScriptMessageHandler(forName: name, contentWorld: world)
             controller.removeScriptMessageHandler(forName: name, contentWorld: .page)
         }
@@ -455,6 +455,8 @@ final class Tab: ObservableObject, Identifiable {
     private let passkeyRelay = PasskeyRelay()
     private let hovered = HoveredLink()
     private let ears = AudioWatch()
+    /// The page's pieces to translate, on their way (see Translate.swift).
+    private let translation = TranslateRelay()
     private var lastY: Double = 0
 
     /// A tab that keeps nothing: its own cookies, no history, no place in the
@@ -666,6 +668,7 @@ final class Tab: ObservableObject, Identifiable {
         hovered.tab = self
         controller.add(hovered, contentWorld: .defaultClient, name: HoveredLink.name)
         controller.add(middles, contentWorld: Web.world, name: MiddleRelay.name)
+        controller.add(translation, contentWorld: Web.world, name: TranslateRelay.name)
         Shield.shared.protect(controller)
         built = web
         // A tab muted before it went to sleep wakes muted.
@@ -715,6 +718,7 @@ final class Tab: ObservableObject, Identifiable {
         images.tab = self
         shop.tab = self
         middles.tab = self
+        translation.tab = self
         ears.watch(web) { [weak self] on in self?.noisy = on }
         return web
     }
@@ -1359,6 +1363,8 @@ final class Tab: ObservableObject, Identifiable {
         if capture.any { capture = Capture() }
         guard let web = built else { return }
         built = nil
+        // What was translated was this page (see Translate.swift).
+        Translator.shared.forget(id)
         let controller = web.configuration.userContentController
         Web.release(controller)
         controller.removeAllUserScripts()
@@ -1995,6 +2001,38 @@ extension WKWebView {
     func evaluateInSearch(_ js: String, then: ((Any?) -> Void)? = nil) {
         evaluateJavaScript(js, in: nil, in: Web.world) { result in
             then?(try? result.get())
+        }
+    }
+
+    /// JavaScript the app runs on its own account — reading something from
+    /// the page, or putting something of its own there — with nothing you
+    /// did in the page behind it. `evaluateJavaScript` runs what it is given
+    /// as though you had just clicked there, and a page you have touched is
+    /// let do what one you haven't is not: it may ask before it is left,
+    /// and it is told it has been used (`navigator.userActivation`). WebKit
+    /// runs a script without that for whoever asks by a name outside the
+    /// public framework; a WebKit without the name is asked the public way,
+    /// and the page counts as touched, as it always did. In Search's own
+    /// world unless another is named, and answered as `evaluateJavaScript`
+    /// answers: the value, or the error.
+    func evaluateQuietly(_ js: String, in world: WKContentWorld? = nil, then: ((Any?, Error?) -> Void)? = nil) {
+        let world = world ?? Web.world
+        let selector = NSSelectorFromString("_evaluateJavaScript:withSourceURL:inFrame:inContentWorld:withUserGesture:completionHandler:")
+        guard responds(to: selector) else {
+            evaluateJavaScript(js, in: nil, in: world) { result in
+                switch result {
+                case .success(let value): then?(value, nil)
+                case .failure(let error): then?(nil, error)
+                }
+            }
+            return
+        }
+        typealias Evaluate = @convention(c) (
+            AnyObject, Selector, NSString, NSURL?, WKFrameInfo?, WKContentWorld, ObjCBool,
+            @escaping @convention(block) (Any?, NSError?) -> Void
+        ) -> Void
+        unsafeBitCast(method(for: selector), to: Evaluate.self)(self, selector, js as NSString, nil, nil, world, false) { value, error in
+            then?(value, error)
         }
     }
 }

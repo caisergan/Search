@@ -83,6 +83,8 @@
                                        ask KIND and pop: the page on screen asking for it, or opening a window by itself
     ./bench front                      test run: the window on screen, in front and key, for a page that only asks
                                        for the camera, location or the screen while focused (pages on puts it away)
+    ./bench translate ID [on|off|read]  what the page is written in, and whether it is translated; on (test run:
+                                       each piece marked, not translated), off (the original back), read (again)
     ./bench pages on|off               test run: let a hidden probe's pages be painted, off every screen (for picture)
     ./bench picture PATH               test run: the whole window, pages included, drawn to a PNG (start the probe hidden)
     ./bench film peek|unpeek|fold PATH [N] [SECS]  the window drawn N times while it animates → PATH-00.png… — --test runs only
@@ -314,6 +316,10 @@ def main(argv):
             elif args[0] == "picture":
                 if len(args) != 2: sys.exit("usage: bench permit picture PATH")
                 request["path"] = os.path.abspath(args[1])
+    elif verb == "translate":
+        if not 1 <= len(args) <= 2 or (len(args) == 2 and args[1] not in ("on", "off", "read")): sys.exit("usage: bench translate ID [on|off|read]")
+        request["id"] = args[0]
+        if len(args) == 2: request["action"] = args[1]
     elif verb == "sync":
         if len(args) > 1 or (args and args[0] not in ("state", "use", "keep", "add")): sys.exit("usage: bench sync [state|use|keep|add]")
         if args: request["action"] = args[0]

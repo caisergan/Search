@@ -11,6 +11,8 @@ struct SearchApp: App {
     @NSApplicationDelegateAdaptor(Links.self) private var links
     /// The keys drawn beside the menus' commands, as Settings › Shortcuts has them.
     @ObservedObject private var shortcuts = Shortcuts.shared
+    /// Translate or Show Original in the View menu, as the page on screen is.
+    @ObservedObject private var translator = Translator.shared
 
     init() {
         Launch.mark("app")
@@ -101,6 +103,10 @@ struct SearchApp: App {
                     .keyboardShortcut(shortcuts.menu(.emptyCacheReload))
                 Button("Reading Mode") { browser.toggleReader() }
                     .keyboardShortcut(shortcuts.menu(.readingMode))
+                Button(browser.activeID.map { translator.translated.contains($0) } == true
+                       ? "Show Original" : "Translate to \(translator.targetName)") { browser.toggleTranslation() }
+                    .keyboardShortcut(shortcuts.menu(.translatePage))
+                    .disabled(!translator.available || browser.active?.isBlank ?? true)
                 Button("Float Video") { browser.toggleFloat() }
                     .keyboardShortcut(shortcuts.menu(.floatVideo))
                 Divider()
@@ -427,9 +433,10 @@ struct ContentView: View {
                             .transition(.opacity)
                     }
                 }
-                // A site asking for something of yours, and a window it tried
-                // to open by itself: at the top of its page, where Chrome and
-                // Safari ask, not at the foot where nobody looks.
+                // A site asking for something of yours, a window it tried to
+                // open by itself, and a page in another language: at the top
+                // of its page, where Chrome and Safari ask, not at the foot
+                // where nobody looks.
                 .overlay(alignment: .top) {
                     VStack(spacing: 8) {
                         if let ask = browser.asking {
@@ -445,6 +452,9 @@ struct ContentView: View {
                             LocationNotice(browser: browser)
                                 .transition(.move(edge: .top).combined(with: .opacity))
                         }
+                        // A page in another language offered in yours, and the
+                        // translation under way (see Translate.swift).
+                        TranslateNotice(tab: tab, browser: browser)
                     }
                     .padding(.top, 10)
                     .padding(.horizontal, 16)
@@ -597,6 +607,10 @@ struct ContentView: View {
 
     var body: some View {
         window_
+            // Where macOS's translation runs, lent to a view (see Translate.swift).
+            .background {
+                if #available(macOS 15, *) { TranslationRunner() }
+            }
             // The column folded away, and out again at the edge (see Fold.swift).
             .overlay(alignment: .leading) { Fold(browser: browser, prefs: browser.prefs) }
             .overlay(alignment: .bottom) { bars }
@@ -1121,6 +1135,7 @@ struct ContentView: View {
         case .hardReload: browser.hardReload()
         case .emptyCacheReload: browser.reloadEmptied()
         case .readingMode: browser.toggleReader()
+        case .translatePage: browser.toggleTranslation()
         case .floatVideo: browser.toggleFloat()
         case .stopSound: browser.pauseMedia()
         case .print: browser.printPage()

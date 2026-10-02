@@ -167,6 +167,7 @@ struct SiteCard: View {
     /// loaded again.
     @State private var changed = false
     @ObservedObject private var permissions = SitePermissions.shared
+    @ObservedObject private var translator = Translator.shared
     /// Whether this Mac trusts the site's certificate. Unknown until it has
     /// been asked, off the main thread: asking can go to the network.
     @State private var certified: Bool?
@@ -220,6 +221,11 @@ struct SiteCard: View {
             }
             if host != nil {
                 Row("Permissions", submenu: true) { allowing = true }
+            }
+            if translator.available {
+                Row(translator.translated.contains(tab.id) ? "Show Original" : "Translate to \(translator.targetName)") {
+                    after { browser.toggleTranslation() }
+                }
             }
             Row("Copy Address", keys: "⇧⌘C") { after { browser.copyAddress() } }
             Separator()
