@@ -136,6 +136,7 @@ final class Translator: ObservableObject {
         let source = read[tab.id].map { Locale.Language(identifier: $0.code) }
         translated.insert(tab.id)
         progress[tab.id] = (0, 0)
+        sources[tab.id] = .some(source)
         open(from: source)
         pages[tab.id] = Page(web: web)
         web.evaluateQuietly(TranslateScript.source)
@@ -146,6 +147,7 @@ final class Translator: ObservableObject {
         translated.remove(tab.id)
         progress[tab.id] = nil
         pages[tab.id] = nil
+        sources[tab.id] = nil
         tab.built?.evaluateQuietly("window.__searchTranslate ? window.__searchTranslate.restore() : false")
     }
 
@@ -156,6 +158,7 @@ final class Translator: ObservableObject {
         translated.remove(tab)
         progress[tab] = nil
         pages[tab] = nil
+        sources[tab] = nil
         read[tab] = nil
         if offered == tab { offered = nil }
     }
@@ -195,12 +198,27 @@ final class Translator: ObservableObject {
     private var source: Locale.Language??
     private var batches: AsyncStream<Batch>.Continuation?
     private var stream: AsyncStream<Batch>?
+    /// Which session is the open one: a session put aside for another
+    /// language is cancelled, and what it throws then is no failure of the
+    /// one that replaced it.
+    private var opened = 0
+    /// The language each translated tab is translated from. One session is
+    /// open at a time, so a tab whose language isn't the open one's keeps
+    /// what was translated, and what its page adds afterwards stays as it
+    /// is rather than going through a session for another language.
+    private var sources: [Tab.ID: Locale.Language?] = [:]
 
     /// A session for this language, or the one already open for it: the
     /// same language on another tab joins the translation already going.
     private func open(from language: Locale.Language?) {
         if let source, source == language, batches != nil { return }
         batches?.finish()
+        opened += 1
+        // Pieces still out with the session being put aside never come
+        // back: those tabs aren't left saying they are translating.
+        for (tab, from) in sources where from != language {
+            if let now = progress[tab] { progress[tab] = (now.done, now.done) }
+        }
         let (stream, continuation) = AsyncStream.makeStream(of: Batch.self)
         self.stream = stream
         batches = continuation
@@ -214,7 +232,7 @@ final class Translator: ObservableObject {
 
     /// Pieces from a page (see TranslateRelay).
     func received(_ body: [String: Any], from tab: Tab) {
-        guard translated.contains(tab.id) else { return }
+        guard translated.contains(tab.id), let from = sources[tab.id], .some(from) == source else { return }
         if let raw = body["batch"] as? [[Any]] {
             let pieces = raw.compactMap { pair -> Piece? in
                 guard pair.count == 2, let id = pair[0] as? Int, let text = pair[1] as? String else { return nil }
@@ -244,10 +262,11 @@ final class Translator: ObservableObject {
     @available(macOS 15, *)
     func run(_ session: TranslationSession) async {
         guard let stream else { return }
+        let turn = opened
         do {
             try await session.prepareTranslation()
         } catch {
-            fail(error)
+            if turn == opened, !Task.isCancelled { fail(error) }
             return
         }
         for await batch in stream {
@@ -258,7 +277,7 @@ final class Translator: ObservableObject {
                     response.clientIdentifier.flatMap(Int.init).map { ($0, response.targetText) }
                 }, to: batch.tab)
             } catch {
-                fail(error)
+                if turn == opened, !Task.isCancelled { fail(error) }
                 return
             }
         }
@@ -279,6 +298,7 @@ final class Translator: ObservableObject {
         for tab in translated { progress[tab] = nil }
         translated = []
         pages = [:]
+        sources = [:]
         trouble = "Couldn't translate this page"
         let said = trouble
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
