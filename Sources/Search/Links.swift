@@ -16,10 +16,11 @@ final class Links: NSObject, NSApplicationDelegate {
     static weak var window: NSWindow?
     /// Whether the window has been asked for on a link's behalf (summon).
     private static var summoned = false
-    /// The session, written now rather than whenever its own debounce was
-    /// going to get to it. ⌘Q, the red button and an update's relaunch all
-    /// end the process the same way, and none of them owed the last 1.2
-    /// seconds of typing anywhere to finish writing it down on their own.
+    /// The session and the history, written now rather than whenever their
+    /// own debounces were going to get to it. ⌘Q, the red button and an
+    /// update's relaunch all end the process the same way, and none of them
+    /// owed the last second or so of browsing anywhere to finish writing it
+    /// down on their own.
     private static var flush: (() -> Void)?
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -157,7 +158,10 @@ final class Links: NSObject, NSApplicationDelegate {
             bringWindow()
             comeForward()
         }
-        flush = { [weak browser] in browser?.flushSession() }
+        flush = { [weak browser] in
+            browser?.flushSession()
+            browser?.history.flush()
+        }
         let early = waiting
         waiting = []
         guard let first = early.first else { return }

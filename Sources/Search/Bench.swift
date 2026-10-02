@@ -1014,6 +1014,18 @@ final class Bench {
             browser.move(tab, to: to)
             answer(["at": browser.tabs.firstIndex { $0.id == tab.id } ?? -1])
 
+        case "history":
+            // How many places the History window lists, and how many entries
+            // its file holds as this is answered: a visit is in the file a
+            // moment after it is made, and a quit in between must not lose
+            // it. `clear` is History › Clear History. Only on a SEARCH_PROBE
+            // run: it is the history being read and emptied.
+            guard Store.testing else { answer(["error": "history only works on a --test run"]); return }
+            if request["action"] as? String == "clear" { browser.clearHistory() }
+            let written = (try? Data(contentsOf: Store.file("history.json")))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [Any] }
+            answer(["kept": browser.history.everything().count, "file": written?.count ?? -1])
+
         case "pin":
             // Where a tab sits: a square, a pinned line, or neither; or
             // Clear, which closes every tab that is neither.
