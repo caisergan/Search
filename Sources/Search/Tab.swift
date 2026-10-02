@@ -28,7 +28,7 @@ enum Web {
     /// included, and registering a name twice is a hard crash.
     @MainActor static func release(_ controller: WKUserContentController) {
         for name in [ScrollRelay.name, VeilRelay.name, FormRelay.name, ImageRelay.name,
-                     StoreRelay.name, PasskeyRelay.name, MiddleRelay.name, TranslateRelay.name] {
+                     StoreRelay.name, PasskeyRelay.name, MiddleRelay.name, TranslateRelay.name, AutoFillRelay.name] {
             controller.removeScriptMessageHandler(forName: name, contentWorld: world)
             controller.removeScriptMessageHandler(forName: name, contentWorld: .page)
         }
@@ -457,6 +457,8 @@ final class Tab: ObservableObject, Identifiable {
     private let ears = AudioWatch()
     /// The page's pieces to translate, on their way (see Translate.swift).
     private let translation = TranslateRelay()
+    /// A form's boxes and what they are for (see AutoFill.swift).
+    private let filling = AutoFillRelay()
     private var lastY: Double = 0
 
     /// A tab that keeps nothing: its own cookies, no history, no place in the
@@ -669,6 +671,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.add(hovered, contentWorld: .defaultClient, name: HoveredLink.name)
         controller.add(middles, contentWorld: Web.world, name: MiddleRelay.name)
         controller.add(translation, contentWorld: Web.world, name: TranslateRelay.name)
+        controller.add(filling, contentWorld: Web.world, name: AutoFillRelay.name)
         Shield.shared.protect(controller)
         built = web
         // A tab muted before it went to sleep wakes muted.
@@ -719,6 +722,7 @@ final class Tab: ObservableObject, Identifiable {
         shop.tab = self
         middles.tab = self
         translation.tab = self
+        filling.tab = self
         ears.watch(web) { [weak self] on in self?.noisy = on }
         return web
     }
@@ -763,6 +767,9 @@ final class Tab: ObservableObject, Identifiable {
         )
         controller.addUserScript(
             WKUserScript(source: FormRelay.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Web.world)
+        )
+        controller.addUserScript(
+            WKUserScript(source: AutoFillRelay.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Web.world)
         )
         if AutoScroll.on {
             controller.addUserScript(
@@ -847,7 +854,11 @@ final class Tab: ObservableObject, Identifiable {
 
     /// From the page, in CSS pixels; passed on in points. Page zoom is the
     /// only scale between the two that matters here.
-    func fieldFocused(_ rect: CGRect?) {
+    /// The box the caret is in asks for a new password (see Forms.swift).
+    private(set) var freshField = false
+
+    func fieldFocused(_ rect: CGRect?, fresh: Bool = false) {
+        freshField = rect != nil && fresh
         guard let rect else {
             onField?(self, nil)
             return
@@ -923,6 +934,25 @@ final class Tab: ObservableObject, Identifiable {
             done?((result as? Bool) ?? false)
         }
     }
+
+    /// A strong password into every box of the form asking for the new one.
+    func fillNewPassword(_ password: String, done: ((Bool) -> Void)? = nil) {
+        web.evaluateInSearch("window.__officeForms && window.__officeForms.fillNew(`\(escape(password))`)") { result in
+            done?((result as? Bool) ?? false)
+        }
+    }
+
+    /// What was kept for a form, into its boxes (see AutoFill.swift): how
+    /// many took something.
+    func autoFill(_ category: String, values: [String: String], host: String, done: ((Int) -> Void)? = nil) {
+        guard let data = try? JSONSerialization.data(withJSONObject: values), let json = String(data: data, encoding: .utf8) else { return }
+        web.evaluateInSearch("window.__searchAutoFill ? window.__searchAutoFill.fill(`\(escape(category))`, \(json), `\(escape(host))`) : 0") { result in
+            done?((result as? Int) ?? 0)
+        }
+    }
+
+    /// The caret entered a box a form can be filled from, or left one.
+    var onAutoFill: ((Tab, String?, CGRect?) -> Void)?
 
     func picked(selector: String, label: String, note: String) {
         onPick?(self, selector, label, note)

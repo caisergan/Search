@@ -298,7 +298,15 @@ final class Browser: NSObject, ObservableObject {
         /// the clear. A click fills only a page that still is that one.
         let host: String
         let clear: Bool
+        /// A box asking for a new password: one made for it, offered first.
+        var strong: String? = nil
     }
+
+    /// The addresses or cards kept, hanging from a form's box the caret is
+    /// in (see AutoFill.swift).
+    @Published var autofilling: AutoFillOffer?
+    /// Settings › Passwords › Addresses and cards.
+    @Published var fillingForms = false
     /// Set once you have picked, so the list doesn't come straight back for
     /// the box you are still in. Cleared when the caret leaves the boxes.
     private var pickedInto: Tab.ID?
@@ -353,6 +361,20 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func dropChoice() { suggesting = nil }
+
+    /// The strong password offered, into every box of the form that asks
+    /// for the new one. Offered to be kept once the sign-up has gone through,
+    /// as any password is.
+    func useStrongPassword() {
+        lowering?.cancel()
+        guard let list = suggesting, let strong = list.strong, let tab = tabs.first(where: { $0.id == list.tab }) else { return }
+        suggesting = nil
+        guard curtain.host(of: tab.address) == list.host else { return }
+        pickedInto = tab.id
+        tab.fillNewPassword(strong) { [weak self] worked in
+            if !worked { self?.announce("Couldn't find the password boxes anymore") }
+        }
+    }
 
     // The list of what is kept.
 
@@ -1949,9 +1971,18 @@ final class Browser: NSObject, ObservableObject {
                 return
             }
             lowering?.cancel()
-            guard prefs.fillsPasswords, tab.id == activeID, pickedInto != tab.id,
+            guard tab.id == activeID, pickedInto != tab.id,
                   let host = curtain.host(of: tab.address)
             else { return }
+            // A box for a new password: a strong one to use, and nothing
+            // kept — an account kept for the site is no use in a sign-up.
+            if tab.freshField {
+                suggesting = prefs.suggestsPasswords
+                    ? Suggesting(tab: tab.id, spot: spot, logins: [], host: host, clear: tab.address?.scheme?.lowercased() == "http", strong: AutoFill.strongPassword())
+                    : nil
+                return
+            }
+            guard prefs.fillsPasswords else { return }
             // A page that came over plain http can have been written by
             // anyone on the way here — a café's network, a hotel's. It is
             // offered only what was kept from plain http too, never an
@@ -1959,6 +1990,10 @@ final class Browser: NSObject, ObservableObject {
             let inTheClear = tab.address?.scheme?.lowercased() == "http"
             let known = Array(Vault.logins(matching: host).filter { !inTheClear || $0.clear }.prefix(5))
             suggesting = known.isEmpty ? nil : Suggesting(tab: tab.id, spot: spot, logins: known, host: host, clear: inTheClear)
+        }
+
+        tab.onAutoFill = { [weak self] tab, category, spot in
+            self?.autoFillFocused(tab, category: category, spot: spot)
         }
 
         tab.onCredentials = { [weak self] tab, host, user, password, clear in

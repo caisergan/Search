@@ -34,7 +34,7 @@ enum SettingsSync {
         "float.away", "float.flicks", "float.leave", "fullscreen.window",
         "glance", "glance.trigger", "glyph", "inspector", "links.little", "links.peek", "links.show",
         "look", "manner", "newtab.over", "newtab.spot", "pages.120", "passkeys",
-        "passwords.fill", "passwords.save", "passwords.never", "pinned.load",
+        "passwords.fill", "passwords.save", "passwords.never", "passwords.suggest", "autofill.forms", "pinned.load",
         "search.custom", "search.engine", "shield", "shield.paused",
         "sidebar", "sidebar.address", "sidebar.hides", "sidebar.newtab.foot", "sidebar.pinned.folded",
         "sidebar.reveal", "sidebar.width", "start.load", "tabs.reading", "tabs.size", "tabs.sleep",

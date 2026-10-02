@@ -38,7 +38,7 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
                 // page — so a list of accounts can hang from it.
                 if let rect = body["rect"] as? [String: Double],
                    let x = rect["x"], let y = rect["y"], let w = rect["w"], let h = rect["h"] {
-                    tab?.fieldFocused(CGRect(x: x, y: y, width: w, height: h))
+                    tab?.fieldFocused(CGRect(x: x, y: y, width: w, height: h), fresh: body["fresh"] as? Bool ?? false)
                 } else {
                     tab?.fieldFocused(nil)
                 }
@@ -214,8 +214,29 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
         },
         // Whether there is still a sign-in on the page. Asked after a
         // password went out, to tell a sign-in that took from one refused.
-        hasPassword: function () { return !!pair(); }
+        hasPassword: function () { return !!pair(); },
+        // A strong password, into every box of the form that asks for the
+        // new one: the password and the box to type it again.
+        fillNew: function (password) {
+          var boxes = fresh(document.activeElement);
+          if (!boxes.length) return false;
+          boxes.forEach(function (box) { put(box, password); });
+          return true;
+        }
       };
+
+      // The boxes of a form that ask for a new password: marked so, or —
+      // two password boxes in one form, a sign-up's or a change's — every
+      // one not marked as the current password.
+      function fresh(el) {
+        if (!el || el.tagName !== 'INPUT' || (el.type || '').toLowerCase() !== 'password') return [];
+        var scope = el.form || (el.closest && el.closest('form')) || document;
+        var boxes = Array.prototype.slice.call(scope.querySelectorAll('input[type="password"]'));
+        var marked = boxes.filter(function (b) { return (b.getAttribute('autocomplete') || '').indexOf('new-password') >= 0; });
+        var found = marked.length ? marked
+          : boxes.length >= 2 ? boxes.filter(function (b) { return (b.getAttribute('autocomplete') || '').indexOf('current-password') < 0; }) : [];
+        return found.indexOf(el) >= 0 ? found : [];
+      }
 
       // What is in the boxes when they are sent. Said every time — a click
       // on "show password" says it too — because the browser only listens
@@ -298,14 +319,16 @@ final class FormRelay: NSObject, WKScriptMessageHandler {
         var el = document.activeElement;
         var both = pair();
         var rect = null;
-        if (both && el && (el === both.user || el === both.pass)) {
+        var isFresh = fresh(el).length > 0;
+        if ((both && el && (el === both.user || el === both.pass)) || isFresh) {
           var r = el.getBoundingClientRect();
           if (r.width > 0 && r.height > 0) rect = { x: r.left, y: r.top, w: r.width, h: r.height };
         }
         window.webkit.messageHandlers.officeForms.postMessage({
           kind: 'focus',
           typing: editable(el),
-          rect: rect
+          rect: rect,
+          fresh: isFresh
         });
       }
 

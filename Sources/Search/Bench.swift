@@ -1212,6 +1212,77 @@ final class Bench {
                         "sent": progress?.sent ?? 0, "done": progress?.done ?? 0])
             }
 
+        case "autofill":
+            // Addresses and cards kept, and what hangs from the box the caret
+            // is in — a strong password included (see AutoFill.swift). Kept
+            // ones are added, picked and cleared only on a SEARCH_PROBE run.
+            let action = request["action"] as? String ?? "state"
+            guard action == "state" || Store.testing else { answer(["error": "autofill \(action) only works on a --test run"]); return }
+            switch action {
+            case "add-contact":
+                var contact = Contact()
+                let fields = request["fields"] as? [String: String] ?? [:]
+                contact.name = fields["name"] ?? ""; contact.email = fields["email"] ?? ""; contact.phone = fields["phone"] ?? ""
+                contact.organization = fields["organization"] ?? ""; contact.street = fields["street"] ?? ""; contact.street2 = fields["street2"] ?? ""
+                contact.city = fields["city"] ?? ""; contact.region = fields["region"] ?? ""; contact.postal = fields["postal"] ?? ""; contact.country = fields["country"] ?? ""
+                AutoFill.save(AutoFill.contacts() + [contact])
+            case "add-card":
+                let fields = request["fields"] as? [String: String] ?? [:]
+                let card = PaymentCard(name: fields["name"] ?? "", number: (fields["number"] ?? "").filter(\.isNumber),
+                                       month: Int(fields["month"] ?? "") ?? 1, year: Int(fields["year"] ?? "") ?? 2030)
+                AutoFill.save(AutoFill.cards() + [card])
+            case "clear":
+                AutoFill.save([Contact]())
+                AutoFill.save([PaymentCard]())
+            case "pick":
+                let n = request["n"] as? Int ?? 0
+                if let offer = browser.autofilling {
+                    if offer.category == "card", offer.cards.indices.contains(n) { browser.fill(offer.cards[n]) }
+                    else if offer.contacts.indices.contains(n) { browser.fill(offer.contacts[n]) }
+                }
+            case "strong":
+                browser.useStrongPassword()
+            case "picture":
+                // The lists and the panel, light and dark, to a PNG — without a window.
+                guard let path = request["path"] as? String, let tab = browser.active else { answer(["error": "autofill picture PATH, with a tab"]); return }
+                let spot = CGRect(x: 0, y: 0, width: 300, height: 30)
+                let contacts = AutoFill.contacts(), cards = AutoFill.cards()
+                let views = HStack(alignment: .top, spacing: 24) {
+                    ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
+                        HStack(alignment: .top, spacing: 16) {
+                            VStack(alignment: .leading, spacing: 110) {
+                                AutoFillList(browser: browser, offer: AutoFillOffer(tab: tab.id, spot: spot, category: "address", contacts: contacts, cards: [], host: "x"))
+                                AutoFillList(browser: browser, offer: AutoFillOffer(tab: tab.id, spot: spot, category: "card", contacts: [], cards: cards, host: "x"))
+                                AccountList(browser: browser, asked: Browser.Suggesting(tab: tab.id, spot: spot, logins: [], host: "x", clear: false, strong: AutoFill.strongPassword()))
+                            }
+                            .frame(width: 320, height: 420, alignment: .topLeading)
+                            AutoFillPanel(browser: browser).frame(width: 640)
+                        }
+                        .padding(20)
+                        .background(scheme == .dark ? Color(white: 0.12) : Color(white: 0.96))
+                        .environment(\.colorScheme, scheme)
+                    }
+                }
+                let renderer = ImageRenderer(content: views)
+                renderer.scale = 1.5
+                guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+                      let png = rep.representation(using: .png, properties: [:])
+                else { answer(["error": "nothing drawn"]); return }
+                try? png.write(to: URL(fileURLWithPath: path))
+                answer(["path": path])
+                return
+            default: break
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                answer([
+                    "offer": browser.autofilling.map { ["category": $0.category, "contacts": $0.contacts.count, "cards": $0.cards.count] as [String: Any] } ?? NSNull(),
+                    "strong": browser.suggesting?.strong ?? NSNull(),
+                    "accounts": browser.suggesting?.logins.count ?? 0,
+                    "contacts": AutoFill.contacts().count,
+                    "cards": AutoFill.cards().map { $0.title },
+                ])
+            }
+
         case "windowfs":
             // The window in or out of full screen, as the green button does.
             // Only on a SEARCH_PROBE run.

@@ -431,6 +431,10 @@ struct ContentView: View {
                     if let asked = browser.suggesting, asked.tab == tab.id {
                         AccountList(browser: browser, asked: asked)
                             .transition(.opacity)
+                    } else if let offer = browser.autofilling, offer.tab == tab.id {
+                        // Addresses and cards, hanging from a form's box (see AutoFill.swift).
+                        AutoFillList(browser: browser, offer: offer)
+                            .transition(.opacity)
                     }
                 }
                 // A site asking for something of yours, a window it tried to
@@ -463,6 +467,7 @@ struct ContentView: View {
                 .animation(Motion.settle, value: browser.blockedPopup)
                 .animation(Motion.settle, value: browser.locationRefused)
                 .animation(Motion.quick, value: browser.suggesting)
+                .animation(Motion.quick, value: browser.autofilling)
                 .overlay(alignment: browser.prefs.zoomSpot.alignment) { zoomNote }
                 .overlay {
                     if let glance = browser.glance, glance.from == tab.id {
@@ -588,6 +593,9 @@ struct ContentView: View {
         if browser.managing {
             sheet { PasswordsPanel(browser: browser) } close: { browser.managing = false }
         }
+        if browser.fillingForms {
+            sheet { AutoFillPanel(browser: browser) } close: { browser.fillingForms = false }
+        }
         if browser.reviewing {
             // No dimming for this one: the whole point is to keep looking at
             // the page while the list offers to put things back on it.
@@ -674,6 +682,7 @@ struct ContentView: View {
             .animation(Motion.settle, value: browser.welcoming)
             .animation(Motion.settle, value: browser.bookmarking)
             .animation(Motion.settle, value: browser.managing)
+            .animation(Motion.settle, value: browser.fillingForms)
             .animation(Motion.settle, value: browser.reviewing)
         .onAppear {
             watchKeys()
@@ -985,6 +994,10 @@ struct ContentView: View {
             }
             if browser.managing {
                 browser.managing = false
+                return true
+            }
+            if browser.fillingForms {
+                browser.fillingForms = false
                 return true
             }
             if browser.recalling {
