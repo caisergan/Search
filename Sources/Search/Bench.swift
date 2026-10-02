@@ -962,6 +962,49 @@ final class Bench {
                 }
             }
 
+        case "find":
+            // Find on Page in the tab in front: a word put in the field, the
+            // next match or the one before, the bar closed, or nothing done
+            // at all — then what the bar says beside the field, and the match
+            // the page has selected. Only on a SEARCH_PROBE run.
+            guard Store.testing else { answer(["error": "find only works on a --test run"]); return }
+            // "times": Return held down — that many steps asked for at once.
+            let times = max(1, request["times"] as? Int ?? 1)
+            switch request["action"] as? String ?? "" {
+            case "next": for _ in 0..<times { browser.look(forward: true) }
+            case "previous": for _ in 0..<times { browser.look(forward: false) }
+            case "close": browser.closeFind()
+            case "state": break
+            default:
+                // "type": a letter at a time with no wait between them, as
+                // quick fingers type it.
+                let text = request["text"] as? String ?? ""
+                browser.openFind()
+                if request["type"] as? Bool == true {
+                    for end in text.indices { browser.needle = String(text[...end]) }
+                } else {
+                    browser.needle = text
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let selection = """
+                (function () { var s = getSelection(); if (!s.rangeCount || s.isCollapsed) return '';
+                  var e = s.getRangeAt(0).startContainer.parentElement; return (e && e.id ? e.id + ':' : '') + s.toString(); })()
+                """
+                let web = browser.active?.built
+                // Asked quietly: looked at the public way, the page would
+                // count as touched for having been looked at.
+                web?.evaluateQuietly(selection, in: .page) { value, _ in
+                    MainActor.assumeIsolated {
+                        answer(["finding": browser.finding, "needle": browser.needle, "missed": browser.missed,
+                                "said": browser.tally?.said ?? "", "count": browser.tally?.count ?? -1,
+                                "place": browser.tally?.place ?? -1, "selected": value as? String ?? "",
+                                "counts": web.map { PageFind.counts($0) } ?? false])
+                    }
+                }
+                if web == nil { answer(["finding": browser.finding, "needle": browser.needle, "said": ""]) }
+            }
+
         case "peek":
             // A link's page in the peek panel over the tab in front, as a
             // shift-click on it would open it (see Peek.swift); "close" puts

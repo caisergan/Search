@@ -69,6 +69,11 @@
                                        until the page is loading
     ./bench pull DX [STEPS] [MS]       test run: two fingers DX points sideways over the page (back is +) — where it went
     ./bench keyeq CHARS CODE [shift]   test run: ⌘CHARS pressed while the page has the keyboard — who took it
+    ./bench find [TEXT [type] | next|previous [N] | close]
+                                       test run: Find on Page in the tab in front — TEXT put in its field
+                                       (type: a letter at a time, without a wait), the next match or the one
+                                       before (N of them at once), or the bar closed: what it says ("3/12")
+                                       and the match selected
     ./bench menu [open]                test run: the Bookmarks menu as it is about to open, and its first
                                        folder (open: its first bookmark picked)
     ./bench transfer [NAME]            test run: Tabs › Transfer Tabs as the menu bar has it, and the row
@@ -301,6 +306,15 @@ def main(argv):
     elif verb == "keyeq":
         if len(args) < 2 or any(a != "shift" for a in args[2:]): sys.exit("usage: bench keyeq CHARS CODE [shift]")
         request["chars"], request["code"], request["mods"] = args[0], int(args[1]), args[2:]
+    elif verb == "find":
+        usage = "usage: bench find [TEXT [type] | next|previous [N] | close]"
+        if not args: request["action"] = "state"
+        elif args[0] in ("next", "previous") and len(args) <= 2:
+            request["action"] = args[0]
+            if len(args) == 2: request["times"] = int(args[1])
+        elif args == ["close"]: request["action"] = "close"
+        elif len(args) == 1 or args[1:] == ["type"]: request["text"], request["type"] = args[0], len(args) == 2
+        else: sys.exit(usage)
     elif verb == "peek":
         if len(args) != 1: sys.exit("usage: bench peek URL|close")
         request["url"] = args[0]
