@@ -124,7 +124,7 @@ struct Keys: Hashable, Codable {
 
 /// Everything a key can do in Search, with the key it has out of the box.
 enum Command: String, CaseIterable, Identifiable {
-    case newTab, newPrivateTab, reopenTab, openAddress, closeTab, duplicateTab
+    case newTab, newPrivateTab, reopenTab, openAddress, openFile, closeTab, duplicateTab
     case back, forward, nextTab, previousTab, searchTabs
     case reload, hardReload, emptyCacheReload, readingMode, floatVideo, stopSound, print, savePage
     case find, findNext, findPrevious
@@ -154,7 +154,7 @@ enum Command: String, CaseIterable, Identifiable {
 
     var group: Group {
         switch self {
-        case .newTab, .newPrivateTab, .reopenTab, .openAddress, .closeTab, .duplicateTab,
+        case .newTab, .newPrivateTab, .reopenTab, .openAddress, .openFile, .closeTab, .duplicateTab,
              .nextTab, .previousTab, .searchTabs:
             return .tabs
         case .back, .forward, .reload, .hardReload, .emptyCacheReload, .readingMode, .floatVideo, .stopSound, .print, .savePage,
@@ -177,6 +177,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .newPrivateTab: return "New private tab"
         case .reopenTab: return "Reopen closed tab"
         case .openAddress: return "Open address"
+        case .openFile: return "Open a file on this Mac"
         case .closeTab: return "Close tab"
         case .duplicateTab: return "Duplicate tab"
         case .back: return "Back"
@@ -223,6 +224,7 @@ enum Command: String, CaseIterable, Identifiable {
         case .newPrivateTab: return Keys("n", shift: true)
         case .reopenTab: return Keys("t", shift: true)
         case .openAddress: return Keys("l")
+        case .openFile: return Keys("o")
         case .closeTab: return Keys("w")
         case .duplicateTab: return Keys("d")
         case .back: return Keys("[")
