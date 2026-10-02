@@ -412,6 +412,10 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.sleepsTabs)
             }
             Rule()
+            Line("Open with the tabs from last time", "Off, Search opens on a new tab, with only your pinned tabs behind it. The others are under History › Recently Closed, and ⇧⌘T brings them back one at a time.") {
+                Switch(on: $prefs.restoresTabs)
+            }
+            Rule()
             Line("Load with Search", "The tabs that load when Search opens, after the tab you were on, instead of waiting for a click. Pinned takes in the Essentials.") {
                 Segmented(options: StartLoad.allCases.map { ($0, $0.title) }, selection: $prefs.startLoad)
             }

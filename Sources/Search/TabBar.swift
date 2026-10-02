@@ -69,7 +69,7 @@ struct TabBar: View {
                                                 width: width(in: geo.size.width),
                                                 room: geo.size.width - Metrics.lights - 12,
                                                 pill: pill,
-                                                close: { browser.close(tab) }
+                                                close: { browser.close(tab, asking: true) }
                                             )
                                             .modifier(Carried(index: index, count: browser.tabs.count, step: step, vertical: false, space: "strip") {
                                                 browser.move(tab, to: $0)
@@ -809,6 +809,8 @@ struct TabMenu: View {
         Button("Close Tab", action: close)
         Button("Close Other Tabs") { browser.closeOthers(but: tab) }
             .disabled(browser.tabs.count < 2)
+        Button(browser.closeAfterTitle) { browser.closeAfter(tab) }
+            .disabled(browser.tabsAfter(tab).isEmpty)
         // ⌘⇧T, and the History menu's Recently Closed, where few think to
         // look for it: here too, where tabs are closed.
         Button("Reopen Closed Tab") { browser.reopen() }

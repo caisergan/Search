@@ -234,6 +234,12 @@ final class Preferences: ObservableObject {
     @Published var startLoad: StartLoad {
         didSet { store.set(startLoad.rawValue, forKey: "start.load") }
     }
+    /// Search opens with the tabs it was closed with. On, as it always did;
+    /// off, it opens on a new tab with only the pinned ones behind it (see
+    /// Browser.lastRow).
+    @Published var restoresTabs: Bool {
+        didSet { store.set(restoresTabs, forKey: "start.restore") }
+    }
     /// The tabs pinned as lines in the column, folded away under their
     /// heading.
     @Published var pinnedFolded: Bool {
@@ -494,6 +500,7 @@ final class Preferences: ObservableObject {
         // The switch this replaced: on was the Essentials and pinned lines.
         startLoad = store.string(forKey: "start.load").flatMap(StartLoad.init)
             ?? ((store.object(forKey: "pinned.load") as? Bool ?? true) ? .pinned : .none)
+        restoresTabs = store.object(forKey: "start.restore") as? Bool ?? true
         sideReveal = store.string(forKey: "sidebar.reveal").flatMap(Reveal.init) ?? .human
         newTabInFoot = store.bool(forKey: "sidebar.newtab.foot")
         newTabOver = store.bool(forKey: "newtab.over")

@@ -47,7 +47,7 @@ struct SearchApp: App {
                     if browser.glance != nil {
                         browser.closeGlance()
                     } else if let tab = browser.active {
-                        browser.close(tab)
+                        browser.close(tab, asking: true)
                     }
                 }
                     .keyboardShortcut(shortcuts.menu(.closeTab))
@@ -198,6 +198,8 @@ struct SearchApp: App {
                 Divider()
                 Button("Close Other Tabs") { if let tab = browser.active { browser.closeOthers(but: tab) } }
                     .disabled(browser.tabs.count < 2)
+                Button(browser.closeAfterTitle) { if let tab = browser.active { browser.closeAfter(tab) } }
+                    .disabled(browser.active.map { browser.tabsAfter($0).isEmpty } ?? true)
                 Button("Stop Sound in Tab") { browser.pauseMedia() }
                     .keyboardShortcut(shortcuts.menu(.stopSound))
             }
@@ -1129,7 +1131,7 @@ struct ContentView: View {
             } else if browser.peekTab != nil {
                 browser.closePeek()
             } else if let tab = browser.active {
-                browser.close(tab)
+                browser.close(tab, asking: true)
             }
         case .duplicateTab: browser.duplicate()
         case .back: browser.back()

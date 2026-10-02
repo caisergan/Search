@@ -672,7 +672,9 @@ final class Browser: NSObject, ObservableObject {
     /// in Zen. The squares and the pinned lines stay, and you land on the
     /// one of them you last looked at — or on a new tab, with none awake.
     func clearTabs() {
-        let going = tabs.filter { $0.place == .loose }
+        // Each page is asked whether it may go (see `mayGo`); one that is
+        // still being asked goes when it has answered, or stays.
+        let going = tabs.filter { $0.place == .loose && mayGo($0) }
         guard !going.isEmpty else { return }
         cancelTabEdit()
         if let floating, going.contains(where: { $0.id == floating }) { land() }
@@ -681,7 +683,8 @@ final class Browser: NSObject, ObservableObject {
             if let index = tabs.firstIndex(where: { $0.id == tab.id }) { remember(tab, at: index) }
             tab.close()
         }
-        tabs.removeAll { $0.place == .loose }
+        let gone = Set(going.map(\.id))
+        tabs.removeAll { gone.contains($0.id) }
         if wasActive {
             activeID = nil
             if let back = tabs.filter({ !$0.asleep }).max(by: { $0.touched < $1.touched }) {
@@ -850,8 +853,15 @@ final class Browser: NSObject, ObservableObject {
         let url: URL
         let title: String
         let index: Int
+        /// The page's own history as it closed — its back list, and where
+        /// it was scrolled to — so it comes back as the tab it was and not
+        /// only as its last address. Nil for a page there is none to take
+        /// from: one that never loaded, an extension's.
+        var memory: Any?
 
         var label: String { title.isEmpty ? Address.pretty(url) : title }
+
+        static func == (a: Ghost, b: Ghost) -> Bool { a.id == b.id }
     }
 
     private var bag = Set<AnyCancellable>()
@@ -991,19 +1001,24 @@ final class Browser: NSObject, ObservableObject {
 
     /// The row of tabs the space on screen had last time, or one empty tab.
     func restoreSession() {
-        let saved = Session.read(space: spaceID)
-        guard !saved.tabs.isEmpty else {
-            // A blank tab costs nothing until it is asked for its page. Its
-            // web view — and with it WebKit's helper processes — is built a
-            // moment after the window is up, so that the first address typed
-            // finds everything already running, and the first frame never
-            // had to share the CPU with it.
+        let (saved, left) = lastRow(of: spaceID)
+        recall(left)
+        // A blank tab costs nothing until it is asked for its page. Its web
+        // view — and with it WebKit's helper processes — is built a moment
+        // after the window is up, so that the first address typed finds
+        // everything already running, and the first frame never had to
+        // share the CPU with it.
+        func blank() {
             let tab = Tab()
             adopt(tab)
+            activeID = tab.id
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak tab] in
                 guard let tab, tab.isBlank else { return }
                 _ = tab.web
             }
+        }
+        guard !saved.tabs.isEmpty else {
+            blank()
             return
         }
         for entry in saved.tabs {
@@ -1019,6 +1034,14 @@ final class Browser: NSObject, ObservableObject {
             adopt(Tab())
             return
         }
+        guard prefs.restoresTabs else {
+            // A fresh start: a new tab on screen, after the pinned ones,
+            // which load as Settings › Tabs › Load with Search says.
+            tabs = Browser.ordered(tabs)
+            blank()
+            wakePinned()
+            return
+        }
         // Where you were is kept by tab, not by index, through the reorder.
         let looked = tabs[min(max(0, saved.active), tabs.count - 1)].id
         tabs = Browser.ordered(tabs)
@@ -1028,6 +1051,30 @@ final class Browser: NSObject, ObservableObject {
         // and nothing else loads until it is looked at.
         tabs[here].wake()
         wakePinned()
+    }
+
+    /// A space's row as its session left it — or, with Settings › Tabs ›
+    /// Open with the tabs from last time off, only what was pinned of it:
+    /// the Essentials and the pinned lines are places kept, not pages left
+    /// open. The tabs left out are handed back as closed ones, the one
+    /// that was on screen last of them, so that ⇧⌘T brings back first what
+    /// you were looking at (see `recall`).
+    private func lastRow(of space: UUID) -> (row: Session.Shape, left: [Ghost]) {
+        let saved = Session.read(space: space)
+        guard !prefs.restoresTabs else { return (saved, []) }
+        var left = saved.tabs.enumerated().filter { $0.element.pin == nil && $0.element.kept != true }
+        if let looked = left.firstIndex(where: { $0.offset == saved.active }) { left.append(left.remove(at: looked)) }
+        let gone = left.compactMap { place, entry in
+            URL(string: entry.url).map { Ghost(url: $0, title: entry.title, index: place) }
+        }
+        return (Session.Shape(tabs: saved.tabs.filter { $0.pin != nil || $0.kept == true }, active: 0), gone)
+    }
+
+    /// Tabs a row was opened without, into Recently Closed — as its row
+    /// comes on screen, so ⇧⌘T in a space brings back that space's.
+    func recall(_ left: [Ghost]) {
+        guard !left.isEmpty else { return }
+        ghosts = Array((ghosts + left).suffix(12))
     }
 
     /// The few settings that something else has to be told about. The rest are
@@ -1083,7 +1130,7 @@ final class Browser: NSObject, ObservableObject {
                 guard let self else { return }
                 for tab in tabs + parkedTabs {
                     tab.arm(hiding: curtain.css(on: curtain.host(of: tab.address)))
-                    tab.built?.evaluateInSearch(on ? AutoScroll.script : AutoScroll.off)
+                    tab.built?.evaluateQuietly(on ? AutoScroll.script : AutoScroll.off)
                 }
             }
             .store(in: &bag)
@@ -1096,7 +1143,7 @@ final class Browser: NSObject, ObservableObject {
                 if !on { linkStatus.dismiss() }
                 for tab in tabs + parkedTabs {
                     tab.arm(hiding: curtain.css(on: curtain.host(of: tab.address)))
-                    tab.built?.evaluateJavaScript(on ? HoveredLink.script : HoveredLink.off, in: nil, in: .defaultClient)
+                    tab.built?.evaluateQuietly(on ? HoveredLink.script : HoveredLink.off, in: .defaultClient)
                 }
             }
             .store(in: &bag)
@@ -1285,8 +1332,14 @@ final class Browser: NSObject, ObservableObject {
 
     /// ⌘W, or the cross on the tab. Closing the last one leaves a blank tab
     /// behind; closing that blank tab closes the window.
-    func close(_ tab: Tab) {
+    ///
+    /// `asking`: closed by hand, so its page is asked first whether it may go
+    /// (see `mayGo`), as every browser asks one holding unsaved changes. Not
+    /// for a tab a script, an extension or the page itself closes.
+    func close(_ tab: Tab, asking: Bool = false) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        if asking, !mayGo(tab) { return }
+        parting.remove(tab.id)
 
         // A tab whose page is out in the little window takes the window with
         // it. Left alone, the window would go on holding a page belonging to a
@@ -1353,10 +1406,67 @@ final class Browser: NSObject, ObservableObject {
         select(keep)
         // The list is read once: closing walks the row and can add to it.
         for tab in tabs.filter({ $0.id != keep.id }) {
-            close(tab)
+            close(tab, asking: true)
         }
         select(keep)
     }
+
+    /// Tabs closed by hand whose pages are being asked whether they may go,
+    /// until each has answered.
+    private(set) var parting: Set<Tab.ID> = []
+
+    /// Whether a tab being closed by hand can go now. A page that listens
+    /// for being left is asked by WebKit first (tryClose): one with nothing
+    /// to say answers within moments, through `webViewDidClose`, and the
+    /// close is finished from there; one holding unsaved changes has you
+    /// asked (Dialogs.swift), and stays if you say so. A tab asleep, empty,
+    /// or a script's has nobody to ask.
+    private func mayGo(_ tab: Tab) -> Bool {
+        guard !tab.bench, !tab.isBlank, let web = tab.built else { return true }
+        // Asked already: ⌘W again, while the question is up, asks nothing new.
+        guard !parting.contains(tab.id) else { return false }
+        if web.tryClose() { return true }
+        parting.insert(tab.id)
+        return false
+    }
+
+    /// The question was answered with Stay: the tab is not closing after all.
+    func stays(_ tab: Tab) { parting.remove(tab.id) }
+
+    /// Pages given a load of our own to refuse, and pages just told to be
+    /// stayed on (see Dialogs.swift, `stayed`). By the view itself, held
+    /// weakly: neither outlives it.
+    let refusing = NSHashTable<WKWebView>.weakObjects()
+    let staying = NSHashTable<WKWebView>.weakObjects()
+    /// The questions waiting to be asked, one at a time, and the one that
+    /// is up (see Dialogs.swift, `askToLeave`).
+    var leaveAsks: [LeaveAsk] = []
+    var leaveAsking: LeaveAsk?
+
+    /// Every ordinary tab after this one: below it in the column, to its
+    /// right in the row across the top — Close Tabs to the Right, as every
+    /// other browser's tab menu has it. Pinned tabs come before the ordinary
+    /// ones and are never among them; from a pinned tab, every ordinary one
+    /// is after it. A script's tabs are the script's to close.
+    func closeAfter(_ tab: Tab) {
+        let going = tabsAfter(tab)
+        guard !going.isEmpty else { return }
+        // The tab on screen among them: this one takes the screen first.
+        // Closed where it stood, the next in the row would have come on
+        // screen, woken, and been closed in its turn, all the way down.
+        if going.contains(where: { $0.id == activeID }) { select(tab) }
+        for tab in going { close(tab, asking: true) }
+    }
+
+    /// The tabs `closeAfter` closes — for the menus, which offer it only
+    /// when there are any.
+    func tabsAfter(_ tab: Tab) -> [Tab] {
+        guard let here = tabs.firstIndex(where: { $0.id == tab.id }) else { return [] }
+        return tabs[(here + 1)...].filter { $0.place == .loose && !$0.bench }
+    }
+
+    /// What the menus call it: the tabs are a column or a row.
+    var closeAfterTitle: String { prefs.sidebar ? "Close Tabs Below" : "Close Tabs to the Right" }
 
     /// A link let go of over the tabs becomes a tab among them.
     func take(_ providers: [NSItemProvider]) -> Bool {
@@ -1396,12 +1506,14 @@ final class Browser: NSObject, ObservableObject {
         activeID = tab.id
         editing = false
         typed = ""
-        tab.go(to: ghost.url)
+        tab.reopen(ghost.url, title: ghost.title, memory: ghost.memory)
     }
 
+    /// Before the tab is thrown away: its page is asked for its history
+    /// while there is still a page to ask.
     private func remember(_ tab: Tab, at index: Int) {
         guard !tab.shy, let url = tab.address else { return }
-        ghosts.append(Ghost(url: url, title: tab.title, index: index))
+        ghosts.append(Ghost(url: url, title: tab.title, index: index, memory: tab.remembered))
         if ghosts.count > 12 { ghosts.removeFirst() }
     }
 
@@ -1765,7 +1877,7 @@ final class Browser: NSObject, ObservableObject {
     /// on screen: tabs with an address and no page yet, which cost next to
     /// nothing until one is looked at (see Spaces.swift).
     func loadRow(_ space: UUID) -> Parked {
-        let saved = Session.read(space: space)
+        let (saved, left) = lastRow(of: space)
         var row: [Tab] = []
         for entry in saved.tabs {
             guard let url = URL(string: entry.url) else { continue }
@@ -1775,6 +1887,12 @@ final class Browser: NSObject, ObservableObject {
             tab.pin = entry.pin
             tab.kept = entry.pin == nil && entry.kept == true
             row.append(tab)
+        }
+        guard prefs.restoresTabs || row.isEmpty else {
+            // A fresh start here too: a new tab after what was pinned.
+            let fresh = Tab(configuration: Web.configuration(space: space))
+            prepare(fresh)
+            return Parked(tabs: Browser.ordered(row) + [fresh], active: fresh.id, left: left)
         }
         let active = row.indices.contains(saved.active) ? row[saved.active].id : row.first?.id
         return Parked(tabs: Browser.ordered(row), active: active)
@@ -2026,7 +2144,7 @@ final class Browser: NSObject, ObservableObject {
         tab.onPickTrouble = { [weak self] _, reason in
             self?.announce("Couldn't hide that — \(reason)")
         }
-        tab.onSwipeClose = { [weak self] tab in self?.close(tab) }
+        tab.onSwipeClose = { [weak self] tab in self?.close(tab, asking: true) }
 
         // The line at the bottom doubles as the zoom read-out: it keeps being
         // rewritten while you pinch and fades a moment after you stop. Put
@@ -2324,6 +2442,12 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         decidePolicyFor action: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
+        // A load of our own, made only to be refused (see `stayed`).
+        if refusing.contains(webView), action.navigationType == .other, action.targetFrame?.isMainFrame ?? true {
+            refusing.remove(webView)
+            decisionHandler(.cancel)
+            return
+        }
         // "Download Image", "Download Linked File" from the page's own
         // context menu, and a link with the `download` attribute all arrive
         // as an ordinary-looking action with this one flag set. Answered
@@ -2641,6 +2765,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
     /// reload to fetch, because there is no longer an address to fetch.
     func webViewDidClose(_ webView: WKWebView) {
         guard let tab = tab(for: webView) else { return }
+        // Not the page closing itself: a tab closed by hand, whose page was
+        // asked whether it might go (see `mayGo`) and may. Closed as ⌘W
+        // closes — a pinned tab put down, not unpinned as below.
+        if parting.remove(tab.id) != nil {
+            close(tab)
+            return
+        }
         // Back to whoever opened it, so you land where you started the sign-in
         // rather than wherever the row happens to put you.
         if let opener = tab.opener, let home = tabs.first(where: { $0.id == opener }) {

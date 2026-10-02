@@ -103,7 +103,7 @@ final class Favicons {
         guard !busy.contains(host), !missing.contains(host) else { return }
         busy.insert(host)
 
-        tab.web.evaluateJavaScript(Favicons.probe) { [weak self, weak tab] answer, _ in
+        tab.web.evaluateQuietly(Favicons.probe, in: .page) { [weak self, weak tab] answer, _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 let declared = (answer as? [[String: String]]) ?? []
