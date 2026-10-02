@@ -115,7 +115,9 @@ enum Web {
     /// screen — a parked row made ahead of time (see Spaces.swift).
     /// `store`: a shy tab's own, for one opened from it — a link followed
     /// out of a private page is still signed in to whatever that page was.
-    static func configuration(shy: Bool = false, space: UUID? = nil, store: WKWebsiteDataStore? = nil) -> WKWebViewConfiguration {
+    /// `extensions`: false for a tab no extension is to see at all — one of
+    /// Claude's own at "Its own tabs" (see ClaudeAccess).
+    static func configuration(shy: Bool = false, space: UUID? = nil, store: WKWebsiteDataStore? = nil, extensions: Bool = true) -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
         // The real store, not the ephemeral one: staying signed in between
         // launches is the difference between a browser and a preview pane. A
@@ -129,7 +131,7 @@ enum Web {
         // Chrome extensions see every page but a private one, unless Settings
         // › Extensions says they may. The controller has to be there when the
         // view is made; it can't be added after.
-        if #available(macOS 15.4, *), !shy || Store.settings.bool(forKey: "extensions.private") {
+        if #available(macOS 15.4, *), extensions, !shy || Store.settings.bool(forKey: "extensions.private") {
             MainActor.assumeIsolated { Extensions.attach(config) }
         }
         // Left alone, WKWebView says only "AppleWebKit … (KHTML, like Gecko)" —
@@ -206,7 +208,7 @@ final class Tab: ObservableObject, Identifiable {
     /// The web view if there is one yet, for the callers that must not be
     /// the reason there is.
     private(set) var built: PageView?
-    private let configuration: WKWebViewConfiguration
+    let configuration: WKWebViewConfiguration
 
     /// Whether its page was made with the extension controller in it — every
     /// ordinary tab, and a private one only when extensions were allowed
@@ -835,7 +837,7 @@ final class Tab: ObservableObject, Identifiable {
         // While a script may drive Search: Claude's own tabs, and any page
         // served from this Mac, keep their console and requests from the
         // first line (see Agent.hook). Any other page gets nothing here.
-        if bench || Store.settings.bool(forKey: "bench") {
+        if bench || Store.settings.integer(forKey: "claude.access") > 0 || (Store.testing && Store.settings.bool(forKey: "bench")) {
             controller.addUserScript(
                 WKUserScript(source: Agent.hookAtStart(always: bench), injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)
             )

@@ -30,12 +30,16 @@ import WebKit
 // sees none of it. Only what has to happen in the page's world does — its
 // own JavaScript, and the console and requests, listened to there.
 //
-// Whose tabs: the ones Claude opened (the bench's, with the flask) always;
-// yours, the one in front by default, only with Settings › General › "Let
-// Claude use your tabs" on — and never a private one, nor an extension's
-// page (a password manager's vault is one), nor a file. Claude opens and goes
-// to web pages only. What it is told on a page is a page's to say: nothing
-// here lets a page reach Search's own world, where its handlers are.
+// How far it reaches is one setting, Settings › General › "Let Claude use
+// Search" (see ClaudeAccess): off, and the socket is closed; "Its own tabs",
+// the ones Claude opened (with the flask), in a store of their own signed in
+// to nothing of yours and with no extension in them; "Signed in as you", the
+// same tabs sharing your sign-ins; "Your tabs too", yours as well — the one
+// in front by default — and the clipboard, but never a private tab, nor an
+// extension's page (a password manager's vault is one), nor a file. Claude
+// opens and goes to web pages only. What it is told on a page is a page's to
+// say: nothing here lets a page reach Search's own world, where its handlers
+// are.
 
 @MainActor
 extension Bench {
@@ -48,9 +52,11 @@ extension Bench {
         }
     }
 
-    /// Whether Claude may use a tab at all.
-    private func reachable(_ tab: Tab, in browser: Browser) -> Bool {
-        guard tab.bench || (browser.prefs.claudeTabs && !tab.shy) else { return false }
+    /// Whether Claude may see and use a tab at all: one of its own, or at
+    /// "Your tabs too" one of yours that isn't private — and only while it
+    /// shows a web page.
+    func visible(_ tab: Tab, in browser: Browser) -> Bool {
+        guard tab.bench || (browser.prefs.claude >= .yours && !tab.shy) else { return false }
         return tab.address.map(Bench.web) ?? true
     }
 
@@ -63,9 +69,9 @@ extension Bench {
     /// unnamed, the one in front.
     private func agentTab(_ request: [String: Any], in browser: Browser) -> Tab? {
         guard let ref = (request["id"] as? String)?.lowercased(), !ref.isEmpty else {
-            return browser.active.flatMap { reachable($0, in: browser) ? $0 : nil }
+            return browser.active.flatMap { visible($0, in: browser) ? $0 : nil }
         }
-        return browser.tabs.first { $0.id.uuidString.lowercased().hasPrefix(ref) && reachable($0, in: browser) }
+        return browser.tabs.first { $0.id.uuidString.lowercased().hasPrefix(ref) && visible($0, in: browser) }
     }
 
     /// Ready to be read or used: awake, in a window so it is laid out, and
@@ -210,10 +216,11 @@ extension Bench {
         }
     }
 
-    func agent(_ verb: String, _ request: [String: Any], browser: Browser, _ answer: @escaping ([String: Any]) -> Void) {
-        let noTab: [String: Any] = ["error": browser.prefs.claudeTabs
+    func agent(_ verb: String, _ request: [String: Any], browser: Browser, ticket: Ticket, _ answer: @escaping ([String: Any]) -> Void) {
+        let yours = browser.prefs.claude >= .yours
+        let noTab: [String: Any] = ["error": yours
             ? "no tab “\(request["id"] as? String ?? "")” Claude can use — see a.tabs (private tabs and extensions' pages are never Claude's)"
-            : "no tab — Claude can use only the tabs it opened; Settings › General › “Let Claude use your tabs” lets it use yours"]
+            : "no tab — Claude can use only the tabs it opened; Settings › General › “Let Claude use Search” set to “Your tabs too” lets it use yours"]
         let reply: (Result<[String: Any], Agent.Failure>) -> Void = { result in
             switch result {
             case .success(let out): answer(out)
@@ -223,10 +230,11 @@ extension Bench {
 
         switch verb {
         case "a.tabs":
-            // Only what Claude may use: with the switch off, your tabs'
+            // Only what Claude may use: below “Your tabs too”, your tabs'
             // addresses and titles are not its to see either.
-            let seen = browser.tabs.filter { reachable($0, in: browser) }
-            answer(["tabs": seen.map(describe), "yours": browser.prefs.claudeTabs, "others": browser.tabs.count - seen.count, "keysStopped": Agent.stopped])
+            let seen = browser.tabs.filter { visible($0, in: browser) }
+            answer(["tabs": seen.map(describe), "yours": yours, "level": browser.prefs.claude.title,
+                    "others": browser.tabs.count - seen.count, "keysStopped": Agent.stopped])
 
         case "a.open":
             guard let url = (request["url"] as? String).flatMap(Address.url(from:)), Bench.web(url) else {
@@ -237,15 +245,15 @@ extension Bench {
             // the user agent it is sent.
             let tab = browser.benchOpen(url, userAgent: request["mobile"] as? Bool == true ? Agent.phone : nil)
             if let size = Agent.size(request) { Agent.sizes[tab.id] = size }
-            if request["show"] as? Bool == true, browser.prefs.claudeTabs { browser.select(tab) } else { house(tab) }
+            if request["show"] as? Bool == true, yours { browser.select(tab) } else { house(tab) }
             if request["wait"] as? Bool == false { answer(describe(tab)); return }
             wait(for: tab, until: Date().addingTimeInterval(request["seconds"] as? Double ?? 20)) { [weak self] out in
                 answer(self?.decorated(out, tab) ?? out)
             }
 
         case "a.show":
-            guard browser.prefs.claudeTabs else {
-                answer(["error": "showing a tab takes your window — only with “Let Claude use your tabs” on"])
+            guard yours else {
+                answer(["error": "showing a tab takes your window — only with “Let Claude use Search” set to “Your tabs too”"])
                 return
             }
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
@@ -373,14 +381,22 @@ extension Bench {
             }
             var quiet: Date?
             func poll() {
+                guard !ticket.cancelled else { return }
                 let body = idle ? Agent.idle : Agent.present
                 tab.web.callAsyncJavaScript(body, arguments: ["selector": selector ?? "", "text": text ?? ""], in: nil, in: idle ? .page : Web.world) { result in
                     MainActor.assumeIsolated {
                         switch result {
-                        case .success(let value) where value as? Bool == true:
+                        case .success(let value) where value as? Bool == true || (value as? [String: Any])?["idle"] as? Bool == true:
                             // Idle is idle for half a second, not between two requests.
                             guard idle else { answer(["ok": true]); return }
-                            if let since = quiet, Date().timeIntervalSince(since) >= 0.5 { answer(["ok": true, "idle": true]); return }
+                            if let since = quiet, Date().timeIntervalSince(since) >= 0.5 {
+                                var out: [String: Any] = ["ok": true, "idle": true]
+                                // Open longer than a page's request takes: a
+                                // stream, a long poll — not waited on, and said.
+                                if let long = (value as? [String: Any])?["long"] as? Int, long > 0 { out["longRequests"] = long }
+                                answer(out)
+                                return
+                            }
                             if quiet == nil { quiet = Date() }
                         // A selector that can't be read never will be.
                         case .failure(let error) where Agent.said(error).contains("SyntaxError"): answer(["error": Agent.said(error)]); return
@@ -536,6 +552,13 @@ extension Bench {
             let chords = keys.split(separator: " ").map(String.init).filter { !$0.isEmpty }
             let unknown = chords.filter { Agent.chord($0) == nil }
             guard unknown.isEmpty else { answer(["error": "unknown keys: " + unknown.joined(separator: ", ")]); return }
+            // Copy, cut and paste go through your clipboard — what you last
+            // copied, a password included, is yours: only at "Your tabs too".
+            let clipboard = chords.compactMap(Agent.chord).filter { $0.mods.contains(.command) && Agent.clipboard($0.ignoring) }
+            guard clipboard.isEmpty || yours else {
+                answer(["error": "⌘C, ⌘X and ⌘V use your clipboard — only with “Let Claude use Search” set to “Your tabs too”; type the text with computer type instead"])
+                return
+            }
             let times = max(1, min(100, request["repeat"] as? Int ?? 1))
             page("a.active", [:], on: tab) { [weak self] focused in
                 guard let self else { return }
@@ -628,7 +651,15 @@ extension Bench {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if name.isEmpty || name.hasPrefix(".") { name = "recording-\(Int(Date().timeIntervalSince1970)).gif" }
             if !name.lowercased().hasSuffix(".gif") { name += ".gif" }
-            let file = browser.prefs.downloads.appendingPathComponent(name)
+            // Never over a file already there: "recording 2.gif" beside it.
+            let folder = browser.prefs.downloads
+            var file = folder.appendingPathComponent(name)
+            let stem = (name as NSString).deletingPathExtension
+            var n = 2
+            while FileManager.default.fileExists(atPath: file.path) {
+                file = folder.appendingPathComponent("\(stem) \(n).gif")
+                n += 1
+            }
             do {
                 let size = try Agent.gif(frames, options: options, to: file)
                 answer(["path": file.path, "frames": frames.count, "bytes": size])
@@ -663,6 +694,9 @@ extension Bench {
             guard let steps = request["steps"] as? [[String: Any]], !steps.isEmpty else { answer(["error": "a.batch needs steps"]); return }
             var results: [[String: Any]] = []
             func next(_ index: Int) {
+                // Answered for already — out of time, or the script is gone:
+                // no step more.
+                guard !ticket.cancelled else { return }
                 guard index < steps.count else { answer(["results": results]); return }
                 var step = steps[index]
                 if step["id"] == nil, let id = request["id"] { step["id"] = id }
@@ -672,7 +706,7 @@ extension Bench {
                     answer(["results": results, "stopped": index])
                     return
                 }
-                agent(name, step, browser: browser) { out in
+                agent(name, step, browser: browser, ticket: ticket) { out in
                     results.append(out)
                     if out["error"] != nil, request["keepGoing"] as? Bool != true {
                         answer(["results": results, "stopped": index])
@@ -862,7 +896,8 @@ extension Bench {
             web.callAsyncJavaScript(Agent.synthetic, arguments: dom, in: nil, in: .page) { result in
                 MainActor.assumeIsolated {
                     let taken = (try? result.get()) as? Bool == false
-                    if !taken, let command = Agent.editing(chord.ignoring, shift: chord.mods.contains(.shift)) {
+                    if !taken, let command = Agent.editing(chord.ignoring, shift: chord.mods.contains(.shift)),
+                       !Agent.clipboard(chord.ignoring) || (self.browser?.prefs.claude ?? .off) >= .yours {
                         web.tryToPerform(command, with: nil)
                     }
                     done()
@@ -936,6 +971,60 @@ extension Bench {
                         "pageHeight": Int(area.height.rounded()), "density": density])
             }
         }
+    }
+}
+
+// MARK: - the level changing
+
+extension Bench {
+    /// Claude's access set to another level while it is on. Its tabs that
+    /// don't fit the new one close: down to "Its own tabs", every tab it had
+    /// signed in as you; up from it, the ones in its own store, which would
+    /// say signed in as nobody under a setting that says otherwise. Your tabs
+    /// it worked in are let go to rest at once, so a page is judged by what
+    /// covers it again.
+    func access(changed level: ClaudeAccess, browser: Browser) {
+        for tab in browser.tabs where tab.bench && Agent.inOwnStore(tab) != (level == .own) {
+            browser.close(tab)
+            forget(tab)
+        }
+        guard level < .yours else { return }
+        for tab in browser.tabs where !tab.bench {
+            guard let rest = Agent.resting[tab.id] else { continue }
+            rest.perform()
+            rest.cancel()
+        }
+    }
+
+    /// Everything Claude signed in to in its own store, gone — its tabs
+    /// there closed first.
+    func forgetClaudeSignIns(browser: Browser) {
+        for tab in browser.tabs where tab.bench && Agent.inOwnStore(tab) {
+            browser.close(tab)
+            forget(tab)
+        }
+        let store = Agent.ownStore
+        let everything = WKWebsiteDataStore.allWebsiteDataTypes()
+        store.removeData(ofTypes: everything, modifiedSince: .distantPast) {}
+        // And again, for what its closing tabs were still writing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            store.removeData(ofTypes: everything, modifiedSince: .distantPast) {}
+        }
+    }
+}
+
+extension Agent {
+    /// The store Claude's tabs use at "Its own tabs": cookies, sign-ins and
+    /// storage of its own, kept between launches, nothing of yours in it. A
+    /// fixed name, and a test world's own (see Store.probeStore).
+    static let ownStore: WKWebsiteDataStore = {
+        let id = Store.testing ? Store.probeStore(3) : UUID(uuidString: "C1A0DE00-5EA2-4C40-8000-000000000001")!
+        return WKWebsiteDataStore(forIdentifier: id)
+    }()
+
+    /// Whether a tab's pages keep their cookies in Claude's own store.
+    static func inOwnStore(_ tab: Tab) -> Bool {
+        tab.configuration.websiteDataStore.identifier == ownStore.identifier
     }
 }
 
@@ -1053,6 +1142,11 @@ enum Agent {
             }
         }
         return flags
+    }
+
+    /// Whether a ⌘ key's command goes through the clipboard.
+    static func clipboard(_ key: String) -> Bool {
+        ["c", "x", "v"].contains(key.lowercased())
     }
 
     /// The edit menu's command a ⌘ key stands for.
@@ -1189,10 +1283,15 @@ enum Agent {
     return !!(document.body && document.body.innerText.indexOf(text) >= 0);
     """#
 
-    /// True while the page has loaded and has no request of its own open.
+    /// Idle once the page has loaded and has no request of its own open —
+    /// leaving out the ones open for ten seconds or more, a stream or a long
+    /// poll that may never end, which are counted instead.
     static let idle = #"""
     var box = window[Symbol.for('search.claude')];
-    return document.readyState === 'complete' && (!box || box.inflight <= 0);
+    if (document.readyState !== 'complete') return { idle: false };
+    if (!box || typeof box.open !== 'function') return { idle: true };
+    var open = box.open(10000);
+    return { idle: open.recent <= 0, long: open.long };
     """#
 
     /// After a hover: whether what is under the point took it. If not, the
@@ -1242,8 +1341,10 @@ enum Agent {
         var h = location.hostname;
         if (!(h === 'localhost' || h === '0.0.0.0' || h === '[::1]' || /^127\./.test(h) || /\.(localhost|local|test)$/.test(h))) return null;
       }
-      var box = { log: [], net: [], inflight: 0, since: since };
-      Object.defineProperty(window, K, { value: box });
+      // What is heard stays in here: the page can ask for a copy, as it
+      // could read its own console anyway, but can't change what was heard
+      // or what is open — a.wait's idle and a.console go by these.
+      var log = [], net = [], open = new Map(), serial = 0;
       function keep(list, item, max) { list.push(item); if (list.length > max) list.shift(); }
       function show(x) {
         if (typeof x === 'string') return x;
@@ -1251,8 +1352,26 @@ enum Agent {
         try { var s = JSON.stringify(x); return s === undefined ? String(x) : s; } catch (e) { return String(x); }
       }
       function say(level, parts) {
-        keep(box.log, { level: level, time: Date.now(), text: Array.prototype.map.call(parts, show).join(' ').slice(0, 4000) }, 1000);
+        keep(log, { level: level, time: Date.now(), text: Array.prototype.map.call(parts, show).join(' ').slice(0, 4000) }, 1000);
       }
+      function copy(list) { return list.map(function (e) { return Object.assign({}, e); }); }
+      var box = Object.freeze({
+        since: since,
+        read: function (which, clear) {
+          var list = which === 'net' ? net : log;
+          var out = copy(list);
+          if (clear) list.length = 0;
+          return out;
+        },
+        // How many requests are open, split by whether they have been for
+        // `longer` milliseconds or more.
+        open: function (longer) {
+          var now = performance.now(), recent = 0, long = 0;
+          open.forEach(function (t0) { if (now - t0 >= longer) long++; else recent++; });
+          return { recent: recent, long: long };
+        }
+      });
+      Object.defineProperty(window, K, { value: box });
       ['log', 'info', 'warn', 'error', 'debug', 'trace'].forEach(function (level) {
         var original = console[level];
         if (typeof original !== 'function') return;
@@ -1262,7 +1381,7 @@ enum Agent {
         var t = e.target;
         if (t && t !== window && t.tagName) {
           var src = t.currentSrc || t.src || t.href || '';
-          keep(box.net, { method: 'GET', url: String(src), type: t.tagName.toLowerCase(), failed: 'did not load', time: Date.now() }, 500);
+          keep(net, { method: 'GET', url: String(src), type: t.tagName.toLowerCase(), failed: 'did not load', time: Date.now() }, 500);
           say('error', ['Failed to load ' + t.tagName.toLowerCase() + ': ' + src]);
           return;
         }
@@ -1278,12 +1397,13 @@ enum Agent {
                         url: where(typeof input === 'string' || input instanceof URL ? input : input && input.url), type: 'fetch', time: Date.now() };
           var t0 = performance.now();
           var p;
-          try { p = fetch0.apply(this, arguments); } catch (e) { entry.failed = String(e); keep(box.net, entry, 500); throw e; }
-          box.inflight++;
+          try { p = fetch0.apply(this, arguments); } catch (e) { entry.failed = String(e); keep(net, entry, 500); throw e; }
+          var id = ++serial;
+          open.set(id, t0);
           return p.then(function (r) {
-            entry.status = r.status; entry.ms = Math.round(performance.now() - t0); box.inflight--; keep(box.net, entry, 500); return r;
+            entry.status = r.status; entry.ms = Math.round(performance.now() - t0); open.delete(id); keep(net, entry, 500); return r;
           }, function (err) {
-            entry.failed = String(err && err.message || err); entry.ms = Math.round(performance.now() - t0); box.inflight--; keep(box.net, entry, 500); throw err;
+            entry.failed = String(err && err.message || err); entry.ms = Math.round(performance.now() - t0); open.delete(id); keep(net, entry, 500); throw err;
           });
         };
       }
@@ -1295,14 +1415,14 @@ enum Agent {
           var entry = calls.get(this), xhr = this;
           if (entry) {
             entry.time = Date.now();
-            var t0 = performance.now();
-            box.inflight++;
+            var t0 = performance.now(), id = ++serial;
+            open.set(id, t0);
             xhr.addEventListener('loadend', function () {
               entry.status = xhr.status;
               if (!xhr.status) entry.failed = 'network error, blocked or aborted';
               entry.ms = Math.round(performance.now() - t0);
-              box.inflight--;
-              keep(box.net, entry, 500);
+              open.delete(id);
+              keep(net, entry, 500);
             });
           }
           return send0.apply(this, arguments);
@@ -1317,16 +1437,15 @@ enum Agent {
 
     /// The console, as `hook` heard it.
     static let console = "var box = (" + hook + ")(true, 'now');\n" + #"""
-    var out = box.log.slice();
-    if (clear) box.log.length = 0;
-    return { since: box.since, messages: out };
+    if (!box || typeof box.read !== 'function') return { since: 'now', messages: [] };
+    return { since: box.since, messages: box.read('log', clear) };
     """#
 
     /// What the page asked for, as `hook` heard it, and what it loaded, as
     /// its own timing records it.
     static let network = "var box = (" + hook + ")(true, 'now');\n" + #"""
     var seen = {};
-    var out = box.net.map(function (e) { seen[e.url] = true; return e; });
+    var out = (box && typeof box.read === 'function' ? box.read('net', clear) : []).map(function (e) { seen[e.url] = true; return e; });
     performance.getEntriesByType('navigation').concat(performance.getEntriesByType('resource')).forEach(function (e) {
       if (seen[e.name] && (e.initiatorType === 'fetch' || e.initiatorType === 'xmlhttprequest')) return;
       var r = { method: 'GET', url: e.name, type: e.initiatorType || e.entryType, ms: Math.round(e.duration), time: Math.round(performance.timeOrigin + e.startTime) };
@@ -1335,8 +1454,8 @@ enum Agent {
       out.push(r);
     });
     out.sort(function (a, b) { return (a.time || 0) - (b.time || 0); });
-    if (clear) { box.net.length = 0; performance.clearResourceTimings(); }
-    return { since: box.since, requests: out.slice(-400) };
+    if (clear) performance.clearResourceTimings();
+    return { since: box ? box.since : 'now', requests: out.slice(-400) };
     """#
 
     /// Reading, finding, filling, scrolling and pointing, in Search's world.
@@ -1769,8 +1888,16 @@ extension Agent {
         return (alias, local)
     }
 
+    /// A property of WebKit's own, by name — asked first: a name a later
+    /// WebKit dropped would otherwise throw where Swift can't catch it, and
+    /// every read of every page would take the browser down with it.
+    private static func kvc(_ object: Any?, _ key: String) -> Any? {
+        guard let object = object as? NSObject, object.responds(to: NSSelectorFromString(key)) else { return nil }
+        return object.value(forKey: key)
+    }
+
     private static func frameID(_ info: WKFrameInfo) -> UInt64? {
-        ((info.value(forKey: "_handle") as? NSObject)?.value(forKey: "frameID") as? NSNumber)?.uint64Value
+        (kvc(kvc(info, "_handle"), "frameID") as? NSNumber)?.uint64Value
     }
 
     /// The frames of the page from another site than the one they are in —
@@ -1784,7 +1911,7 @@ extension Agent {
                 var found: [(alias: String, info: WKFrameInfo)] = []
                 func origin(_ o: WKSecurityOrigin) -> String { "\(o.`protocol`)://\(o.host):\(o.port)" }
                 @MainActor func walk(_ node: NSObject?, parent: String?) {
-                    guard let node, let info = node.value(forKey: "info") as? WKFrameInfo else { return }
+                    guard let info = kvc(node, "info") as? WKFrameInfo else { return }
                     let here = origin(info.securityOrigin)
                     if let parent, here != parent || here.hasPrefix("://"), let id = frameID(info) {
                         var known = aliases[tab.id] ?? [:]
@@ -1793,7 +1920,7 @@ extension Agent {
                         aliases[tab.id] = known
                         found.append((alias, info))
                     }
-                    for child in (node.value(forKey: "childFrames") as? [NSObject]) ?? [] { walk(child, parent: here) }
+                    for child in (kvc(node, "childFrames") as? [NSObject]) ?? [] { walk(child, parent: here) }
                 }
                 walk(root as? NSObject, parent: nil)
                 then(found)

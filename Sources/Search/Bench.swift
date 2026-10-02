@@ -60,19 +60,21 @@ final class Bench {
 
     // MARK: - who switched it on
 
-    /// Whether the bench was switched on in Settings, by you. The setting
-    /// itself lives in the defaults, which any program you run can write; on
-    /// its own it opens nothing. The switch also leaves a mark in the
-    /// keychain — its data protection half, where only apps signed as Search
-    /// with its profile can read or write, under the app's own access group —
-    /// and without the mark the setting is put back to off at launch, with a
-    /// word about it. Test runs keep the setting alone: their worlds hold
-    /// nothing of yours, and scripts set them up with a defaults write.
+    /// Whether Claude's access was set in Settings, by you, and to what. The
+    /// setting itself lives in the defaults, which any program you run can
+    /// write; on its own it opens nothing. The switch also leaves a mark in
+    /// the keychain holding the level — its data protection half, where only
+    /// apps signed as Search with its profile can read or write, under the
+    /// app's own access group — and a level the defaults say above the
+    /// mark's is held at the mark's at launch, and you are asked (see
+    /// Preferences.claude). Test runs keep the setting alone unless started
+    /// with SEARCH_CONSENT=real (see Store.strict): their worlds hold nothing
+    /// of yours, and scripts set them up with a defaults write.
     @MainActor
     enum Consent {
-        /// `what`: which switch — the bench's own (""), or "claude" for
-        /// Claude's use of your tabs (see Agent.swift), which a script able to
-        /// write the defaults must not be able to turn on either.
+        /// `what`: which mark — "access" for Claude's level; "" and "claude"
+        /// are the two switches there were before it, read once to carry
+        /// them over (see Preferences.migrateClaude).
         private static func query(_ what: String) -> [String: Any] {
             let account = what.isEmpty ? "consent" : "consent \(what)"
             return [kSecClass as String: kSecClassGenericPassword,
@@ -81,29 +83,52 @@ final class Bench {
                     kSecAttrAccount as String: Store.world.map { "\(account) (\($0))" } ?? account]
         }
 
-        /// The mark is there — or there is nowhere to keep one: a copy built
-        /// without Search's provisioning profile has no access group, and
-        /// keeps the switch as it always was.
-        static var given: Bool { given("") }
+        /// Whether this copy has anywhere to keep a mark. The data protection
+        /// keychain is only for an app with an application identifier, which
+        /// only Search's provisioning profile gives it. Asked of the app's
+        /// own entitlements rather than read off the keychain's answers:
+        /// without them, writing says there is no access group but reading
+        /// says only that nothing is there — taken for a mark that went
+        /// missing, it turned the switch off at every launch of such a copy.
+        static let keepable: Bool = {
+            guard let task = SecTaskCreateFromSelf(nil) else { return false }
+            return ["com.apple.application-identifier", "keychain-access-groups"].contains {
+                SecTaskCopyValueForEntitlement(task, $0 as CFString, nil) != nil
+            }
+        }()
 
-        static func given(_ what: String) -> Bool {
+        /// The level the mark holds; nil with no mark. Int.max where there
+        /// is nowhere to keep one (see keepable): such a copy keeps the
+        /// setting as it always was. A mark from before levels says "on",
+        /// the most its switch could.
+        static func level(_ what: String) -> Int? {
+            guard keepable else { return .max }
             var asked = query(what)
-            asked[kSecReturnAttributes as String] = true
-            let status = SecItemCopyMatching(asked as CFDictionary, nil)
-            return status == errSecSuccess || status == errSecMissingEntitlement
+            asked[kSecReturnData as String] = true
+            asked[kSecMatchLimit as String] = kSecMatchLimitOne
+            var found: CFTypeRef?
+            let status = SecItemCopyMatching(asked as CFDictionary, &found)
+            if status == errSecMissingEntitlement { return .max }
+            guard status == errSecSuccess else { return nil }
+            let text = (found as? Data).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            return Int(text) ?? .max
         }
 
-        static func grant(_ what: String = "") {
+        static func grant(_ what: String, level: Int) {
+            let data = Data(String(level).utf8)
             var item = query(what)
-            item[kSecValueData as String] = Data("on".utf8)
+            item[kSecValueData as String] = data
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            let status = SecItemAdd(item as CFDictionary, nil)
-            if status != errSecSuccess, status != errSecDuplicateItem, status != errSecMissingEntitlement {
+            var status = SecItemAdd(item as CFDictionary, nil)
+            if status == errSecDuplicateItem {
+                status = SecItemUpdate(query(what) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            }
+            if status != errSecSuccess, status != errSecMissingEntitlement {
                 NSLog("Bench: the switch left no mark (%d)", status)
             }
         }
 
-        static func revoke(_ what: String = "") {
+        static func revoke(_ what: String) {
             SecItemDelete(query(what) as CFDictionary)
         }
     }
@@ -182,8 +207,13 @@ final class Bench {
             close(fd)
             return
         }
-        let client = Client(fd: fd) { [weak self] request, answer in
-            self?.handle(request, answer)
+        // An answer written to a script that has gone fails, and that is all:
+        // left to SIGPIPE, it ended the whole browser — a script that stopped
+        // waiting before its batch was done took every tab with it.
+        var one: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        let client = Client(fd: fd) { [weak self] request, ticket, answer in
+            self?.handle(request, ticket, answer)
         } gone: { [weak self] fd in
             self?.clients[fd] = nil
         }
@@ -192,18 +222,33 @@ final class Bench {
 
     // MARK: - one connection
 
+    /// One request's life. Called off once its answer is given — the time it
+    /// had ran out, say — or its script goes away: work still to do for it,
+    /// the next steps of a batch, stops there rather than clicking and typing
+    /// for a script that was told it failed and may well try again.
+    final class Ticket {
+        private(set) var cancelled = false
+        func cancel() { cancelled = true }
+    }
+
     /// Reads until a newline, hands the line up, writes the answer, closes.
+    /// Listens on after the line, for the script closing its end before the
+    /// answer: taken as gone, its ticket is called off.
     private final class Client {
         let fd: Int32
         private var bytes = Data()
+        /// The request is in; what else comes is not read as one.
+        private var heard = false
+        private var closed = false
         private let source: DispatchSourceRead
-        private let handle: ([String: Any], @escaping ([String: Any]) -> Void) -> Void
+        private let handle: ([String: Any], Ticket, @escaping ([String: Any]) -> Void) -> Void
         private let gone: (Int32) -> Void
         private var answered = false
+        let ticket = Ticket()
 
         init(
             fd: Int32,
-            handle: @escaping ([String: Any], @escaping ([String: Any]) -> Void) -> Void,
+            handle: @escaping ([String: Any], Ticket, @escaping ([String: Any]) -> Void) -> Void,
             gone: @escaping (Int32) -> Void
         ) {
             self.fd = fd
@@ -219,29 +264,37 @@ final class Bench {
             var chunk = [UInt8](repeating: 0, count: 65536)
             let count = Darwin.read(fd, &chunk, chunk.count)
             if count <= 0 {
-                if count == 0 || errno != EAGAIN { drop() }
+                if count == 0 || errno != EAGAIN {
+                    // Nobody left to answer.
+                    answered = true
+                    drop()
+                }
                 return
             }
-            bytes.append(contentsOf: chunk[0..<count])
-            // A line that never ends is not a request.
-            // Files Claude uploads come this way, as base64: room for 24 MB.
-            if bytes.count > 32_000_000 {
-                say(["error": "request too long"])
+            guard !heard else { return }
+            // Only what just came is looked through for the end of the line:
+            // looking through all of it on every read, as it once did, took
+            // half a minute of the main thread for the 32 MB of a 24 MB file.
+            guard let end = chunk[0..<count].firstIndex(of: 0x0A) else {
+                bytes.append(contentsOf: chunk[0..<count])
+                // A line that never ends is not a request.
+                // Files Claude uploads come this way, as base64: room for 24 MB.
+                if bytes.count > 32_000_000 { say(["error": "request too long"]) }
                 return
             }
-            guard let newline = bytes.firstIndex(of: 0x0A) else { return }
-            let line = bytes[bytes.startIndex..<newline]
+            bytes.append(contentsOf: chunk[0..<end])
+            let line = bytes
             bytes = Data()
-            source.cancel()
+            heard = true
             guard let json = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
                 say(["error": "not a JSON object"])
                 return
             }
-            handle(json) { [weak self] answer in self?.say(answer) }
+            handle(json, ticket) { [weak self] answer in self?.say(answer) }
         }
 
         private func say(_ answer: [String: Any]) {
-            guard !answered else { return }
+            guard !answered, !closed else { return }
             answered = true
             var out = (try? JSONSerialization.data(withJSONObject: answer)) ?? Data("{\"error\":\"unwritable answer\"}".utf8)
             out.append(0x0A)
@@ -259,7 +312,11 @@ final class Bench {
             drop()
         }
 
+        /// Once: the descriptor's number may be another file's after it.
         func drop() {
+            guard !closed else { return }
+            closed = true
+            ticket.cancel()
             if !source.isCancelled { source.cancel() }
             close(fd)
             gone(fd)
@@ -268,13 +325,15 @@ final class Bench {
 
     // MARK: - the commands
 
-    private func handle(_ request: [String: Any], _ given: @escaping ([String: Any]) -> Void) {
+    private func handle(_ request: [String: Any], _ ticket: Ticket, _ given: @escaping ([String: Any]) -> Void) {
         // One answer, and always one: a page that never replies to a script
         // would otherwise hold the bench — every later command waits behind it.
+        // Once it is given, nothing more is done for the request.
         var answered = false
         let answer: ([String: Any]) -> Void = { reply in
             guard !answered else { return }
             answered = true
+            ticket.cancel()
             given(reply)
         }
         let patience = (request["do"] as? String) == "wait" ? (request["seconds"] as? Double ?? 30) + 5
@@ -288,7 +347,9 @@ final class Bench {
 
         switch verb {
         case "tabs":
-            answer(["tabs": browser.tabs.map(describe)])
+            // What Claude may see and no more (see Bench.visible): a script on
+            // the socket is anyone's, Claude's own shell included.
+            answer(["tabs": browser.tabs.filter { !Store.strict || visible($0, in: browser) }.map(describe)])
 
         case "downloads":
             // The downloads, and each one paused, resumed, cancelled, started
@@ -384,8 +445,8 @@ final class Bench {
             }
 
         case "open":
-            guard let url = (request["url"] as? String).flatMap(Address.url(from:)) else {
-                answer(["error": "open needs a url"])
+            guard let url = (request["url"] as? String).flatMap(Address.url(from:)), !Store.strict || Bench.web(url) else {
+                answer(["error": "open needs a web address"])
                 return
             }
             let tab = browser.benchOpen(url)
@@ -394,8 +455,8 @@ final class Bench {
 
         case "go":
             guard let tab = find(request, in: browser) else { answer(missing(request)); return }
-            guard let url = (request["url"] as? String).flatMap(Address.url(from:)) else {
-                answer(["error": "go needs a url"])
+            guard let url = (request["url"] as? String).flatMap(Address.url(from:)), !Store.strict || Bench.web(url) else {
+                answer(["error": "go needs a web address"])
                 return
             }
             tab.go(to: url)
@@ -1714,14 +1775,18 @@ final class Bench {
         case "consent":
             // The mark the Settings switch leaves (see Consent), in this test
             // world's own account: given, then granted or revoked if asked.
+            // `level` grants at that level; `set` changes Claude's access as
+            // the switch would, mark and all.
             guard Store.testing else { answer(["error": "consent only works on a --test run"]); return }
-            let before = Consent.given
+            let before = Consent.level("access") ?? 0
             switch request["action"] as? String {
-            case "grant": Consent.grant()
-            case "revoke": Consent.revoke()
+            case "grant": Consent.grant("access", level: request["level"] as? Int ?? ClaudeAccess.yours.rawValue)
+            case "revoke": Consent.revoke("access")
             default: break
             }
-            answer(["before": before, "after": Consent.given])
+            if let level = (request["set"] as? Int).flatMap(ClaudeAccess.init(rawValue:)) { browser.prefs.claude = level }
+            answer(["before": before, "after": Consent.level("access") ?? 0, "level": browser.prefs.claude.rawValue,
+                    "withheld": browser.prefs.claudeWithheld?.rawValue ?? 0, "asking": browser.claudeAsking?.rawValue ?? 0])
 
         case "pointer":
             // The pointer a folded column or strip follows (see Fold.swift),
@@ -1967,7 +2032,7 @@ final class Bench {
                     "differences": SettingsSync.differences()])
 
         case _ where verb.hasPrefix("a."):
-            agent(verb, request, browser: browser, answer)
+            agent(verb, request, browser: browser, ticket: ticket, answer)
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
@@ -2088,12 +2153,13 @@ final class Bench {
     /// bench is how this browser is driven while somebody is using it, and
     /// reading, clicking or sleeping in one of their tabs is not part of
     /// that: a script here is meant for tabs marked with the flask. A
-    /// SEARCH_PROBE run has nobody's tabs in it, so there any tab answers,
+    /// SEARCH_PROBE run has nobody's tabs in it, so there any tab answers
+    /// (unless started with SEARCH_CONSENT=real, see Store.strict),
     /// as for `tap` and `select`: a popup a bench page opened with
     /// `window.open` carries no flask and would be out of reach otherwise.
     private func find(_ request: [String: Any], in browser: Browser) -> Tab? {
         guard let ref = (request["id"] as? String)?.lowercased(), !ref.isEmpty else { return nil }
-        return browser.tabs.first { (Store.testing || $0.bench) && $0.id.uuidString.lowercased().hasPrefix(ref) }
+        return browser.tabs.first { (!Store.strict || $0.bench) && $0.id.uuidString.lowercased().hasPrefix(ref) }
     }
 
     func missing(_ request: [String: Any]) -> [String: Any] {

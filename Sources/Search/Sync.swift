@@ -14,10 +14,10 @@ import Foundation
 // bookmarks, what is hidden on each site, and which extensions are
 // installed — added on the other Mac only when you say so there. What
 // never goes: passwords, sign-ins and cookies, history and tabs (Transfer
-// Tabs is for those), and anything that grants something — the script and
-// Claude switches, the access an extension was given, the camera and the
-// microphone. Those are for each Mac to say for itself, and a file in the
-// cloud is not trusted to say them: only the names below are read from it.
+// Tabs is for those), and anything that grants something — Claude's access
+// to Search (claude.access), the access an extension was given, the camera
+// and the microphone. Those are for each Mac to say for itself, and a file in
+// the cloud is not trusted to say them: only the names below are read from it.
 //
 // The last Mac to change something wins. What another Mac wrote is taken in
 // when Search opens, before anything has been read, since the window reads

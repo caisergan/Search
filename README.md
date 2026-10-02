@@ -93,7 +93,7 @@ A build you make yourself won't be notarized or carry Office Commun's Developer 
 
 ### Testing it without closing it
 
-Turn on **Settings › General › Let a script drive Search** and the running app listens on a Unix socket in its own folder (readable by your user only). `./bench` at the root of the repository speaks it:
+Turn on **Settings › General › Let Claude use Search** (any level; see [mcp/README.md](mcp/README.md#access-levels)) and the running app listens on a Unix socket in its own folder (readable by your user only). `./bench` at the root of the repository speaks it:
 
 ```
 ./bench open https://example.com     # a tab of its own, at the end of your row, marked with a flask

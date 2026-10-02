@@ -7,10 +7,11 @@ It speaks MCP over stdio and drives Search through the bench's socket (see
 Sources/Search/Bench.swift and Agent.swift). Nothing to install: Python 3's
 standard library only.
 
-In Search: Settings › General › "Let a script drive Search" on. To let Claude
-use your own tabs too — the one in front, the ones you have open — also turn
-on "Let Claude use your tabs". Without it Claude works in tabs of its own,
-marked with a flask, which never take the window from you.
+In Search: Settings › General › "Let Claude use Search" on, at one of three
+levels. "Its own tabs": Claude works only in tabs it opens, marked with a
+flask, signed in to nothing of yours. "Signed in as you": the same tabs, with
+your sign-ins. "Your tabs too": also the tab in front and the others you have
+open, and the clipboard. Claude's tabs never take the window from you.
 
 SEARCH_WORLD=test drives a SEARCH_PROBE run instead of your browser.
 """
@@ -29,6 +30,12 @@ WORLD = os.environ.get("SEARCH_WORLD", "").strip().lower()
 FOLDER = os.path.expanduser(f"~/Library/Application Support/Search ({WORLD})" if WORLD else "~/Library/Application Support/Search")
 SOCKET = os.path.join(FOLDER, "bench.sock")
 VERSION = "1.0.0"
+
+# Search answers for every request within its own time (Bench.agentPatience:
+# 30 s, a batch 170, a wait or navigate its seconds + 5) and then stops work
+# on it; the socket waits longer than that, so a slow request is told as
+# Search's answer rather than as silence while its steps go on.
+PATIENCE = 10
 
 # The tab Claude last opened or used: the one a call without a tabId means.
 current = {"id": None}
@@ -62,10 +69,10 @@ def connect(timeout):
                 if os.path.exists(SOCKET):
                     break
     raise Refused("Search isn't listening. Open Search and turn on Settings › General › "
-                  "“Let a script drive Search”.")
+                  "“Let Claude use Search”.")
 
 
-def ask(request, timeout=180):
+def ask(request, timeout=30 + PATIENCE):
     """One request, one answer, over the socket."""
     s = connect(timeout)
     try:
@@ -150,18 +157,18 @@ def spot(args, answer):
 
 # MARK: - the tools
 
-TAB = {"type": "string", "description": "The tab's id from tabs_context. Leave out for the tab Claude last opened or used (or, with “Let Claude use your tabs” on, the one in front)."}
+TAB = {"type": "string", "description": "The tab's id from tabs_context. Leave out for the tab Claude last opened or used (or, with “Let Claude use Search” at “Your tabs too”, the one in front)."}
 REF = {"type": "string", "description": "An element's ref from read_page or find, like r12."}
 
 TOOLS = [
     {
         "name": "tabs_context",
-        "description": "List Search's tabs: their ids, titles, addresses, which one is in front, and which ones Claude opened. Call this first. Claude can use the tabs it opened; the user's own only if they turned on “Let Claude use your tabs”.",
+        "description": "List Search's tabs: their ids, titles, addresses, which one is in front, and which ones Claude opened. Call this first. Claude can use the tabs it opened; the user's own only if they set “Let Claude use Search” to “Your tabs too”.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "tabs_create",
-        "description": "Open a new tab of Claude's own at a URL (localhost works) and wait for it to load. It opens at the end of the row with a flask, out of the user's way, 1280×800 unless width and height say otherwise. mobile: true loads it with an iPhone user agent from the first request — with width 390 and height 844, a phone. show: true brings it to the front (needs “Let Claude use your tabs”).",
+        "description": "Open a new tab of Claude's own at a URL (localhost works) and wait for it to load. It opens at the end of the row with a flask, out of the user's way, 1280×800 unless width and height say otherwise. mobile: true loads it with an iPhone user agent from the first request — with width 390 and height 844, a phone. show: true brings it to the front (needs “Let Claude use Search” at “Your tabs too”).",
         "inputSchema": {"type": "object", "properties": {
             "url": {"type": "string"}, "show": {"type": "boolean"},
             "width": {"type": "number"}, "height": {"type": "number"}, "mobile": {"type": "boolean"}}, "required": ["url"]},
@@ -179,7 +186,7 @@ TOOLS = [
     },
     {
         "name": "tab_show",
-        "description": "Bring a tab to the front of the user's window, so they can watch — at the size resize_page or tabs_create gave it, if they gave one. Needs “Let Claude use your tabs”.",
+        "description": "Bring a tab to the front of the user's window, so they can watch — at the size resize_page or tabs_create gave it, if they gave one. Needs “Let Claude use Search” at “Your tabs too”.",
         "inputSchema": {"type": "object", "properties": {"tabId": TAB}},
     },
     {
@@ -369,7 +376,11 @@ def call(name, args):
     if name == "tabs_context":
         a = ask({"do": "a.tabs"})
         lines = [tab_line(t) for t in a.get("tabs", [])]
-        note = "" if a.get("yours") else "\n\nClaude can use only the tabs marked [claude]. Settings › General › “Let Claude use your tabs” opens the others."
+        level = a.get("level") or ""
+        note = f"\n\nAccess: {level}." if a.get("yours") else (
+            f"\n\nAccess: {level}. Claude can use only the tabs marked [claude]"
+            + (", signed in to nothing of the user's" if level == "Its own tabs" else ", signed in as the user")
+            + ". Settings › General › “Let Claude use Search” at “Your tabs too” opens the others.")
         return [text("\n".join(lines) + note)]
 
     if name == "tabs_create":
@@ -479,7 +490,7 @@ def call(name, args):
         for k in ("selector", "text", "idle"):
             if args.get(k):
                 req[k] = args[k]
-        return [text(said("a.wait", ask(req, timeout=float(args.get("seconds", 10)) + 15)))]
+        return [text(said("a.wait", ask(req, timeout=float(args.get("seconds", 10)) + 5 + PATIENCE)))]
 
     if name == "javascript_tool":
         return [text(said("a.js", ask(with_tab({"do": "a.js", "code": args["code"]}, args))))]
@@ -514,7 +525,7 @@ def call(name, args):
 
     if name == "batch":
         steps = [step(s) for s in args["steps"]]
-        a = ask(with_tab({"do": "a.batch", "steps": steps, "keepGoing": bool(args.get("keepGoing"))}, args), timeout=150)
+        a = ask(with_tab({"do": "a.batch", "steps": steps, "keepGoing": bool(args.get("keepGoing"))}, args), timeout=170 + PATIENCE)
         out = []
         for n, (s, r) in enumerate(zip(steps, a.get("results", []))):
             out.append(f"{n + 1}. {s['do'][2:]}: " + (f"error: {r['error']}" if "error" in r else said(s["do"], r)))

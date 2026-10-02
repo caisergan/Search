@@ -32,6 +32,16 @@ enum Store {
         return asked.isEmpty || asked == "1" || asked == "test" ? "test" : asked
     }()
 
+    /// Whether the rules that guard what Claude and scripts may reach hold
+    /// as they do for the browser somebody is using: always there, and in a
+    /// test run started with SEARCH_CONSENT=real — where the switch's mark
+    /// in the keychain is read and written (under the world's own account),
+    /// and the bench's `tabs` lists only what Claude may see. Other test runs
+    /// have nobody's tabs and are set up with a defaults write.
+    static var strict: Bool {
+        !testing || ProcessInfo.processInfo.environment["SEARCH_CONSENT"] == "real"
+    }
+
     /// A test run there to be weighed and timed rather than driven
     /// (SEARCH_MEASURE beside SEARCH_PROBE). It keeps what the shipped
     /// browser does where test runs otherwise differ — hidden pages slowed
