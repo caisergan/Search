@@ -338,6 +338,9 @@ final class Downloads: NSObject, ObservableObject {
         item.resumeData = nil
         forgetResumeFile(item)
         let partial = item.file
+        // The name is free for anything else from here: a later start again
+        // picks one afresh rather than throwing away what is there by then.
+        item.file = nil
         task?.cancel { _ in
             DispatchQueue.main.async { Downloads.discard(partial) }
         }
@@ -790,6 +793,13 @@ final class Downloads: NSObject, ObservableObject {
             if state == .paused || item.failed {
                 item.resumeData = try? Data(contentsOf: Downloads.resumeFile(for: record.id))
             }
+            // Cancelled, or failed with nothing of its own kept (no resume
+            // data, or not a byte come): the name it had is not its to reuse,
+            // and starting again there would throw away whatever is there now.
+            if state == .cancelled || (item.failed && (item.resumeData == nil || item.received == 0)) {
+                item.file = nil
+                item.resumeData = nil
+            }
             return item
         }
     }
@@ -900,12 +910,30 @@ extension Downloads: WKDownloadDelegate {
             if item.state == .paused, item.resumeData == nil { item.resumeData = resumeData }
             return
         }
+        // The list says it the way a person would; the whole error goes to
+        // the system log, so a failure nobody can make happen again can still
+        // be told apart afterwards.
+        NSLog("Downloads: %@ failed: %@", item.file?.path ?? item.name, String(describing: error as NSError))
         item.task = nil
         item.speed = 0
-        item.resumeData = resumeData
         item.state = .failed(Downloads.reason(error))
         item.finished = Date()
-        if resumeData == nil { Downloads.discard(item.file) }
+        if Downloads.neverMade(error) {
+            // No file was ever its own: nothing to go on from, and whatever
+            // is at that name — now or later — is somebody else's. WebKit
+            // hands back resume data all the same; going on from it writes
+            // over what is there.
+            item.resumeData = nil
+            item.file = nil
+        } else {
+            item.resumeData = resumeData
+            // Half a file of its own, with nothing to go on from it: it goes,
+            // and the name with it.
+            if resumeData == nil {
+                Downloads.discard(item.file)
+                item.file = nil
+            }
+        }
         tick()
         save()
         ended.send(item)
@@ -921,9 +949,34 @@ extension Downloads: WKDownloadDelegate {
         case NSURLErrorTimedOut: return "The server stopped answering"
         case NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost: return "Couldn't reach the server"
         case NSURLErrorBadServerResponse: return "The server sent something unexpected"
-        case NSURLErrorCannotCreateFile, NSURLErrorCannotWriteToFile, NSURLErrorCannotOpenFile: return "Couldn't write the file"
+        case NSURLErrorCannotCreateFile, NSURLErrorCannotWriteToFile, NSURLErrorCannotOpenFile:
+            return "Couldn't write the file" + (disk(error).map { ": \($0)" } ?? "")
         case NSURLErrorNoPermissionsToReadFile, NSURLErrorUserAuthenticationRequired: return "Not allowed"
         default: return error.localizedDescription
+        }
+    }
+
+    /// Failed before WebKit had a file of its own at the destination.
+    private static func neverMade(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == NSURLErrorDomain
+            && [NSURLErrorCannotCreateFile, NSURLErrorCannotOpenFile].contains(error.code)
+    }
+
+    /// Why the disk said no, when WebKit passes that on: the same "couldn't
+    /// write" is a folder Search may not save in, a full disk, or a name
+    /// already taken, and each wants something different done about it.
+    private static func disk(_ error: NSError) -> String? {
+        guard let under = error.userInfo[NSUnderlyingErrorKey] as? NSError, under.domain == NSPOSIXErrorDomain
+        else { return nil }
+        switch Int32(under.code) {
+        case EACCES, EPERM: return "Search isn't allowed to save in that folder"
+        case EEXIST: return "a file by that name is already there"
+        case ENOSPC, EDQUOT: return "the disk is full"
+        case ENOENT, ENOTDIR: return "the folder isn't there"
+        case EROFS: return "the disk is read-only"
+        case ENAMETOOLONG: return "the name is too long"
+        default: return under.localizedDescription
         }
     }
 
