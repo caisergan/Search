@@ -498,6 +498,16 @@ final class Browser: NSObject, ObservableObject {
 
     func dropChoice() { suggesting = nil }
 
+    /// Whether a password used on this site, in this tab, is offered to be
+    /// kept: not in a private tab, not for a site you said never to, not
+    /// with saving off — nor when a password manager extension asked
+    /// Chrome's way to do the saving itself.
+    func keepsPasswords(on host: String, in tab: Tab) -> Bool {
+        guard prefs.savesPasswords, !tab.shy, !Vault.isNever(host) else { return false }
+        if #available(macOS 15.4, *), Extensions.shared.passwordSavingTakenBy != nil { return false }
+        return true
+    }
+
     /// The strong password offered, into every box of the form that asks
     /// for the new one. Offered to be kept once the sign-up has gone through,
     /// as any password is.
@@ -2240,10 +2250,11 @@ final class Browser: NSObject, ObservableObject {
             else { return }
             // A box for a new password: a strong one to use, and nothing
             // kept — an account kept for the site is no use in a sign-up.
-            if tab.freshField {
-                suggesting = prefs.suggestsPasswords
-                    ? Suggesting(tab: tab.id, spot: spot, logins: [], host: host, clear: tab.address?.scheme?.lowercased() == "http", strong: AutoFill.strongPassword())
-                    : nil
+            // Only where it will be offered to be kept once the sign-up has
+            // gone through: a random password nobody is asked to keep is an
+            // account nobody can sign in to again.
+            if tab.freshField, prefs.suggestsPasswords, keepsPasswords(on: host, in: tab) {
+                suggesting = Suggesting(tab: tab.id, spot: spot, logins: [], host: host, clear: tab.address?.scheme?.lowercased() == "http", strong: AutoFill.strongPassword())
                 return
             }
             guard prefs.fillsPasswords else { return }
@@ -2261,12 +2272,7 @@ final class Browser: NSObject, ObservableObject {
         }
 
         tab.onCredentials = { [weak self] tab, host, user, password, clear in
-            guard let self, prefs.savesPasswords, !password.isEmpty, !tab.shy,
-                  !Vault.isNever(host)
-            else { return }
-            // A password manager extension that asked Chrome's way to do the
-            // saving itself.
-            if #available(macOS 15.4, *), Extensions.shared.passwordSavingTakenBy != nil { return }
+            guard let self, !password.isEmpty, keepsPasswords(on: host, in: tab) else { return }
             // Only the account just signed in with is read, not the site's
             // every one — and not at all if its prompt was denied already.
             let same = Vault.logins(for: host).first { $0.user == user }
