@@ -39,6 +39,11 @@
     ./bench column PATH [HEIGHT]       the column of tabs, drawn off screen to a PNG
     ./bench consent [grant|revoke]     test run: the mark Settings' bench switch leaves in the keychain, in this
                                        world's own account — whether it is there, before and after
+    ./bench pointer X Y [window|panel|other] [WAIT] | release
+                                       test run: the pointer a folded column or strip follows, put at X Y by
+                                       hand (points from the window's top left, negative above or left of it),
+                                       over the window, a panel of the app's or something else; then, WAIT
+                                       seconds on, whether it is out. release: the real pointer again
     ./bench fold PATH [WIDTH]          test run: the folded strip or column out over the page (ui folded on,
                                        ui peek on), drawn off screen over red — red shows where the page would
     ./bench space [new NAME [fresh]|go N|delete|swipe DX|hold DX|release|move N]
@@ -240,6 +245,17 @@ def main(argv):
     elif verb == "consent":
         if len(args) > 1 or (args and args[0] not in ("grant", "revoke")): sys.exit("usage: bench consent [grant|revoke]")
         if args: request["action"] = args[0]
+    elif verb == "pointer":
+        usage = "usage: bench pointer X Y [window|panel|other] [WAIT] | release"
+        if args == ["release"]:
+            request["release"] = True
+        elif 2 <= len(args) <= 4:
+            request["x"], request["y"] = float(args[0]), float(args[1])
+            for a in args[2:]:
+                if a in ("window", "panel", "other"): request["under"] = a
+                else: request["wait"] = float(a)
+        else:
+            sys.exit(usage)
     elif verb == "fold":
         if not 1 <= len(args) <= 2: sys.exit("usage: bench fold PATH [WIDTH]")
         request["path"] = os.path.abspath(args[0])

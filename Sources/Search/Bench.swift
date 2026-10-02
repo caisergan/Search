@@ -1648,6 +1648,32 @@ final class Bench {
             }
             answer(["before": before, "after": Consent.given])
 
+        case "pointer":
+            // The pointer a folded column or strip follows (see Fold.swift),
+            // put at a point of the window by hand — points from its top
+            // left, negative above it or to its left — over the window, one
+            // of the app's panels, or something else, as said; the real one
+            // is not looked at meanwhile, and `release` gives it back. Then,
+            // WAIT seconds on, whether the column or the strip is out.
+            guard Store.testing else { answer(["error": "pointer only works on a --test run"]); return }
+            guard let window = Links.window else { answer(["error": "no window"]); return }
+            if request["release"] as? Bool == true {
+                Fold.virtual = nil
+                answer(["released": true, "peeking": browser.peeking])
+                return
+            }
+            guard let x = request["x"] as? Double, let y = request["y"] as? Double else { answer(["error": "pointer needs an x and a y"]); return }
+            let under: Fold.Under = switch request["under"] as? String {
+            case "panel": .panel
+            case "other": .other
+            default: .window
+            }
+            Fold.virtual = (NSPoint(x: window.frame.minX + x, y: window.frame.maxY - y), under)
+            NotificationCenter.default.post(name: Fold.steered, object: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + (request["wait"] as? Double ?? 0.1)) {
+                answer(["peeking": browser.peeking, "folded": browser.folded, "watched": Fold.watching])
+            }
+
         case "fold":
             // The strip or the column as it comes out over the page once
             // folded (see Fold.swift), drawn off screen over red: whatever of
@@ -1868,7 +1894,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "pin", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "fold", "consent", "site", "little", "ui",
+                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "pin", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "fold", "pointer", "consent", "site", "little", "ui",
             ]])
         }
     }
