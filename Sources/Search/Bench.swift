@@ -25,7 +25,7 @@ final class Bench {
     static let shared = Bench()
     private var awake: NSObjectProtocol?
 
-    private weak var browser: Browser?
+    private(set) weak var browser: Browser?
     private var listener: Int32 = -1
     private var accepting: DispatchSourceRead?
     private var clients: [Int32: Client] = [:]

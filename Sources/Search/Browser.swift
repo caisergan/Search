@@ -1835,10 +1835,11 @@ final class Browser: NSObject, ObservableObject {
     /// A page for the bench: at the end of the row, behind whatever you are
     /// looking at, and marked as not yours.
     @discardableResult
-    func benchOpen(_ url: URL) -> Tab {
+    func benchOpen(_ url: URL, userAgent: String? = nil) -> Tab {
         let url = Browser.page(url)
         let tab = Tab(bench: true, configuration: Browser.extensionConfiguration(for: url))
         prepare(tab)
+        if let userAgent { tab.web.customUserAgent = userAgent }
         tabs.append(tab)
         tab.go(to: url)
         return tab

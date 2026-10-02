@@ -161,14 +161,14 @@ TOOLS = [
     },
     {
         "name": "tabs_create",
-        "description": "Open a new tab of Claude's own at a URL (localhost works) and wait for it to load. It opens at the end of the row with a flask, out of the user's way, 1280×800 unless width and height say otherwise. show: true brings it to the front (needs “Let Claude use your tabs”).",
+        "description": "Open a new tab of Claude's own at a URL (localhost works) and wait for it to load. It opens at the end of the row with a flask, out of the user's way, 1280×800 unless width and height say otherwise. mobile: true loads it with an iPhone user agent from the first request — with width 390 and height 844, a phone. show: true brings it to the front (needs “Let Claude use your tabs”).",
         "inputSchema": {"type": "object", "properties": {
             "url": {"type": "string"}, "show": {"type": "boolean"},
-            "width": {"type": "number"}, "height": {"type": "number"}}, "required": ["url"]},
+            "width": {"type": "number"}, "height": {"type": "number"}, "mobile": {"type": "boolean"}}, "required": ["url"]},
     },
     {
         "name": "resize_page",
-        "description": "Give a tab of Claude's another viewport size, to check a layout: e.g. 390×844 with mobile: true for a phone (also sends an iPhone user agent), 820×1180 for a tablet, 1920×1080. Not for a tab shown in the user's window.",
+        "description": "Give a tab of Claude's another viewport size, to check a layout: e.g. 390×844 with mobile: true for a phone, 820×1180 for a tablet, 1920×1080. mobile: true switches to an iPhone user agent, mobile: false back to the Mac's; either change reloads the page, so the site serves what it serves a phone. Answers once the page has laid itself out at the new size. A tab in the user's window keeps the size there too, in the middle. Only Claude's own tabs.",
         "inputSchema": {"type": "object", "properties": {
             "tabId": TAB, "width": {"type": "number"}, "height": {"type": "number"}, "mobile": {"type": "boolean"}}, "required": ["width", "height"]},
     },
@@ -179,7 +179,7 @@ TOOLS = [
     },
     {
         "name": "tab_show",
-        "description": "Bring a tab to the front of the user's window, so they can watch. Needs “Let Claude use your tabs”.",
+        "description": "Bring a tab to the front of the user's window, so they can watch — at the size resize_page or tabs_create gave it, if they gave one. Needs “Let Claude use your tabs”.",
         "inputSchema": {"type": "object", "properties": {"tabId": TAB}},
     },
     {
@@ -376,6 +376,8 @@ def call(name, args):
         req = {"do": "a.open", "url": args["url"], "show": bool(args.get("show"))}
         if args.get("width") and args.get("height"):
             req["width"], req["height"] = float(args["width"]), float(args["height"])
+        if args.get("mobile"):
+            req["mobile"] = True
         a = ask(req)
         current["id"] = a.get("id")
         return [text(said("a.open", a))]
@@ -394,7 +396,16 @@ def call(name, args):
         if "mobile" in args:
             req["mobile"] = bool(args["mobile"])
         a = ask(req)
-        return [text(f"{a['width']}×{a['height']}" + (" as a phone" if a.get("mobile") else ""))]
+        words = f"{a['width']}×{a['height']}" + (" as a phone" if a.get("mobile") else "")
+        if a.get("reloaded"):
+            words += ", reloaded with that user agent"
+        # A site's own zoom lays the page out at other numbers than it was given.
+        page = a.get("page")
+        if page and page != [a["width"], a["height"]]:
+            words += f"; the page itself says {page[0]}×{page[1]}"
+        if a.get("front"):
+            words += " — in the user's window, shown at that size"
+        return [text(words)]
 
     if name == "upload_file":
         files, total = [], 0

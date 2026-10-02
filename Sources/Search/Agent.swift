@@ -233,7 +233,9 @@ extension Bench {
                 answer(["error": "a.open needs a web address"])
                 return
             }
-            let tab = browser.benchOpen(url)
+            // As a phone from the first request: a site picks its markup by
+            // the user agent it is sent.
+            let tab = browser.benchOpen(url, userAgent: request["mobile"] as? Bool == true ? Agent.phone : nil)
             if let size = Agent.size(request) { Agent.sizes[tab.id] = size }
             if request["show"] as? Bool == true, browser.prefs.claudeTabs { browser.select(tab) } else { house(tab) }
             if request["wait"] as? Bool == false { answer(describe(tab)); return }
@@ -247,8 +249,8 @@ extension Bench {
                 return
             }
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
-            // In your window, at your window's size.
-            tab.web.autoresizingMask = [.width, .height]
+            // In your window: at its size, or at the size Claude gave the
+            // tab, in the middle of it (see StageView).
             browser.select(tab)
             answer(describe(tab))
 
@@ -261,19 +263,62 @@ extension Bench {
 
         case "a.resize":
             // A tab of Claude's at any size: a phone's, a tablet's, a wide
-            // screen's. Yours take the size of your window.
+            // screen's — in its room, or in front of you, where the stage
+            // shows it at that size in the middle of the page's place, as a
+            // browser's responsive design mode does (see StageView). A tab
+            // in front used to be refused, and a sized one brought there took
+            // your window's size: a click on Claude's tab, to watch its phone
+            // layout, was the end of the phone layout. Yours take the size of
+            // your window.
             guard let tab = agentTab(request, in: browser) else { answer(noTab); return }
-            guard tab.bench else { answer(["error": "only Claude's own tabs can be resized — yours follow your window"]); return }
+            guard tab.bench else {
+                answer(["error": "only Claude's own tabs can be resized — yours follow your window; tabs_create opens one of Claude's at any size, as a phone with mobile"])
+                return
+            }
             guard let size = Agent.size(request) else { answer(["error": "a.resize needs width and height, 200 to 4000"]); return }
-            guard tab.id != browser.activeID else { answer(["error": "the tab is in front, at your window's size — resize a tab that isn't shown"]); return }
             Agent.sizes[tab.id] = size
-            if let mobile = request["mobile"] as? Bool { tab.web.customUserAgent = mobile ? Agent.phone : nil }
-            tab.web.removeFromSuperview()
+            // A phone's user agent, or the Mac's again. A page reads it as it
+            // loads — the server picks its markup by it, scripts decide once
+            // — so a change of it loads the page again, as Safari's Develop ›
+            // User Agent does: without that, the page was the one served to a
+            // Mac, at a phone's width.
+            var reload = false
+            let asPhone = !(tab.web.customUserAgent ?? "").isEmpty
+            if let mobile = request["mobile"] as? Bool, mobile != asPhone {
+                tab.web.customUserAgent = mobile ? Agent.phone : nil
+                reload = tab.address != nil && !tab.isBlank
+            }
+            if tab.id == browser.activeID, let stage = tab.web.superview {
+                stage.needsLayout = true
+                stage.layoutSubtreeIfNeeded()
+            } else {
+                tab.web.removeFromSuperview()
+            }
             ready(tab)
-            // A beat for the page to lay itself out at its new size.
-            tab.web.evaluateJavaScript("0") { _, _ in
+            let front = tab.id == browser.activeID
+            // Answered once the page has laid itself out at its new size: the
+            // answer used to come before the page had heard of it, and what
+            // Claude read or pictured next could still be the old layout.
+            let told: () -> Void = {
+                tab.web.callAsyncJavaScript(Agent.laidOut, arguments: [:], in: nil, in: Web.world) { result in
+                    MainActor.assumeIsolated {
+                        let seen = ((try? result.get()) as? [Any])?.compactMap { ($0 as? NSNumber)?.intValue } ?? []
+                        var out: [String: Any] = ["ok": true, "width": Int(size.width), "height": Int(size.height),
+                                                  "mobile": !(tab.web.customUserAgent ?? "").isEmpty, "front": front, "reloaded": reload]
+                        if seen.count == 2 { out["page"] = seen }
+                        answer(out)
+                    }
+                }
+            }
+            guard reload else { return told() }
+            let limit = Date().addingTimeInterval(request["seconds"] as? Double ?? 20)
+            let mark = UUID().uuidString
+            tab.web.evaluateJavaScript("window.__claudeOld = '\(mark)'", in: nil, in: Web.world) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    answer(["ok": true, "width": Int(size.width), "height": Int(size.height), "mobile": !(tab.web.customUserAgent ?? "").isEmpty])
+                    tab.reload()
+                    self?.arrived(tab, unmarked: mark, within: 1.5) {
+                        self?.wait(for: tab, until: limit) { _ in told() }
+                    }
                 }
             }
 
@@ -931,6 +976,28 @@ enum Agent {
     static var popups: [(from: Tab.ID, to: Tab.ID)] = []
     /// The size a tab of Claude's was given, when not the usual.
     static var sizes: [Tab.ID: NSSize] = [:]
+
+    /// The size Claude gave the tab a page belongs to, wherever the page is
+    /// laid out: in its room, waiting backstage, and in front of you, where
+    /// the stage shows it at that size (see StageView). Found by the page:
+    /// the stage and the backstage hold pages, not tabs.
+    static func fixedSize(of page: NSView) -> NSSize? {
+        guard !sizes.isEmpty, let tab = Bench.shared.browser?.tabs.first(where: { $0.built === page }) else { return nil }
+        return sizes[tab.id]
+    }
+
+    /// Two frames at the page's new size — its resize handlers, its media
+    /// query listeners and whatever they set off have run by then — or a
+    /// second, for a page that draws none. The size the page itself says
+    /// it has, which a site's zoom can make other than the one it was given.
+    static let laidOut = """
+    await new Promise(function (done) {
+      var over = false, end = function () { if (!over) { over = true; done(); } };
+      requestAnimationFrame(function () { requestAnimationFrame(end); });
+      setTimeout(end, 1000);
+    });
+    return [innerWidth, innerHeight];
+    """
 
     /// The keys Claude pressed, lately. A key a page doesn't use, WebKit
     /// sends on through the app — NSApp.sendEvent — which hands it to the
