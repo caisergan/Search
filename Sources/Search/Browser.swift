@@ -2018,17 +2018,6 @@ final class Browser: NSObject, ObservableObject {
         }
     }
 
-    /// ⌘P. The system's own sheet, which is also where "save as PDF" lives.
-    func printPage() {
-        guard let tab = active, !tab.isBlank, let window = NSApp.keyWindow else { return }
-        let info = NSPrintInfo.shared
-        info.horizontalPagination = .fit
-        info.isHorizontallyCentered = false
-        let job = tab.web.printOperation(with: info)
-        job.view?.frame = tab.web.bounds
-        job.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
-    }
-
     /// A space's row as its session left it, made without touching the one
     /// on screen: tabs with an address and no page yet, which cost next to
     /// nothing until one is looked at (see Spaces.swift).
