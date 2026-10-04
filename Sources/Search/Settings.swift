@@ -274,13 +274,25 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.floatsAway)
             }
             Rule()
-            Line("Let a script drive Search", "A local socket for testing. Its tabs open beside yours with a flask on them and never take over — see ./bench") {
-                Switch(on: $prefs.bench)
+            // One setting for how far Claude reaches, off to your own tabs
+            // (see ClaudeAccess); on, it starts at the least.
+            Line("Let Claude use Search", prefs.claude.detail) {
+                Switch(on: Binding(get: { prefs.claude != .off }, set: { prefs.claude = $0 ? .own : .off }))
             }
-            if prefs.bench {
-                Rule()
-                Line("Let Claude use your tabs", "Claude, through the script, can read, click and type in the tab in front and your other tabs, not only the ones it opens — never a private tab or an extension's page") {
-                    Switch(on: $prefs.claudeTabs)
+            if prefs.claude != .off {
+                Segmented(options: ClaudeAccess.levels.map { ($0, $0.title) }, selection: $prefs.claude, wide: true)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, prefs.claude == .own ? 6 : 12)
+                if prefs.claude == .own {
+                    HStack {
+                        Spacer()
+                        Pill("Forget Claude's sign-ins") {
+                            Bench.shared.forgetClaudeSignIns(browser: browser)
+                            browser.announce("Claude's sign-ins are gone")
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
                 }
             }
         }

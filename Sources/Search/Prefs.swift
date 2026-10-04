@@ -23,6 +23,53 @@ enum Glyph: String, CaseIterable, Identifiable {
     }
 }
 
+/// How far Claude reaches in Search, over the local socket (see Agent.swift
+/// and Bench.swift). One setting, from nothing to your own tabs, each level
+/// everything the one below it allows and more.
+enum ClaudeAccess: Int, CaseIterable, Identifiable, Comparable {
+    /// The socket is closed: neither Claude nor ./bench gets in.
+    case off = 0
+    /// Tabs of Claude's own, signed in as nobody: a store of their own that
+    /// Claude signs in to itself, and no extension in them.
+    case own = 1
+    /// Tabs of Claude's own, signed in wherever you are.
+    case signedIn = 2
+    /// Your tabs as well — never a private one or an extension's page — and
+    /// the clipboard.
+    case yours = 3
+
+    var id: Int { rawValue }
+
+    static func < (a: ClaudeAccess, b: ClaudeAccess) -> Bool { a.rawValue < b.rawValue }
+
+    /// The levels there are to pick from once it is on.
+    static let levels: [ClaudeAccess] = [.own, .signedIn, .yours]
+
+    /// Short, for the control.
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .own: return "Its own tabs"
+        case .signedIn: return "Signed in as you"
+        case .yours: return "Your tabs too"
+        }
+    }
+
+    /// What it lets Claude do, under the setting.
+    var detail: String {
+        switch self {
+        case .off:
+            return "Claude Code, through mcp/search_mcp.py, can open tabs here and read, click and type in them. Also opens the socket ./bench uses"
+        case .own:
+            return "Lowest risk. Claude works only in tabs it opens, with a flask on them — signed in to nothing of yours, with no extensions, and it can't see your tabs"
+        case .signedIn:
+            return "Claude's own tabs share your sign-ins: what you are signed in to, it is too. It still can't see or use your tabs"
+        case .yours:
+            return "Highest risk. Claude can also read, click and type in the tab in front and your other tabs, bring a tab forward, and copy and paste through your clipboard — never in a private tab or an extension's page"
+        }
+    }
+}
+
 /// How long the pointer rests on the left edge before a column that hides
 /// comes out: at once for a hand that knows where it is going, longer for
 /// one that keeps crossing the edge on its way to the Dock.
@@ -178,31 +225,69 @@ enum NewTabSpot: String, CaseIterable, Identifiable {
 final class Preferences: ObservableObject {
     private let store = Store.settings
 
-    /// A local socket a script can drive the browser through, in tabs of its
-    /// own. Off unless asked for — in Settings, which is also what leaves
-    /// the mark it needs at launch (see Bench.Consent).
-    @Published var bench: Bool {
+    /// How far Claude reaches in Search — and whether the local socket it and
+    /// ./bench speak over is open at all. Off unless asked for, in Settings,
+    /// which also leaves a mark in the keychain holding the level (see
+    /// Bench.Consent): a level the settings file says without the mark
+    /// behind it is not taken on its word at launch, since any program you
+    /// run can write that file — it is held at the mark's, and you are asked.
+    @Published var claude: ClaudeAccess {
         didSet {
-            store.set(bench, forKey: "bench")
-            bench ? Bench.Consent.grant() : Bench.Consent.revoke()
-            // Off with it, so that it is never found on later, unasked.
-            if !bench, claudeTabs { claudeTabs = false }
+            guard claude != oldValue else { return }
+            store.set(claude.rawValue, forKey: "claude.access")
+            // Test worlds are switched on with a defaults write of `bench`
+            // (see skill/search-bench); kept in step, so one written after
+            // this is known for what it is.
+            if Store.testing { store.set(claude != .off, forKey: "bench") }
+            if Store.strict {
+                claude == .off ? Bench.Consent.revoke("access") : Bench.Consent.grant("access", level: claude.rawValue)
+            }
+            claudeWithheld = nil
         }
     }
-    /// Claude, over the bench, may read and use your own tabs as well as the
-    /// ones it opened itself (see Agent.swift). Off unless asked for, and
-    /// kept like the bench's switch: with a mark in the keychain, without
-    /// which the setting is put back to off at launch. A test world has
-    /// nobody's tabs, and has it on unless set.
-    @Published var claudeTabs: Bool {
-        didSet {
-            store.set(claudeTabs, forKey: "claude.tabs")
-            claudeTabs ? Bench.Consent.grant("claude") : Bench.Consent.revoke("claude")
-        }
+    /// The level the settings file asked for at launch, when it was higher
+    /// than the mark the switch left — Claude is held at the mark's until you
+    /// say otherwise (see Browser.claudeAsking).
+    private(set) var claudeWithheld: ClaudeAccess?
+
+    /// The level as it was, kept: asked whether to raise it, you said no.
+    func keepClaudeWithheld() {
+        store.set(claude.rawValue, forKey: "claude.access")
+        if Store.testing { store.set(claude != .off, forKey: "bench") }
+        claudeWithheld = nil
     }
-    /// The setting said on at launch with no mark from the switch behind it,
-    /// and was put back to off.
-    private(set) var benchRefused = false
+
+    /// The level to start at, and the one the settings file wanted when
+    /// that was more than the mark allows.
+    private static func claudeAtLaunch(_ store: UserDefaults) -> (ClaudeAccess, ClaudeAccess?) {
+        migrateClaude(store)
+        var wanted = ClaudeAccess(rawValue: store.integer(forKey: "claude.access")) ?? .off
+        if Store.testing, wanted == .off, store.bool(forKey: "bench") { wanted = .yours }
+        guard Store.strict, wanted != .off else { return (wanted, nil) }
+        let marked = Bench.Consent.level("access") ?? 0
+        let allowed = ClaudeAccess(rawValue: min(wanted.rawValue, marked)) ?? .off
+        return (allowed, allowed < wanted ? wanted : nil)
+    }
+
+    /// From the two switches there were — "Let a script drive Search" and
+    /// "Let Claude use your tabs" — to the one level, once. Only the first
+    /// on was what Claude has at "Signed in as you"; both, "Your tabs too".
+    /// A switch whose mark is gone is still carried over as it was set, and
+    /// held back at launch until you say (see claudeAtLaunch).
+    private static func migrateClaude(_ store: UserDefaults) {
+        guard Store.strict, store.object(forKey: "claude.access") == nil else { return }
+        let bench = store.bool(forKey: "bench")
+        let tabs = bench && store.bool(forKey: "claude.tabs")
+        let level: ClaudeAccess = tabs ? .yours : bench ? .signedIn : .off
+        store.set(level.rawValue, forKey: "claude.access")
+        let marked = bench && Bench.Consent.level("") != nil && (!tabs || Bench.Consent.level("claude") != nil)
+        if level != .off, marked { Bench.Consent.grant("access", level: level.rawValue) }
+        store.removeObject(forKey: "claude.tabs")
+        if !Store.testing { store.removeObject(forKey: "bench") }
+        Bench.Consent.revoke("")
+        Bench.Consent.revoke("claude")
+    }
+
     /// Light, dark, or the Mac's own.
     @Published var look: Look {
         didSet {
@@ -469,21 +554,13 @@ final class Preferences: ObservableObject {
     }
 
     init() {
+        let (claude, withheld) = Preferences.claudeAtLaunch(store)
+        self.claude = claude
+        claudeWithheld = withheld
         // Carried over from when there were four ways of holding the browser
         // and this was one of them.
         // The Mac's own unless asked otherwise — a Mac in dark mode expects
         // a dark browser, pages included.
-        let scripted = store.bool(forKey: "bench")
-        let allowed = scripted && (Store.testing || Bench.Consent.given)
-        bench = allowed
-        if scripted, !allowed {
-            benchRefused = true
-            store.set(false, forKey: "bench")
-        }
-        let claude = store.object(forKey: "claude.tabs") as? Bool ?? Store.testing
-        let claudeAllowed = claude && allowed && (Store.testing || Bench.Consent.given("claude"))
-        claudeTabs = claudeAllowed
-        if claude, !claudeAllowed { store.set(false, forKey: "claude.tabs") }
         let chosen = store.string(forKey: "look").flatMap(Look.init) ?? .system
         look = chosen
         // Before the first window, and not deferred: the window that is about

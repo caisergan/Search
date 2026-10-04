@@ -531,6 +531,10 @@ struct ContentView: View {
                 keepAsking(offer)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            if let level = browser.claudeAsking {
+                claudeAsking(level)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             StoreOffer(browser: browser)
             if browser.veiling {
                 hint("Click anything to hide it   ⌘Z undo   esc done")
@@ -541,6 +545,7 @@ struct ContentView: View {
         .animation(Motion.settle, value: browser.veiling)
 
         .animation(Motion.settle, value: browser.offering)
+        .animation(Motion.settle, value: browser.claudeAsking)
     }
 
     /// The address field: raised over a page by ⌘L or ⌘K, and standing on its
@@ -746,6 +751,43 @@ struct ContentView: View {
             .background(Palette.ground, in: Capsule())
             .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
             .shadow(color: .black.opacity(0.10), radius: 18, y: 6)
+    }
+
+    /// Claude's access, as the settings file had it at launch, higher than
+    /// Settings left it — a build signed another way can't read the mark the
+    /// last one left, or something other than you wrote the file. Held where
+    /// Settings put it until you say (see Preferences.claude).
+    private func claudeAsking(_ level: ClaudeAccess) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Palette.muted)
+            Text("Let Claude use Search — “\(level.title)”? It was set outside Settings")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Palette.ink)
+                .lineLimit(1)
+            Button { browser.allowClaude() } label: {
+                Text("Allow")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.ground)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .background(Palette.ink, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            Button { browser.keepClaudeAsIs() } label: {
+                Text("Don't allow")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.muted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
+        .padding(.vertical, 9)
+        .background(Palette.ground, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 20, y: 6)
     }
 
     /// Offered once, answered once. The password is never shown back to you —

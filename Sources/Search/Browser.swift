@@ -943,6 +943,25 @@ final class Browser: NSObject, ObservableObject {
 
     /// A line that rises from the bottom, says one thing, and leaves.
     @Published private(set) var announcement: String?
+    /// Claude's access as the settings file had it at launch, higher than
+    /// Settings left it: the question at the bottom of the window, until
+    /// answered (see Preferences.claude).
+    @Published private(set) var claudeAsking: ClaudeAccess?
+    /// The level Claude had before the last change, to tell going up from down.
+    private var claudeWas = ClaudeAccess.off
+
+    /// Yes: the level the settings file had, with Settings' own mark now.
+    func allowClaude() {
+        guard let level = claudeAsking else { return }
+        claudeAsking = nil
+        prefs.claude = level
+    }
+
+    /// No: Claude stays where Settings last put it, and isn't asked again.
+    func keepClaudeAsIs() {
+        claudeAsking = nil
+        prefs.keepClaudeWithheld()
+    }
 
     /// ⌘⇧C. The address, in the clipboard, and a line that says as much.
     func copyAddress() {
@@ -1046,11 +1065,11 @@ final class Browser: NSObject, ObservableObject {
         Shield.shared.enabled = prefs.shielded
         Shield.shared.compile()
         if #available(macOS 15.4, *) { Extensions.shared.start(for: self) }
-        if prefs.bench {
-            Bench.shared.start(for: self)
-        } else if prefs.benchRefused {
-            announce("“Let a script drive Search” was turned on outside Settings, and stays off")
-        }
+        if prefs.claude != .off { Bench.shared.start(for: self) }
+        // Set higher than Settings left it: held at what Settings said, and
+        // you are asked (see Preferences.claude).
+        claudeAsking = prefs.claudeWithheld
+        claudeWas = prefs.claude
         welcoming = !prefs.welcomed
         // Asked to stay out of the way: it starts that way (see Fold.swift).
         folded = prefs.sidebar && prefs.sideHides
@@ -1260,12 +1279,22 @@ final class Browser: NSObject, ObservableObject {
             }
             .store(in: &bag)
 
-        prefs.$bench
+        prefs.$claude
             .dropFirst()
-            .sink { [weak self] on in
+            .removeDuplicates()
+            .sink { [weak self] level in
                 guard let self else { return }
-                if on { Bench.shared.start(for: self) } else { Bench.shared.stop() }
-                announce(on ? "Scripts can drive Search — see ./bench" : "The bench is closed")
+                let was = claudeWas
+                claudeWas = level
+                if level == .off {
+                    // A turn later: a request that turned it off still gets its answer.
+                    DispatchQueue.main.async { if self.prefs.claude == .off { Bench.shared.stop() } }
+                    announce("Claude can't use Search")
+                    return
+                }
+                if was == .off { Bench.shared.start(for: self) }
+                Bench.shared.access(changed: level, browser: self)
+                if was != .off { announce("Claude: \(level.title.lowercased())") } else { announce("Claude can use Search: \(level.title.lowercased())") }
             }
             .store(in: &bag)
 
@@ -1856,7 +1885,11 @@ final class Browser: NSObject, ObservableObject {
     @discardableResult
     func benchOpen(_ url: URL, userAgent: String? = nil) -> Tab {
         let url = Browser.page(url)
-        let tab = Tab(bench: true, configuration: Browser.extensionConfiguration(for: url))
+        // At "Its own tabs", in Claude's own store, signed in to nothing of
+        // yours, and without extensions — a password manager's would fill in
+        // your passwords for it (see Agent.ownStore).
+        let own = prefs.claude == .own ? Web.configuration(store: Agent.ownStore, extensions: false) : nil
+        let tab = Tab(bench: true, configuration: own ?? Browser.extensionConfiguration(for: url))
         prepare(tab)
         if let userAgent { tab.web.customUserAgent = userAgent }
         tabs.append(tab)

@@ -37,14 +37,14 @@ One process per world. Quit a process only after its executable path is this rep
 
 1. `./bench --test tabs` (or `--world NAME`). A tab list means that world is listening. Do not launch another.
 2. If it prints `Search isn't listening`:
-   - Nothing running for that world: `defaults write SUITE bench -bool true`, then `./fresh.sh again`. For a named world, `SEARCH_PROBE=NAME ./fresh.sh again`.
+   - Nothing running for that world: `defaults write SUITE bench -bool true` (Claude's access at "Your tabs too"; `defaults write SUITE claude.access -int N` for level N, 1–3), then `./fresh.sh again`. For a named world, `SEARCH_PROBE=NAME ./fresh.sh again`.
    - A test process is up but the socket is dead: write the default, terminate that pid, then `./fresh.sh again`. The switch is read at launch.
 3. Retry `./bench --test tabs` until it prints. Launch takes a moment.
 4. The suite is `com.officecommun.search.test`, or `com.officecommun.search.test.NAME` for a named world.
 
 `./fresh.sh` with no argument deletes that world's folder, settings suite, and WebKit store, then opens it. The suite delete clears the `bench` switch, so a wipe has to be followed by the defaults write, a quit of the process it just opened, and `./fresh.sh again`. Wipe only when they asked for a clean browser.
 
-If `./bench tabs` (no flag) is not listening, ask them to turn on **Settings › General › Let a script drive Search**. Do not write defaults for the installed app.
+If `./bench tabs` (no flag) is not listening, ask them to turn on **Settings › General › Let Claude use Search**. Do not write defaults for the installed app. On the installed browser `tabs` lists only what Claude's level lets it see.
 
 `./fresh.sh` builds `build/Search.app` when that bundle is missing.
 

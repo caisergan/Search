@@ -6,11 +6,10 @@ screenshots.
 
 ## Set it up
 
-1. In Search, turn on Settings › General › **Let a script drive Search**.
-2. To let Claude use your own tabs as well, also turn on **Let Claude use your
-   tabs**. Without it, Claude works only in tabs it opens itself. They have a
-   flask and never take the window from you.
-3. Add the server to Claude Code:
+1. In Search, turn on Settings › General › **Let Claude use Search** and pick
+   how far it reaches (see [Access levels](#access-levels)). It stays as you
+   set it from one launch to the next.
+2. Add the server to Claude Code:
 
    ```sh
    claude mcp add --scope user search -- python3 /path/to/Search/mcp/search_mcp.py
@@ -62,13 +61,39 @@ screenshots.
   the site's cache first, for a server that says a changed file hasn't
   changed.
 
+## Access levels
+
+One setting, **Let Claude use Search**, decides how far Claude reaches. Each
+level allows everything the one before it does, and more.
+
+| Level | Claude's own tabs | Your tabs | Clipboard |
+|---|---|---|---|
+| **Off** | — the socket is closed, for `./bench` too | — | — |
+| **Its own tabs** (lowest risk) | Signed in to nothing of yours: a cookie store of Claude's own, kept between launches, with no extensions in it. *Forget Claude's sign-ins* empties it | Not seen, not even their addresses | No |
+| **Signed in as you** | Share your cookies and sign-ins: what you are signed in to, Claude is too | Not seen | No |
+| **Your tabs too** (highest risk) | As above | The one in front and the others — read, click, type, bring forward | ⌘C, ⌘X, ⌘V |
+
+Changing the level closes Claude's tabs that don't fit the new one: going
+down to *Its own tabs* closes every tab of Claude's that was signed in as
+you.
+
+The level is kept in Search's settings and, beside it, as a mark in the
+keychain that only Search itself can write. A level the settings file says
+without that mark — written by another program, or left by a build of Search
+signed another way — isn't taken on its word: Search starts at the level the
+mark allows and asks at the bottom of the window, *Allow* or *Don't allow*.
+
 ## Safety
 
 - Claude reaches only web pages. It never reaches a private tab, an
-  extension's page (a password manager's vault is one) or a `file:` address.
-- Your tabs are off-limits until you turn on "Let Claude use your tabs".
-  Until then Claude can't even see their addresses. Turning off "Let a script
-  drive Search" turns it off too.
+  extension's page (a password manager's vault is one) or a `file:` address,
+  at any level.
+- Below *Your tabs too*, your tabs are off-limits: Claude can't even see
+  their addresses, through the MCP server or through the socket itself.
+- From *Signed in as you* up, Claude's own tabs are signed in as you. Pick
+  *Its own tabs* when Claude doesn't need your accounts.
+- Copy, cut and paste reach your clipboard only at *Your tabs too*; below it
+  Claude types text instead.
 - Keys Claude presses never reach Search itself. A key the page doesn't use
   stops there instead of going to your window. ⌘ keys are sent to the page as
   its own events, so ⌘W can't close your tab and ⌘Q can't quit.
@@ -77,8 +102,11 @@ screenshots.
   as events.
 - `javascript_tool` runs in the page's own world only, never in Search's.
   Code that throws is reported, not run a second time.
-- Any program running as you can use the socket while "Let a script drive
-  Search" is on. Keep it off when you aren't using Claude with Search.
+- Any program running as you can use the socket while "Let Claude use
+  Search" is on, with the same reach as Claude. Keep it off when you aren't
+  using Claude with Search.
+- A request that runs out of time is answered as failed and stops there: the
+  steps of a batch after it are not done.
 
 ## How it's faster than a Chrome extension
 
