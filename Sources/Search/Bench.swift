@@ -1689,6 +1689,28 @@ final class Bench {
                 window.contentView = nil
             }
 
+        case "print":
+            // What printing is doing: whether a sheet is up and the last
+            // print, from a frame or the page. `to PATH` writes the next print
+            // to a PDF there, without the sheet, so what went on the paper can
+            // be read; `cancel` puts the sheet away, as its Cancel button does.
+            // Only on a SEARCH_PROBE run.
+            guard Store.testing else { answer(["error": "print only works on a --test run"]); return }
+            let window = Links.window
+            switch request["action"] as? String ?? "" {
+            case "to": Printing.toFile = (request["path"] as? String).map { URL(fileURLWithPath: $0) }
+            case "cancel": if let window, let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
+            default: break
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                answer([
+                    "busy": Printing.busy,
+                    "sheet": window?.attachedSheet.map { "\(type(of: $0))" } ?? "",
+                    "to": Printing.toFile?.path ?? "",
+                    "last": Printing.last,
+                ])
+            }
+
         case "consent":
             // The mark the Settings switch leaves (see Consent), in this test
             // world's own account: given, then granted or revoked if asked.
@@ -1949,7 +1971,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "pin", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "fold", "pointer", "consent", "site", "little", "ui",
+                "tabs", "open", "go", "close", "wait", "sleep", "select", "print", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "pin", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "fold", "pointer", "consent", "site", "little", "ui",
             ]])
         }
     }
