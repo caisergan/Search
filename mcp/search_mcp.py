@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Claude in Search: an MCP server that lets Claude use the Search browser.
 
-    claude mcp add --scope user search -- python3 /path/to/Search/mcp/search_mcp.py
+    claude mcp add --scope user search -- python3 /Applications/Search.app/Contents/Resources/search_mcp.py
+
+Settings › General › "Let Claude use Search" › Connect Claude Code does that
+for you, and checks the connection. This file ships inside the app.
 
 It speaks MCP over stdio and drives Search through the bench's socket (see
 Sources/Search/Bench.swift and Agent.swift). Nothing to install: Python 3's
@@ -36,6 +39,9 @@ VERSION = "1.0.0"
 # on it; the socket waits longer than that, so a slow request is told as
 # Search's answer rather than as silence while its steps go on.
 PATIENCE = 10
+
+# Who is asking, for Settings › General's "Claude last used Search".
+FROM = os.environ.get("SEARCH_MCP_FROM", "claude")
 
 # The tab Claude last opened or used: the one a call without a tabId means.
 current = {"id": None}
@@ -74,6 +80,9 @@ def connect(timeout):
 
 def ask(request, timeout=30 + PATIENCE):
     """One request, one answer, over the socket."""
+    # Said with every request, so Settings can show when Claude last used
+    # Search; its own connection check says "settings" instead.
+    request.setdefault("from", FROM)
     s = connect(timeout)
     try:
         s.sendall((json.dumps(request) + "\n").encode())

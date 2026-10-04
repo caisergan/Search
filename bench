@@ -44,6 +44,9 @@
                                        test run: the mark Settings' "Let Claude use Search" leaves in the
                                        keychain, in this world's own account — its level before and after;
                                        set LEVEL (0–3) changes the setting as the switch would
+    ./bench claude-setup [add|check]   test run: Settings' Connect Claude Code — each step as it stands; add
+                                       puts this world's server in Claude Code (settings of the world's own),
+                                       check asks Claude Code to start it and goes through it to Search
     ./bench pointer X Y [window|panel|other] [WAIT] | release
                                        test run: the pointer a folded column or strip follows, put at X Y by
                                        hand (points from the window's top left, negative above or left of it),
@@ -256,6 +259,9 @@ def main(argv):
             sys.exit("usage: bench print state | to PATH | cancel")
         request["action"] = args[0]
         if args[0] == "to": request["path"] = os.path.abspath(args[1])
+    elif verb == "claude-setup":
+        if len(args) > 1 or (args and args[0] not in ("add", "check")): sys.exit("usage: bench claude-setup [add|check]")
+        if args: request["action"] = args[0]
     elif verb == "consent":
         usage = "usage: bench consent [grant [LEVEL]|revoke|set LEVEL]"
         if args and args[0] == "set":

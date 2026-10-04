@@ -73,6 +73,10 @@ ICONSET="build/AppIcon.iconset"
 rm -rf "$ICONSET"
 swift Icon/icon.swift "$ICONSET" > /dev/null
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+# Claude's way in, inside the app: Settings › General adds it to Claude Code
+# from here (see ClaudeLink.swift), so a person who only downloaded Search
+# has it too.
+cp mcp/search_mcp.py "$APP/Contents/Resources/search_mcp.py"
 rm -rf "$ICONSET"
 
 cat > "$APP/Contents/Info.plist" <<PLIST

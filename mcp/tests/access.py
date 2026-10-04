@@ -8,8 +8,10 @@ nothing of yours in it — serves a few pages from this Mac, and checks what
 each level of Settings › General › "Let Claude use Search" lets Claude see
 and do over the socket: whose tabs, whose cookies, the clipboard, a batch
 whose script went away, a large upload, the console a page can't rewrite,
-an idle wait beside a request that never ends, and the setting kept from one
-launch to the next, with the keychain mark behind it (SEARCH_CONSENT=real).
+an idle wait beside a request that never ends, connecting Claude Code from
+Settings (in Claude Code settings of the world's own — never yours), and the
+setting kept from one launch to the next, with the keychain mark behind it
+(SEARCH_CONSENT=real).
 
 Only the world's own folder, settings suite and the processes it starts are
 touched; GIFs it writes into Downloads are removed again.
@@ -19,6 +21,7 @@ import base64
 import http.server
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -285,6 +288,49 @@ def frames_and_gif():
     ask({"do": "a.close", "id": "all"})
 
 
+def setup():
+    print("connecting Claude Code, from Settings")
+    level(1)
+    real = os.path.expanduser("~/.claude.json")
+    before = open(real, "rb").read() if os.path.exists(real) else None
+    state = ask({"do": "claude-setup"}, timeout=100)
+    check("the connector ships inside the app", state["script"].endswith("Contents/Resources/search_mcp.py") and os.path.exists(state["script"]), state["script"])
+    if state["claude"]["state"] != "done" or state["python"]["state"] != "done":
+        print(f"  skip Claude Code or Python isn't on this Mac: {state['claude']['said']} / {state['python']['said']}")
+        return
+    check("not added at first", state["added"]["state"] == "missing", json.dumps(state["added"]))
+    state = ask({"do": "claude-setup", "action": "add"}, timeout=100)
+    check("Add to Claude Code adds it", state["added"]["state"] == "done", json.dumps(state["added"]))
+    check("…and the check finds it reaching Search", state["connection"]["state"] == "done", json.dumps(state["connection"]))
+    check("Settings' own check isn't taken for Claude", state["heard"] == 0)
+    after = open(real, "rb").read() if os.path.exists(real) else None
+    check("your own Claude Code settings are untouched", before == after)
+    # A request as Claude Code makes one, through the server it added.
+    config = os.path.join(FOLDER, "claude-config", ".claude.json")
+    server = json.load(open(config))["mcpServers"][state["name"]]
+    lines = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "tabs_context", "arguments": {}}}]
+    subprocess.run([server["command"], *server["args"]], input="".join(json.dumps(l) + "\n" for l in lines).encode(),
+                   env=dict(os.environ, **server.get("env", {})), capture_output=True, timeout=30)
+    check("Claude's own use is heard", ask({"do": "claude-setup"}, timeout=100)["heard"] > 0)
+    # Pointed at a copy that's gone, as after moving the app.
+    data = json.load(open(config))
+    data["mcpServers"][state["name"]]["args"] = ["/tmp/nowhere/search_mcp.py"]
+    json.dump(data, open(config, "w"))
+    state = ask({"do": "claude-setup"}, timeout=100)
+    check("a registration pointing at a gone file is a warning", state["added"]["state"] == "warning" and "gone" in state["added"]["said"], json.dumps(state["added"]))
+    check("…and the old check no longer stands", state["connection"]["state"] == "unknown", json.dumps(state["connection"]))
+    state = ask({"do": "claude-setup", "action": "add"}, timeout=100)
+    check("Update puts it right", state["added"]["state"] == "done" and state["connection"]["state"] == "done", json.dumps(state))
+    # Someone else's server under the name: left alone.
+    data = json.load(open(config))
+    data["mcpServers"][state["name"]] = {"type": "stdio", "command": "/usr/bin/true", "args": []}
+    json.dump(data, open(config, "w"))
+    ask({"do": "claude-setup", "action": "add"}, timeout=100)
+    kept = json.load(open(config))["mcpServers"][state["name"]]
+    check("a server that isn't Search's is never replaced", kept["command"] == "/usr/bin/true", json.dumps(kept))
+
+
 def persistence():
     print("kept from one launch to the next")
     level(2)
@@ -340,6 +386,8 @@ def main():
     if os.path.exists(SOCKET) and listening():
         sys.exit(f"something is already listening for the world {WORLD}: quit it first")
     defaults("delete", SUITE)
+    # The world's own Claude Code settings, from a run before.
+    shutil.rmtree(os.path.join(FOLDER, "claude-config"), ignore_errors=True)
     defaults("write", SUITE, "claude.access", "-int", "2")
     defaults("write", SUITE, "welcomed", "-bool", "true")
     launch()
@@ -351,6 +399,7 @@ def main():
         upload()
         console_and_idle()
         frames_and_gif()
+        setup()
         persistence()
         strict()
     finally:
