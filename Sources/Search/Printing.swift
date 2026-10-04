@@ -48,14 +48,31 @@ enum Printing {
     /// answered at once, and printed nothing: two sheets can't share a window.
     private(set) static var busy = false
 
+    /// Test runs only: the next print written to this PDF, without the
+    /// sheet, so what went on the paper can be read back (see Bench).
+    static var toFile: URL?
+    /// The last print, for the bench: from a frame of its own or the
+    /// whole page, and the name it was given.
+    private(set) static var last: [String: Any] = [:]
+
     /// The print sheet for `web` — for one of its frames, given one — on the
     /// window it is in; `then` once it has been put away, printed or not.
     static func run(_ web: WKWebView, frame: AnyObject? = nil, then: @escaping () -> Void) {
         guard !busy else { return then() }
-        let info = NSPrintInfo.shared
+        let file = Store.testing ? toFile : nil
+        toFile = nil
+        let info = file.flatMap { _ in NSPrintInfo.shared.copy() as? NSPrintInfo } ?? NSPrintInfo.shared
         info.horizontalPagination = .fit
         info.isHorizontallyCentered = false
-        let job = operation(for: web, frame: frame, info: info)
+        if let file {
+            info.jobDisposition = .save
+            info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = file
+        }
+        let (job, framed) = operation(for: web, frame: frame, info: info)
+        if file != nil {
+            job.showsPrintPanel = false
+            job.showsProgressPanel = false
+        }
         // WebKit's printing view comes without a size of its own: it is
         // given the page's, as ⌘P always gave it.
         job.view?.frame = web.bounds
@@ -63,6 +80,7 @@ enum Printing {
         // in Safari — a page printing its CV from a frame names the frame
         // for the CV, just for the moment — or, with none, the page's.
         if job.view?.printJobTitle.isEmpty ?? true, let title = web.title, !title.isEmpty { job.jobTitle = title }
+        last = ["frame": framed, "title": job.jobTitle ?? job.view?.printJobTitle ?? ""]
         busy = true
         let finish = Finish { busy = false; then() }
         if let window = Dialogs.window(for: web) {
@@ -75,13 +93,13 @@ enum Printing {
 
     /// The frame's own print operation, through WebKit's name for it outside
     /// the public framework, asked for first; the whole page otherwise.
-    private static func operation(for web: WKWebView, frame: AnyObject?, info: NSPrintInfo) -> NSPrintOperation {
+    private static func operation(for web: WKWebView, frame: AnyObject?, info: NSPrintInfo) -> (NSPrintOperation, framed: Bool) {
         let forFrame = NSSelectorFromString("_printOperationWithPrintInfo:forFrame:")
         if let frame, web.responds(to: forFrame),
            let job = web.perform(forFrame, with: info, with: frame)?.takeUnretainedValue() as? NSPrintOperation {
-            return job
+            return (job, true)
         }
-        return web.printOperation(with: info)
+        return (web.printOperation(with: info), false)
     }
 
     /// What the sheet calls back when it is put away. AppKit keeps no hold
