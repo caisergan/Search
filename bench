@@ -22,7 +22,7 @@
     ./bench extensions                 installed extensions, loaded or not, with their warnings
     ./bench little URL|keep|close      a small window for a link (made unseen), kept into the row, or closed
     ./bench sync [state|use|keep]      settings through iCloud Drive: what it has; use another Mac's (opens again), keep this one's — --test runs only
-    ./bench site PATH [security|permissions]  the site card for the tab on screen, drawn to a PNG
+    ./bench site PATH [security|permissions|translation]  the site card for the tab on screen, drawn to a PNG
     ./bench ext-add ID|LINK [--yes]    install from the Chrome Web Store (--yes only in a --test run)
     ./bench ext-folder PATH [--yes]    install an unpacked extension
     ./bench ext-press ID               press its button
@@ -102,7 +102,11 @@
     ./bench front                      test run: the window on screen, in front and key, for a page that only asks
                                        for the camera, location or the screen while focused (pages on puts it away)
     ./bench translate ID [on|off|read]  what the page is written in, and whether it is translated; on (test run:
-                                       each piece marked, not translated), off (the original back), read (again)
+                                       each piece marked, not translated), off (the original back), read (again);
+                                       test run: accept (Translate on its bar), dismiss, offer on|off, target LANG
+                                       (as Settings; none: the Mac's), rule language|site SUBJECT always|never|none,
+                                       forget-rules; menu target|source|rules [PICK] lists a menu of the bar, or
+                                       picks its line titled PICK
     ./bench autofill [add-contact KEY=VALUE… | add-card NUMBER MM/YYYY [NAME] | pick N | strong | clear | picture PATH]
                                        addresses and cards kept, and what hangs from the box the caret is in;
                                        adding, picking and clearing only on a --test run
@@ -264,11 +268,12 @@ def main(argv):
         if len(args) != 1: sys.exit("usage: bench little URL|keep|close")
         request["what"] = args[0]
     elif verb == "site":
-        if not 1 <= len(args) <= 2: sys.exit("usage: bench site PATH [security|permissions]")
+        if not 1 <= len(args) <= 2: sys.exit("usage: bench site PATH [security|permissions|translation]")
         request["path"] = os.path.abspath(args[0])
         if len(args) == 2:
             request["security"] = args[1] == "security"
             request["permissions"] = args[1] == "permissions"
+            request["translation"] = args[1] == "translation"
     elif verb == "column":
         if not 1 <= len(args) <= 2: sys.exit("usage: bench column PATH [HEIGHT]")
         request["path"] = os.path.abspath(args[0])
@@ -367,9 +372,21 @@ def main(argv):
                 if len(args) != 2: sys.exit("usage: bench permit picture PATH")
                 request["path"] = os.path.abspath(args[1])
     elif verb == "translate":
-        if not 1 <= len(args) <= 2 or (len(args) == 2 and args[1] not in ("on", "off", "read")): sys.exit("usage: bench translate ID [on|off|read]")
+        usage = "usage: bench translate ID [on|accept|off|read|dismiss|offer on|off|target LANG|rule language|site SUBJECT always|never|none|forget-rules|menu target|source|rules [PICK]]"
+        if not args: sys.exit(usage)
         request["id"] = args[0]
-        if len(args) == 2: request["action"] = args[1]
+        rest = args[1:]
+        if rest:
+            request["action"] = rest[0]
+            if rest[0] in ("on", "accept", "off", "read", "dismiss", "forget-rules") and len(rest) == 1: pass
+            elif rest[0] == "offer" and len(rest) == 2 and rest[1] in ("on", "off"): request["on"] = rest[1] == "on"
+            elif rest[0] == "target" and len(rest) <= 2: request["language"] = "" if len(rest) == 1 or rest[1] == "none" else rest[1]
+            elif rest[0] == "rule" and len(rest) == 4 and rest[1] in ("language", "site") and rest[3] in ("always", "never", "none"):
+                request["kind"], request["subject"], request["rule"] = rest[1], rest[2], rest[3]
+            elif rest[0] == "menu" and len(rest) in (2, 3) and rest[1] in ("target", "source", "rules"):
+                request["which"] = rest[1]
+                if len(rest) == 3: request["pick"] = rest[2]
+            else: sys.exit(usage)
     elif verb == "autofill":
         if args:
             request["action"] = args[0]

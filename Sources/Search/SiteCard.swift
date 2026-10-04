@@ -163,6 +163,9 @@ struct SiteCard: View {
     @State private var deeper: Bool
     /// One step in: what the site may use.
     @State private var allowing: Bool
+    /// One step in: what the page is translated from and into, and the
+    /// rules for its language and its site.
+    @State private var translating: Bool
     /// Something changed there that the open page only hears of when it is
     /// loaded again.
     @State private var changed = false
@@ -172,12 +175,13 @@ struct SiteCard: View {
     /// been asked, off the main thread: asking can go to the network.
     @State private var certified: Bool?
 
-    init(browser: Browser, tab: Tab, deeper: Bool = false, allowing: Bool = false, close: @escaping () -> Void) {
+    init(browser: Browser, tab: Tab, deeper: Bool = false, allowing: Bool = false, translating: Bool = false, close: @escaping () -> Void) {
         self.browser = browser
         self.tab = tab
         self.close = close
         _deeper = State(initialValue: deeper)
         _allowing = State(initialValue: allowing)
+        _translating = State(initialValue: translating)
     }
 
     var body: some View {
@@ -186,6 +190,8 @@ struct SiteCard: View {
                 security(safety)
             } else if allowing, let host {
                 permitted(host)
+            } else if translating, translator.available {
+                translation
             } else {
                 front
             }
@@ -196,6 +202,7 @@ struct SiteCard: View {
         .transition(.opacity)
         .animation(Motion.quick, value: deeper)
         .animation(Motion.quick, value: allowing)
+        .animation(Motion.quick, value: translating)
         .onAppear(perform: certify)
     }
 
@@ -225,6 +232,9 @@ struct SiteCard: View {
             if translator.available {
                 Row(translator.translated.contains(tab.id) ? "Show Original" : "Translate to \(translator.targetName)") {
                     after { browser.toggleTranslation() }
+                }
+                if translator.concerns(tab) {
+                    Row("Translation", submenu: true) { translating = true }
                 }
             }
             Row("Copy Address", keys: "⇧⌘C") { after { browser.copyAddress() } }
@@ -291,6 +301,42 @@ struct SiteCard: View {
         }
     }
 
+    // MARK: - translating the page
+
+    /// From what and into what, each a menu as the page's bar has them;
+    /// always and never for the language and the site, ticked as they are;
+    /// and the page translated or put back.
+    private var translation: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let url = tab.address {
+                Header(title: SiteCard.site(url))
+            }
+            Picking(title: "From", value: translator.read[tab.id]?.name ?? "Detect") {
+                TranslateMenu.show(translator.sourceMenu(for: tab, browser: browser))
+            }
+            Picking(title: "To", value: translator.targetName) {
+                TranslateMenu.show(translator.targetMenu(for: tab, browser: browser))
+            }
+            let rules = translator.ruleEntries(for: tab, browser: browser)
+            if !rules.isEmpty {
+                Separator()
+                ForEach(Array(rules.enumerated()), id: \.offset) { _, entry in
+                    switch entry {
+                    case .heading(let title): Header(title: title)
+                    case .separator: Separator()
+                    case .item(let title, let on, _, let act): Row(title, ticked: on, act: act)
+                    }
+                }
+            }
+            Separator()
+            Row(translator.translated.contains(tab.id) ? "Show Original" : "Translate") {
+                after { browser.toggleTranslation() }
+            }
+            Row("Translation Settings…") { after { browser.openTranslationSettings() } }
+            Row("Back") { translating = false }
+        }
+    }
+
     // MARK: - what the site may use
 
     /// The site as its permissions are kept: the page's own host, for a page
@@ -353,17 +399,37 @@ struct SiteCard: View {
         }
 
         var body: some View {
+            Picking(symbol: kind.symbol, title: kind.title, value: said) {
+                ChoiceMenu.show(kind: kind, current: choice, pick: pick)
+            }
+        }
+    }
+
+    /// A menu line with a choice at its end — its name, what it is set to,
+    /// and the up-and-down chevron of a pop-up button. A click opens the
+    /// choices.
+    private struct Picking: View {
+        var symbol: String?
+        let title: String
+        let value: String
+        let act: () -> Void
+
+        @State private var hovering = false
+
+        var body: some View {
             HStack(spacing: 6) {
-                Image(systemName: kind.symbol)
-                    .font(.system(size: 11))
-                    .frame(width: 16)
-                    .foregroundStyle(hovering ? Color.white : Color(nsColor: .secondaryLabelColor))
-                Text(kind.title)
+                if let symbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 11))
+                        .frame(width: 16)
+                        .foregroundStyle(hovering ? Color.white : Color(nsColor: .secondaryLabelColor))
+                }
+                Text(title)
                     .font(MenuMetrics.font)
                     .foregroundStyle(hovering ? Color.white : Color(nsColor: .labelColor))
                     .fixedSize()
                 Spacer(minLength: 24)
-                Text(said)
+                Text(value)
                     .font(MenuMetrics.font)
                     .foregroundStyle(hovering ? Color.white : Color(nsColor: .secondaryLabelColor))
                     .fixedSize()
@@ -371,7 +437,9 @@ struct SiteCard: View {
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(hovering ? Color.white : Color(nsColor: .tertiaryLabelColor))
             }
-            .padding(.leading, MenuMetrics.text - MenuMetrics.inset - 4)
+            // A line with its symbol starts where the symbol's column does;
+            // one without, where a menu's text does.
+            .padding(.leading, symbol == nil ? MenuMetrics.text - MenuMetrics.inset : MenuMetrics.text - MenuMetrics.inset - 4)
             .padding(.trailing, MenuMetrics.trailing - MenuMetrics.inset)
             .frame(height: MenuMetrics.row)
             .background(
@@ -380,7 +448,7 @@ struct SiteCard: View {
             )
             .padding(.horizontal, MenuMetrics.inset)
             .contentShape(Rectangle())
-            .onTapGesture { ChoiceMenu.show(kind: kind, current: choice, pick: pick) }
+            .onTapGesture(perform: act)
             .onHover { hovering = $0 }
         }
     }
@@ -464,19 +532,22 @@ struct SiteCard: View {
     /// One line, as a menu item draws it: its title in the menu's font where
     /// a menu puts its text, a key equivalent at the end, the accent colour
     /// behind it and white letters under the pointer. A line that opens more
-    /// ends in the submenu's chevron.
+    /// ends in the submenu's chevron, and one that is on in a checkmark —
+    /// at its end, the card having no column for one before its text.
     private struct Row: View {
         let title: String
         var keys = ""
         var submenu = false
+        var ticked = false
         let act: () -> Void
 
         @State private var hovering = false
 
-        init(_ title: String, keys: String = "", submenu: Bool = false, act: @escaping () -> Void) {
+        init(_ title: String, keys: String = "", submenu: Bool = false, ticked: Bool = false, act: @escaping () -> Void) {
             self.title = title
             self.keys = keys
             self.submenu = submenu
+            self.ticked = ticked
             self.act = act
         }
 
@@ -498,6 +569,11 @@ struct SiteCard: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(hovering ? Color.white : Color(nsColor: .secondaryLabelColor))
+                }
+                if ticked {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(hovering ? Color.white : Color(nsColor: .labelColor))
                 }
             }
             .padding(.leading, MenuMetrics.text - MenuMetrics.inset)

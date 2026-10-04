@@ -1294,23 +1294,76 @@ final class Bench {
             // The page on screen, translated or put back as View › Translate
             // does it, and what the translator knows of it. A test run marks
             // each piece instead of translating it (see Translate.swift).
+            // Languages, rules and the menus of the page's bar change only on
+            // a test run, whose settings are its own.
             let translator = Translator.shared
             guard let tab = find(request, in: browser) ?? browser.active else { answer(["error": "no tab"]); return }
-            switch request["action"] as? String {
+            let action = request["action"] as? String ?? ""
+            guard ["", "off", "read", "menu"].contains(action) || Store.testing else {
+                answer(["error": "translate \(action) only works on a --test run"]); return
+            }
+            let menus = ["target": translator.targetMenu, "source": translator.sourceMenu, "rules": translator.rulesMenu]
+            switch action {
             case "on":
-                guard Store.testing else { answer(["error": "translate on only works on a --test run"]); return }
                 translator.translate(tab, browser: browser)
+            case "accept":
+                translator.accept(tab, browser: browser)
             case "off":
                 translator.showOriginal(tab)
             case "read":
                 translator.read(tab, browser: browser)
+            case "dismiss":
+                translator.dismiss()
+            case "offer":
+                translator.offers = request["on"] as? Bool ?? true
+            case "target":
+                // What pages are translated into, as Settings sets it: nothing
+                // translated changes. "" is the Mac's language.
+                let key = request["language"] as? String ?? ""
+                translator.setTarget(key.isEmpty ? nil : key)
+            case "rule":
+                let rule = TranslateRule(rawValue: request["rule"] as? String ?? "")
+                let subject = request["subject"] as? String ?? ""
+                if request["kind"] as? String == "site" {
+                    translator.setRule(rule, site: subject, shy: tab.shy)
+                } else {
+                    translator.setRule(rule, language: subject)
+                }
+            case "forget-rules":
+                for kept in translator.rules {
+                    if let code = kept.language { translator.setRule(nil, language: code) }
+                    if let host = kept.site { translator.setRule(nil, site: host, shy: false) }
+                }
+                for key in ["translate.target", "translate.accepted", "translate.nudged", "translate.offer"] { Store.settings.removeObject(forKey: key) }
+                translator.setTarget(nil)
+            case "menu":
+                // One of the bar's menus as words, or a line of it picked as
+                // a click would pick it.
+                guard let build = menus[request["which"] as? String ?? ""] else { answer(["error": "which menu: target, source or rules"]); return }
+                let entries = build(tab, browser)
+                if let title = request["pick"] as? String {
+                    guard Store.testing else { answer(["error": "picking only works on a --test run"]); return }
+                    guard TranslateMenu.pick(title, in: entries) else { answer(["error": "no line \(title)", "menu": TranslateMenu.describe(entries)]); return }
+                } else {
+                    answer(["menu": TranslateMenu.describe(entries)])
+                    return
+                }
             default: break
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 let progress = translator.progress[tab.id]
-                answer(["language": translator.read[tab.id]?.code ?? "", "target": translator.target.languageCode?.identifier ?? "",
+                let site = Translator.site(of: tab.address)
+                answer(["language": translator.read[tab.id]?.code ?? "", "detected": translator.read[tab.id]?.detected ?? "",
+                        "target": translator.target, "readable": translator.readable,
                         "translated": translator.translated.contains(tab.id), "offered": translator.offered == tab.id,
-                        "sent": progress?.sent ?? 0, "done": progress?.done ?? 0])
+                        "settled": translator.settled == tab.id, "nudge": translator.nudge ?? "", "trouble": translator.trouble ?? "",
+                        "sent": progress?.sent ?? 0, "done": progress?.done ?? 0,
+                        "site": site ?? "", "siteRule": site.flatMap { translator.rule(site: $0, shy: tab.shy)?.rawValue } ?? "",
+                        "languageRule": translator.read[tab.id].flatMap { translator.rule(language: $0.code)?.rawValue } ?? "",
+                        "rules": translator.rules.map { ["language": $0.language ?? "", "site": $0.site ?? "", "rule": $0.rule.rawValue] },
+                        "kept": ["always": Store.settings.stringArray(forKey: "translate.always") ?? [],
+                                 "never": Store.settings.stringArray(forKey: "translate.never") ?? [],
+                                 "sites": Store.settings.dictionary(forKey: "translate.sites") ?? [:]]])
             }
 
         case "autofill":
@@ -1726,8 +1779,10 @@ final class Bench {
             guard let tab = browser.active, !tab.isBlank else { answer(["error": "no page on screen"]); return }
             let deeper = request["security"] as? Bool == true
             let allowing = request["permissions"] as? Bool == true
+            let translating = request["translation"] as? Bool == true
             // On the ground: off screen there is no glass to stand on.
-            let host = NSHostingView(rootView: AnyView(SiteCard(browser: browser, tab: tab, deeper: deeper, allowing: allowing) {}.fixedSize().background(Palette.ground)))
+            let host = NSHostingView(rootView: AnyView(SiteCard(browser: browser, tab: tab, deeper: deeper, allowing: allowing,
+                                                                translating: translating) {}.fixedSize().background(Palette.ground)))
             host.frame = NSRect(origin: .zero, size: host.fittingSize)
             let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
             window.appearance = NSApp.effectiveAppearance
