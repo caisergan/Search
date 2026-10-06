@@ -294,6 +294,8 @@ struct SettingsPanel: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 12)
                 }
+                Rule()
+                ClaudeSetup(browser: browser)
             }
         }
     }
@@ -1104,6 +1106,140 @@ struct Switch: View {
 
 /// A small capsule that does one thing. Outlined by default; filled in ink
 /// when it is the thing you came here to press.
+/// Under "Let Claude use Search": what connecting Claude Code still needs,
+/// one step under another, each looked at as you go (see ClaudeLink). Every
+/// step that can be done from here has its button; the last one checks that
+/// Claude Code starts Search's connector and that it reaches Search.
+struct ClaudeSetup: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject private var link = ClaudeLink.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Connect Claude Code")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Palette.ink)
+                    Text("Claude reaches Search through a connector that Claude Code runs. Each step is checked here as you go")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Pill("Check again") { link.refresh() }
+                    .disabled(link.busy || link.looking)
+            }
+            .padding(.bottom, 8)
+
+            step("Claude Code", link.claude) {
+                if !link.claude.done, link.claude != .checking {
+                    Pill("Copy install command") {
+                        ClaudeLink.copy(ClaudeLink.installClaude)
+                        browser.announce("Copied — paste it into Terminal")
+                    }
+                }
+            }
+            step("Python 3", link.python) {
+                if !link.python.done, link.python != .checking {
+                    Pill("Install…") { link.installPython() }
+                }
+            }
+            step("Search in Claude Code", link.added) {
+                if !link.added.done, link.added != .checking {
+                    if link.claude.done, link.python.done, !link.foreign {
+                        Pill(link.registered ? "Update" : "Add to Claude Code", filled: true) {
+                            link.add { browser.announce($0) }
+                        }
+                        .disabled(link.busy)
+                    }
+                    Pill("Copy command") {
+                        ClaudeLink.copy(link.command)
+                        browser.announce("Copied — paste it into Terminal")
+                    }
+                }
+            }
+            step("Connection", link.connection == .unknown && link.added.done
+                 ? .missing("Not checked yet") : link.connection) {
+                if link.added.done, link.connection != .checking {
+                    Pill("Check connection", filled: !link.connection.done) { link.check() }
+                        .disabled(link.busy)
+                }
+            }
+
+            if link.added.done {
+                // Claude Code reads its servers when a session starts.
+                TimelineView(.periodic(from: .now, by: 5)) { _ in
+                    Text(heard)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 6)
+                .padding(.leading, 26)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .onAppear { link.refresh() }
+        // Back from Terminal, having installed something: looked at again.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in link.refresh() }
+    }
+
+    /// Whether Claude has been heard from, and if not, how to get it going.
+    private var heard: String {
+        guard let when = Bench.shared.heardFromClaude else {
+            return "Claude hasn't used Search since it opened. Start a new Claude Code session — or type /mcp in one that's open — and ask: “\(ClaudeLink.firstAsk)”"
+        }
+        let ago = Date().timeIntervalSince(when) < 10 ? "just now" : when.formatted(.relative(presentation: .named))
+        return "Claude last used Search \(ago)"
+    }
+
+    private func step<Actions: View>(_ title: String, _ state: ClaudeLink.Step, @ViewBuilder actions: () -> Actions) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            mark(state)
+                .frame(width: 16, height: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Palette.ink)
+                if !state.said.isEmpty {
+                    Text(state.said)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 6) { actions() }
+        }
+        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func mark(_ state: ClaudeLink.Step) -> some View {
+        switch state {
+        case .done:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(Palette.safe)
+        case .warning:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(Palette.unsafe)
+        case .checking:
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.6)
+        case .missing, .unknown:
+            Image(systemName: "circle.dashed")
+                .font(.system(size: 13))
+                .foregroundStyle(Palette.muted)
+        }
+    }
+}
+
 struct Pill: View {
     let title: String
     var filled = false
@@ -1111,6 +1247,7 @@ struct Pill: View {
     let action: () -> Void
 
     @State private var hovering = false
+    @Environment(\.isEnabled) private var enabled
 
     init(_ title: String, filled: Bool = false, tint: Color = Palette.ink, action: @escaping () -> Void) {
         self.title = title
@@ -1131,6 +1268,7 @@ struct Pill: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .opacity(enabled ? 1 : 0.45)
         .onHover { hovering = $0 }
         .animation(Motion.quick, value: hovering)
     }

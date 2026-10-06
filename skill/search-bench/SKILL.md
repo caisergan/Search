@@ -44,6 +44,8 @@ One process per world. Quit a process only after its executable path is this rep
 
 `./fresh.sh` with no argument deletes that world's folder, settings suite, and WebKit store, then opens it. The suite delete clears the `bench` switch, so a wipe has to be followed by the defaults write, a quit of the process it just opened, and `./fresh.sh again`. Wipe only when they asked for a clean browser.
 
+`./bench --world NAME claude-setup [add|check]` drives Settings' Connect Claude Code in a test world; the world keeps Claude Code settings of its own (`claude-config` in its folder), so it never touches the person's.
+
 If `./bench tabs` (no flag) is not listening, ask them to turn on **Settings › General › Let Claude use Search**. Do not write defaults for the installed app. On the installed browser `tabs` lists only what Claude's level lets it see.
 
 `./fresh.sh` builds `build/Search.app` when that bundle is missing.

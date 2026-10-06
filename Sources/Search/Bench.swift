@@ -37,6 +37,11 @@ final class Bench {
     /// True while something is listening.
     private(set) var running = false
 
+    /// When Claude last asked something, through the MCP server: its
+    /// requests say so (see mcp/search_mcp.py). Settings shows it, as the
+    /// sign that Claude Code is connected (see ClaudeLink).
+    private(set) var heardFromClaude: Date?
+
     /// The key code of a letter on a US keyboard, which is what WebKit reads
     /// alongside the characters; anything else goes as the space bar's.
     static func keyCode(for character: Character) -> UInt16 {
@@ -337,6 +342,7 @@ final class Bench {
             given(reply)
         }
         let patience = (request["do"] as? String) == "wait" ? (request["seconds"] as? Double ?? 30) + 5
+            : (request["do"] as? String) == "claude-setup" ? 90
             : Bench.agentPatience(request["do"] as? String ?? "", request) ?? 25
         DispatchQueue.main.asyncAfter(deadline: .now() + patience) { answer(["error": "no answer within \(Int(patience)) s"]) }
         guard let browser else {
@@ -344,6 +350,7 @@ final class Bench {
             return
         }
         let verb = request["do"] as? String ?? ""
+        if request["from"] as? String == "claude" { heardFromClaude = Date() }
 
         switch verb {
         case "tabs":
@@ -2030,6 +2037,40 @@ final class Bench {
             answer(["on": SettingsSync.on, "waiting": SettingsSync.waiting, "offered": SettingsSync.offered,
                     "another": SettingsSync.another()?.from ?? "", "who": Store.settings.string(forKey: "sync.who") ?? "",
                     "differences": SettingsSync.differences()])
+
+        case "claude-setup":
+            // Settings' Connect Claude Code, from the shell (see ClaudeLink):
+            // each step as it stands after looking again, adding Search to
+            // Claude Code, or checking the connection. Only on a test run,
+            // whose Claude Code settings are its own.
+            guard Store.testing else { answer(["error": "claude-setup only works on a --test run"]); return }
+            let link = ClaudeLink.shared
+            switch request["action"] as? String ?? "" {
+            case "add": link.add { _ in }
+            case "check": link.check()
+            default: link.refresh()
+            }
+            func said(_ step: ClaudeLink.Step) -> [String: Any] {
+                let state: String = switch step {
+                case .unknown: "unknown"
+                case .checking: "checking"
+                case .done: "done"
+                case .missing: "missing"
+                case .warning: "warning"
+                }
+                return ["state": state, "said": step.said]
+            }
+            // Once nothing is being looked at or done.
+            func report() {
+                guard !link.busy, !link.looking else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { report() }
+                    return
+                }
+                answer(["claude": said(link.claude), "python": said(link.python), "added": said(link.added),
+                        "connection": said(link.connection), "command": link.command, "name": ClaudeLink.name,
+                        "script": ClaudeLink.script?.path ?? "", "heard": heardFromClaude.map { $0.timeIntervalSince1970 } ?? 0])
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { report() }
 
         case _ where verb.hasPrefix("a."):
             agent(verb, request, browser: browser, ticket: ticket, answer)

@@ -6,17 +6,38 @@ screenshots.
 
 ## Set it up
 
-1. In Search, turn on Settings › General › **Let Claude use Search** and pick
-   how far it reaches (see [Access levels](#access-levels)). It stays as you
-   set it from one launch to the next.
-2. Add the server to Claude Code:
+In Search, turn on Settings › General › **Let Claude use Search** and pick how
+far it reaches (see [Access levels](#access-levels)). It stays as you set it
+from one launch to the next.
 
-   ```sh
-   claude mcp add --scope user search -- python3 /path/to/Search/mcp/search_mcp.py
-   ```
+Under it, **Connect Claude Code** walks through the rest and checks each step
+as you go:
 
-   The server needs only Python 3's standard library. To drive a
-   `SEARCH_PROBE` run instead of your browser, set `SEARCH_WORLD=test`.
+1. **Claude Code** — found on this Mac, or *Copy install command* for
+   Claude Code's own installer (`curl -fsSL https://claude.ai/install.sh | bash`).
+2. **Python 3** — the server needs only its standard library. A Mac without
+   Apple's command line tools gets *Install…*, Apple's own installer.
+3. **Search in Claude Code** — *Add to Claude Code* runs `claude mcp add` for
+   you, with the copy of the server inside the app
+   (`Search.app/Contents/Resources/search_mcp.py`), for every project. One
+   that points at another copy, or at a file that's gone (the app moved, say),
+   gets *Update*. A server of someone else's under the name `search` is never
+   replaced.
+4. **Connection** — *Check connection* asks Claude Code to start the server,
+   then goes through it to Search and back.
+
+Then start a new Claude Code session (or type `/mcp` in one that's open) and
+ask *"What tabs do I have open in Search?"*. Settings shows when Claude last
+used Search.
+
+By hand, the same as the button does:
+
+```sh
+claude mcp add --scope user search -- python3 /Applications/Search.app/Contents/Resources/search_mcp.py
+```
+
+From a checkout, `mcp/search_mcp.py` works the same way. To drive a
+`SEARCH_PROBE` run instead of your browser, add `-e SEARCH_WORLD=test`.
 
 ## The tools
 
