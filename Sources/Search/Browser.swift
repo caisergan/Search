@@ -3016,6 +3016,19 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
                               from: source, page: tab(for: webView)?.address ?? source)
     }
 
+    /// A content rule list stopped a load. The lists an extension's request
+    /// rules are compiled into carry the extension's id, and the extension
+    /// hears of it from Search (see Extensions.blocked); the ad blocker's
+    /// own list is Search's and needs nobody told.
+    @objc(_webView:contentRuleListWithIdentifier:performedAction:forURL:)
+    func webView(_ webView: WKWebView, contentRuleListWithIdentifier identifier: String, performedAction action: NSObject, forURL url: URL) {
+        guard action.responds(to: NSSelectorFromString("blockedLoad")),
+              action.value(forKey: "blockedLoad") as? Bool == true,
+              let tab = tab(for: webView)
+        else { return }
+        if #available(macOS 15.4, *) { Extensions.shared.blocked(url, by: identifier, in: tab) }
+    }
+
     /// The page has drawn something: a view kept out of sight until now, so
     /// as not to show the white it starts as, comes in. WebKit calls this only
     /// on a view asked to — see `PageView.holdForFirstFrame()`.

@@ -5,6 +5,7 @@ import NaturalLanguage
 import UserNotifications
 import IOKit.pwr_mgt
 import CryptoKit
+import JavaScriptCore
 
 // The Chrome APIs WebKit doesn't have, filled in by the browser itself.
 //
@@ -39,9 +40,15 @@ enum ExtensionShims {
     /// one needs nothing redone, which matters at launch — preparing reads
     /// every script and page an extension ships.
     nonisolated static let stamp = ".search-shim"
+    /// The languages are part of it: the messages the shim words itself
+    /// (see `worded` in the script) are those of the language WebKit picks
+    /// from them.
     nonisolated static let version: String = {
-        SHA256.hash(data: Data((script + PasskeyRelay.page).utf8)).prefix(8).map { String(format: "%02x", $0) }.joined() + (Store.testing ? "-test" : "")
+        let carried = script + universal + PasskeyRelay.page + Locale.preferredLanguages.joined(separator: ",")
+        return SHA256.hash(data: Data(carried.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined() + (Store.testing ? "-test" : "")
     }()
+    /// The rule lists Search left off at install, by id (see `ruleBudget`).
+    nonisolated static let rulesOff = ".search-rules-off"
 
     /// `fresh`: a package just unpacked or copied in. What only Search writes
     /// beside an extension — which permissions it added, which shim it
@@ -50,7 +57,7 @@ enum ExtensionShims {
     nonisolated static func prepare(_ folder: URL, fresh: Bool = false) throws {
         let files = FileManager.default
         if fresh {
-            for name in [stamp, ".search-added"] { try? files.removeItem(at: folder.appendingPathComponent(name)) }
+            for name in [stamp, ".search-added", rulesOff] { try? files.removeItem(at: folder.appendingPathComponent(name)) }
         }
         let stampURL = folder.appendingPathComponent(stamp)
         if (try? String(contentsOf: stampURL, encoding: .utf8)) == version { return }
@@ -59,7 +66,34 @@ enum ExtensionShims {
         guard var manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any]
         else { throw Crx.Refused.unpack }
 
-        let script = shim(for: folder)
+        // Rule lists switched on from the start are compiled as the extension
+        // loads, before any of its code runs to be refused anything: a set
+        // past the limit would take Search down at every launch. They are
+        // kept to the budget in the manifest's order, and the rest start off,
+        // as if the extension had turned them off itself.
+        let weights = ruleWeights(manifest, in: folder)
+        if var rules = manifest["declarative_net_request"] as? [String: Any],
+           var lists = rules["rule_resources"] as? [[String: Any]] {
+            var total = 0
+            var off = (try? JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent(rulesOff)))) as? [String] ?? []
+            for index in lists.indices where lists[index]["enabled"] as? Bool == true {
+                let id = lists[index]["id"] as? String ?? ""
+                let weight = weights[id] ?? 0
+                if total + weight > ruleBudget {
+                    lists[index]["enabled"] = false
+                    off.append(id)
+                } else {
+                    total += weight
+                }
+            }
+            rules["rule_resources"] = lists
+            manifest["declarative_net_request"] = rules
+            if let data = try? JSONSerialization.data(withJSONObject: Array(Set(off)).sorted()) {
+                try? data.write(to: folder.appendingPathComponent(rulesOff))
+            }
+        }
+
+        let script = shim(for: folder, weights: weights, messages: wordedMessages(manifest, in: folder))
         try script.write(to: folder.appendingPathComponent(file), atomically: true, encoding: .utf8)
         try PasskeyRelay.page.write(to: folder.appendingPathComponent(passkeys), atomically: true, encoding: .utf8)
 
@@ -171,7 +205,7 @@ enum ExtensionShims {
     /// The shim as this extension gets it: with the events its code mentions
     /// — `chrome.tabs.onUpdated`, `e.runtime.onInstalled` — so its worker
     /// can take their listeners late (see the end of the script).
-    nonisolated static func shim(for folder: URL) -> String {
+    nonisolated static func shim(for folder: URL, weights: [String: Int] = [:], messages: String = "null") -> String {
         var found = Set<String>()
         let pattern = try! NSRegularExpression(pattern: #"\.([a-zA-Z]+)\.(on[A-Z][A-Za-z]+)\b"#)
         let walker = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil)
@@ -199,10 +233,173 @@ enum ExtensionShims {
             scripts.append((empty ? "-" : "") + path)
         }
         let shipped = (try? JSONSerialization.data(withJSONObject: scripts.sorted())).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        let weighed = (try? JSONSerialization.data(withJSONObject: weights, options: .sortedKeys)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        // Its own words go in last: the messages are the extension's text,
+        // and a placeholder name in one must stay as it is.
         return script.replacingOccurrences(of: "__SEARCH_EVENTS__", with: list)
             .replacingOccurrences(of: "__SEARCH_SCRIPTS__", with: shipped)
             .replacingOccurrences(of: "__SEARCH_CHROME__", with: Crx.chromeVersion)
             .replacingOccurrences(of: "__SEARCH_VERBOSE__", with: Store.testing ? "true" : "false")
+            .replacingOccurrences(of: "__SEARCH_UNIVERSAL__", with: universal)
+            .replacingOccurrences(of: "__SEARCH_RULE_BUDGET__", with: String(ruleBudget))
+            .replacingOccurrences(of: "__SEARCH_RULESETS__", with: weighed)
+            .replacingOccurrences(of: "__SEARCH_MESSAGES__", with: messages)
+    }
+
+    // MARK: - request rules WebKit can compile
+
+    /// How many of an extension's request rules may apply to every address.
+    /// WebKit compiles all of an extension's rules into one list, and its
+    /// compiler stops the whole browser — Search, not the extension — at
+    /// 65,535 of them ("Too many uncombined actions that match everything",
+    /// ContentExtensionCompiler.cpp). Kept below that, with room for what
+    /// `universal` can't see coming.
+    nonisolated static let ruleBudget = 60_000
+
+    /// How many of those one request rule becomes, rounded up: WebKit
+    /// translates a rule into its own (_WKWebExtensionDeclarativeNetRequestRule)
+    /// one per request domain, method and exception, and the ones without
+    /// an address of their own apply to every address. An allowAllRequests
+    /// rule always does, once per domain it names: AdBlock's three lists make
+    /// 46,186 by this count — 46,176 of them from the 8,252 rules of its
+    /// Acceptable Ads list — where the list WebKit compiled had 46,065.
+    /// One function for the shim, which weighs rules as they are added, and
+    /// for `ruleWeights` at install.
+    nonisolated static let universal = #"""
+    ((rule) => {
+      if (!rule || typeof rule !== "object") return 0;
+      const c = rule.condition && typeof rule.condition === "object" ? rule.condition : {};
+      const type = rule.action && rule.action.type;
+      const count = (v) => (Array.isArray(v) ? v.length : 0);
+      const all = type === "allowAllRequests";
+      const regex = typeof c.regexFilter === "string";
+      // No address of its own: no filter, or one of only * and |.
+      const wide = regex ? /^\^?(\.\*)*\$?$/.test(c.regexFilter) : typeof c.urlFilter !== "string" || /^[*|]*$/.test(c.urlFilter);
+      // Initiators both named and excluded make two rules, one an exception.
+      const twice = !all && count(c.initiatorDomains) && count(c.excludedInitiatorDomains) ? 2 : 1;
+      let n = 0;
+      // An exception for each excluded domain, by its address — except for
+      // allowAllRequests, whose rules all apply to every address.
+      if (count(c.excludedRequestDomains)) { if (all) n += count(c.excludedRequestDomains); }
+      else if (!all && wide) n += count(c.excludedRequestMethods) * twice;
+      if (count(c.requestDomains) && !regex) { if (all) n += count(c.requestDomains); }
+      else if (all) n += 1;
+      else if (wide) n += Math.max(1, count(c.requestMethods)) * twice * (type === "upgradeScheme" ? 2 : 1);
+      return n;
+    })
+    """#
+
+    /// What each of an extension's rule lists weighs in `universal`'s terms,
+    /// by ruleset id — read with the shim's own function, in JavaScriptCore:
+    /// AdBlock's 37 lists, 170 MB, in 0.3 s. A list that can't be read is
+    /// left out; WebKit can't compile it either.
+    nonisolated static func ruleWeights(_ manifest: [String: Any], in folder: URL) -> [String: Int] {
+        guard let rules = manifest["declarative_net_request"] as? [String: Any],
+              let lists = rules["rule_resources"] as? [[String: Any]], !lists.isEmpty,
+              let context = JSContext()
+        else { return [:] }
+        context.evaluateScript("""
+        globalThis.weigh = (() => {
+          const universal = \(universal);
+          return (text) => {
+            const rules = JSON.parse(text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text);
+            let n = 0;
+            if (Array.isArray(rules)) for (const rule of rules) n += universal(rule);
+            return n;
+          };
+        })();
+        """)
+        guard let weigh = context.objectForKeyedSubscript("weigh") else { return [:] }
+        var weights: [String: Int] = [:]
+        for list in lists {
+            guard let id = list["id"] as? String, let path = list["path"] as? String,
+                  let url = inside(path, of: folder),
+                  let text = try? String(contentsOf: url, encoding: .utf8)
+            else { continue }
+            context.exception = nil
+            let value = weigh.call(withArguments: [text])
+            guard context.exception == nil, let value, value.isNumber else { continue }
+            weights[id] = Int(value.toInt32())
+        }
+        return weights
+    }
+
+    // MARK: - messages WebKit words wrongly
+
+    /// The locale WebKit picks for an extension, as WebKit picks it
+    /// (WebExtension::bestMatchLocale): the only one, else the closest to
+    /// the first preferred language by Foundation's matching, else that
+    /// language alone, else the default.
+    nonisolated static func bestLocale(_ supported: [String], fallback: String) -> String {
+        guard supported.count > 1 else { return supported.first ?? fallback }
+        let language = { (locale: String) in locale.split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map { $0.lowercased() } ?? "" }
+        let preferred = Locale.preferredLanguages.first ?? "en"
+        if let match = Bundle.preferredLocalizations(from: supported, forPreferences: [preferred]).first,
+           supported.contains(match), language(match) == language(preferred) {
+            return match
+        }
+        return supported.first { $0.lowercased() == language(preferred) } ?? fallback
+    }
+
+    /// The messages the WebKit of macOS 26 gets wrong, for the language it
+    /// will pick, as JSON for `worded` in the script — or "null". Before
+    /// WebKit's fix of April 2026 (bug 306492), a placeholder right after a
+    /// character other than a space — "[[$1]]", "($1)", "«$name$»" — came
+    /// out empty and took that character along. Only those go in, already
+    /// resolved through WebKit's order of locales: the shim is in every
+    /// frame a content script runs in, and Bitwarden has 81 such messages
+    /// across its 63 languages.
+    nonisolated static func wordedMessages(_ manifest: [String: Any], in folder: URL) -> String {
+        guard let fallback = manifest["default_locale"] as? String, !fallback.isEmpty,
+              let locales = inside("_locales", of: folder),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: locales.path)
+        else { return "null" }
+        let supported = names.filter { FileManager.default.fileExists(atPath: locales.appendingPathComponent($0).appendingPathComponent("messages.json").path) }
+        let best = bestLocale(supported, fallback: fallback)
+        let language = String(best.split(whereSeparator: { $0 == "-" || $0 == "_" }).first ?? Substring(best))
+        // WebKit's order: the locale itself, its language alone, the default.
+        var chain: [String] = []
+        if best != language, best != fallback { chain.append(best) }
+        if language != fallback { chain.append(language) }
+        chain.append(fallback)
+        var resolved: [String: [String: Any]] = [:]
+        for locale in chain {
+            guard let url = inside("_locales/\(locale)/messages.json", of: folder),
+                  let data = try? Data(contentsOf: url),
+                  let messages = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) as? [String: Any]
+            else { continue }
+            for (name, value) in messages {
+                guard let entry = value as? [String: Any], resolved[name.lowercased()] == nil else { continue }
+                resolved[name.lowercased()] = entry
+            }
+        }
+        let named = try! NSRegularExpression(pattern: #"[^ $]\$[A-Za-z0-9_@]+\$"#)
+        let positional = try! NSRegularExpression(pattern: #"[^\s$]\$[0-9]"#)
+        let token = try! NSRegularExpression(pattern: #"\$([A-Za-z0-9_@]+)\$"#)
+        var worded: [String: Any] = [:]
+        for (name, entry) in resolved {
+            guard let message = entry["message"] as? String else { continue }
+            var placeholders: [String: String] = [:]
+            for (key, value) in entry["placeholders"] as? [String: Any] ?? [:] {
+                placeholders[key.lowercased()] = (value as? [String: Any])?["content"] as? String ?? ""
+            }
+            // As WebKit has it once the named placeholders are in.
+            var expanded = message
+            for match in token.matches(in: message, range: NSRange(message.startIndex..., in: message)).reversed() {
+                guard let whole = Range(match.range, in: message), let key = Range(match.range(at: 1), in: message),
+                      let content = placeholders[message[key].lowercased()] else { continue }
+                expanded.replaceSubrange(whole, with: content)
+            }
+            let wrong = named.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)) != nil
+                || positional.firstMatch(in: expanded, range: NSRange(expanded.startIndex..., in: expanded)) != nil
+            if wrong { worded[name] = ["message": message, "placeholders": placeholders] }
+        }
+        guard !worded.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: ["locale": best.lowercased(), "messages": worded], options: .sortedKeys),
+              data.count < 256 * 1024,
+              let json = String(data: data, encoding: .utf8)
+        else { return "null" }
+        return json
     }
 
     /// Defines only what is missing, so the day WebKit implements an API,
@@ -840,6 +1037,59 @@ enum ExtensionShims {
           let f; try { f = runtime[name]; } catch (e) { continue; }
           if (typeof f === "function") put(runtime, name, f.bind(runtime));
         }
+      }
+
+      // Messages the WebKit of macOS 26 words wrongly: a placeholder right
+      // after a character other than a space — "[[$1]]", "($1)" — comes out
+      // empty and takes that character along (fixed in WebKit in April
+      // 2026, bug 306492). AdBlock's counts read "Bu sayfada: [", and
+      // Bitwarden has 81 such messages across its languages. Search carries those
+      // messages for the language WebKit picked (see wordedMessages) and
+      // words them as Chrome does: named placeholders become their content,
+      // then $1–$9 the substitutions and $$ a dollar. Any other language,
+      // and every other message, is WebKit's.
+      const worded = __SEARCH_MESSAGES__;
+      if (worded && chrome.i18n && typeof chrome.i18n.getMessage === "function") {
+        const getMessage = chrome.i18n.getMessage.bind(chrome.i18n);
+        let table;
+        const messages = () => {
+          if (table === undefined) {
+            let locale = "";
+            try { locale = String(getMessage("@@ui_locale") || ""); } catch (e) {}
+            table = locale.replace(/-/g, "_").toLowerCase() === worded.locale ? worded.messages : null;
+          }
+          return table;
+        };
+        const substitute = (text, values) => {
+          let out = "";
+          for (let i = 0; i < text.length; i++) {
+            if (text[i] !== "$") { out += text[i]; continue; }
+            const next = text[i + 1];
+            if (next === undefined) break;
+            i++;
+            if (next === "$") {
+              while (text[i] === "$") { out += "$"; i++; }
+              i--;
+            } else if (next >= "1" && next <= "9") {
+              const value = values[next.charCodeAt(0) - 49];
+              if (value !== undefined) out += value;
+            }
+          }
+          return out;
+        };
+        put(chrome.i18n, "getMessage", (name, substitutions, ...rest) => {
+          const known = typeof name === "string" && messages();
+          const entry = known && Object.prototype.hasOwnProperty.call(known, name.toLowerCase()) ? known[name.toLowerCase()] : undefined;
+          if (!entry) return getMessage(name, substitutions, ...rest);
+          const values = substitutions === undefined || substitutions === null ? []
+            : (Array.isArray(substitutions) ? substitutions : [substitutions]).map((v) => String(v));
+          if (values.length > 9) return undefined;
+          const text = entry.message.replace(/\$([A-Za-z0-9_@]+)\$/g, (whole, key) => {
+            const content = entry.placeholders[key.toLowerCase()];
+            return typeof content === "string" ? content : whole;
+          });
+          return substitute(text, values);
+        });
       }
       if (inContent) return;
 
@@ -1480,11 +1730,63 @@ enum ExtensionShims {
           p.then((r) => callback(r));
         });
       }
+      // WebKit compiles all of an extension's request rules into one list,
+      // and at 65,535 rules that apply to every address its compiler stops
+      // the whole browser, not the extension (see ruleBudget). AdBlock's
+      // Acceptable Ads list alone makes 46,000 of them, and the first update
+      // to its lists took Search down. A change that would go past the
+      // budget is refused as a whole, the way Chrome refuses one past its
+      // own limits, and the rules already there keep working. Weighed by
+      // `universal`; the lists the extension ships were weighed at install.
+      const universal = __SEARCH_UNIVERSAL__;
+      const budget = __SEARCH_RULE_BUDGET__;
+      const listWeights = __SEARCH_RULESETS__;
+      const weighRules = (rules) => { let n = 0; for (const rule of Array.isArray(rules) ? rules : []) n += universal(rule); return n; };
+      const shipped = () => { try { return (runtime.getManifest().declarative_net_request || {}).rule_resources || []; } catch (e) { return []; } };
+      const listWeight = async (id) => {
+        if (typeof listWeights[id] === "number") return listWeights[id];
+        // One Search couldn't weigh at install is read now.
+        let n = 0;
+        try {
+          const list = shipped().find((r) => r && r.id === id);
+          if (list && typeof list.path === "string") n = weighRules(await (await fetch(runtime.getURL(list.path.replace(/^\/+/, "")))).json());
+        } catch (e) {}
+        listWeights[id] = n;
+        return n;
+      };
+      const weight = async (state) => {
+        let n = weighRules(state.dynamic) + weighRules(state.session);
+        for (const id of state.lists) n += await listWeight(id);
+        return n;
+      };
+      // One change at a time, each weighed against what the one before left.
+      let turn = Promise.resolve();
+      const inTurn = (task) => { const run = turn.then(task, task); turn = run.then(() => {}, () => {}); return run; };
+      const within = async (what, change) => {
+        const read = async (get, otherwise) => { try { const v = await get(); return Array.isArray(v) ? v : otherwise; } catch (e) { return otherwise; } };
+        const now = {
+          lists: await read(() => dnr.getEnabledRulesets(), shipped().filter((r) => r && r.enabled).map((r) => r.id)),
+          dynamic: await read(() => dnr.getDynamicRules(), []),
+          session: typeof dnr.getSessionRules === "function" ? await read(() => dnr.getSessionRules(), []) : [],
+        };
+        const before = await weight(now), after = await weight(change(now));
+        if (after <= budget || after <= before) return now;
+        const error = new Error("declarativeNetRequest." + what + "() refused: " + after + " rules would apply to every address, past the " + budget + " WebKit can compile");
+        try { native("debug.error", [error.message]).catch(() => {}); } catch (x) {}
+        throw error;
+      };
+      const replacing = (rules, options) => {
+        const gone = new Set([...(Array.isArray(options.removeRuleIds) ? options.removeRuleIds : []),
+          ...(Array.isArray(options.addRules) ? options.addRules : []).map((r) => r && r.id)]);
+        return rules.filter((r) => !gone.has(r && r.id)).concat(Array.isArray(options.addRules) ? options.addRules : []);
+      };
       if (dnr) for (const name of ["updateSessionRules", "updateDynamicRules"]) {
         if (typeof dnr[name] !== "function") continue;
         const original = dnr[name].bind(dnr);
+        const kind = name === "updateSessionRules" ? "session" : "dynamic";
         put(dnr, name, (options = {}, callback) => {
-          if (options && Array.isArray(options.addRules)) options = { ...options, addRules: options.addRules.map(mendRule).filter(Boolean) };
+          options = options || {};
+          if (Array.isArray(options.addRules)) options = { ...options, addRules: options.addRules.map(mendRule).filter(Boolean) };
           const attempt = async (opts, left) => {
             try { return await original(opts); }
             catch (e) {
@@ -1496,7 +1798,70 @@ enum ExtensionShims {
               return attempt({ ...opts, addRules: opts.addRules.filter((_, i) => i !== index) }, left - 1);
             }
           };
-          const p = attempt(options, 100);
+          const p = inTurn(async () => {
+            await within(name, (now) => ({ ...now, [kind]: replacing(now[kind], options) }));
+            return attempt(options, 100);
+          });
+          if (typeof callback !== "function") return p;
+          p.then(() => callback(), (e) => withLastError(e, callback));
+        });
+      }
+      // Which rule matched, WebKit doesn't say: its getMatchedRules gives
+      // each request where Chrome gives the rule — { ruleId, rulesetId } —
+      // and code reading rule.rulesetId threw: AdBlock Pro's menu said its
+      // protection status couldn't be loaded, and counted nothing. A rule
+      // nobody can name is given as such; the request stays alongside.
+      if (dnr && typeof dnr.getMatchedRules === "function") {
+        const original = dnr.getMatchedRules.bind(dnr);
+        put(dnr, "getMatchedRules", (...args) => {
+          const callback = args.length && typeof args[args.length - 1] === "function" ? args.pop() : null;
+          const p = Promise.resolve(original(...args)).then((r) => {
+            if (!r || !Array.isArray(r.rulesMatchedInfo)) return r;
+            const named = (m) => m && typeof m === "object" && !m.rule ? { ...m, rule: { ruleId: 0, rulesetId: "_unknown" } } : m;
+            return { ...r, rulesMatchedInfo: r.rulesMatchedInfo.map(named) };
+          });
+          if (!callback) return p;
+          p.then((r) => callback(r), (e) => withLastError(e, callback));
+        });
+      }
+      if (dnr && typeof dnr.updateEnabledRulesets === "function") {
+        const original = dnr.updateEnabledRulesets.bind(dnr);
+        // Chrome takes switching on a list that is on, or off one that is
+        // off, as nothing to do. WebKit counts them anyway: switching off one
+        // that is off takes its count of enabled lists below zero, read as
+        // "only 50 rulesets can be enabled at once", and one switched on
+        // again is compiled again (AdBlock's lists: 160 MB). Only real
+        // changes go to WebKit; ids the manifest doesn't name still do, to
+        // be refused as Chrome refuses them.
+        const named = new Set(shipped().map((r) => r && r.id));
+        put(dnr, "updateEnabledRulesets", (options = {}, callback) => {
+          options = options || {};
+          const enable = Array.isArray(options.enableRulesetIds) ? options.enableRulesetIds : [];
+          const disable = Array.isArray(options.disableRulesetIds) ? options.disableRulesetIds : [];
+          const p = inTurn(async () => {
+            const now = await within("updateEnabledRulesets", (state) => {
+              const lists = new Set(state.lists.filter((id) => !disable.includes(id)));
+              for (const id of enable) lists.add(id);
+              return { ...state, lists: [...lists] };
+            });
+            const on = new Set(now.lists);
+            const asked = {
+              ...options,
+              enableRulesetIds: enable.filter((id) => !named.has(id) || !on.has(id)),
+              disableRulesetIds: disable.filter((id) => !named.has(id) || (on.has(id) && !enable.includes(id))),
+            };
+            if (!asked.enableRulesetIds.length && !asked.disableRulesetIds.length) return undefined;
+            // As an extension first loads, WebKit may still be compiling its
+            // lists, and fails a change it takes a moment later ("Failed to
+            // apply rules"): eyeo's engine makes one then.
+            for (let tries = 0; ; tries++) {
+              try { return await original(asked); }
+              catch (e) {
+                if (tries >= 2 || !/Failed to apply rules/.test(String(e && e.message))) throw e;
+                await new Promise((resolve) => setTimeout(resolve, 1500 * (tries + 1)));
+              }
+            }
+          });
           if (typeof callback !== "function") return p;
           p.then(() => callback(), (e) => withLastError(e, callback));
         });
@@ -1521,11 +1886,30 @@ enum ExtensionShims {
       // webRequest listeners with options WebKit doesn't take — blocking
       // needs a policy-installed extension in Chrome's MV3 too; extra headers
       // WebKit reports anyway — are added with the options it does take.
+      // A request the background hears of is the moment to take what the
+      // extension's own rules blocked meanwhile (see `blocked` below), so
+      // its listeners are handed on through a relay that says so.
+      let stirred = () => {};
+      const relays = new WeakMap();
+      const relayed = (listener) => {
+        if (!background || typeof listener !== "function") return listener;
+        if (!relays.has(listener)) relays.set(listener, function (...args) { stirred(); return listener.apply(this, args); });
+        return relays.get(listener);
+      };
       if (chrome.webRequest) for (const key of Object.keys(chrome.webRequest)) {
         const target = chrome.webRequest[key];
         if (!/^on[A-Z]/.test(key) || !target || typeof target.addListener !== "function") continue;
         const add = target.addListener.bind(target);
+        if (typeof target.removeListener === "function") {
+          const remove = target.removeListener.bind(target);
+          put(target, "removeListener", (listener) => remove(relays.get(listener) || listener));
+        }
+        if (typeof target.hasListener === "function") {
+          const has = target.hasListener.bind(target);
+          put(target, "hasListener", (listener) => has(relays.get(listener) || listener));
+        }
         put(target, "addListener", (listener, filter, spec) => {
+          listener = relayed(listener);
           // WebKit can't read ws:// and wss:// patterns, and refuses the
           // whole listener over one; Chrome watches sockets too. The
           // listener is kept for everything else.
@@ -1534,16 +1918,132 @@ enum ExtensionShims {
             if (!urls.length) return;
             filter = { ...filter, urls };
           }
+          // Chrome's resource types WebKit has no name for — "webtransport",
+          // "webbundle" — make it refuse the whole listener too. eyeo's
+          // engine (AdBlock, Adblock Plus) listens for every type there is,
+          // and its worker died at the first one: a menu saying "Oops",
+          // nothing counted, nothing hidden on pages. A type WebKit can't
+          // name never reaches a listener, so each is left out as WebKit
+          // names it.
+          const typed = (adding) => {
+            for (let left = 20; ; left--) {
+              try { return adding(filter); }
+              catch (e) {
+                const unknown = /'([^']+)' is an unknown resource type/.exec(String(e && e.message));
+                if (!unknown || left <= 0 || !filter || !Array.isArray(filter.types) || !filter.types.includes(unknown[1])) throw e;
+                filter = { ...filter, types: filter.types.filter((t) => t !== unknown[1]) };
+                if (!filter.types.length) return undefined;
+              }
+            }
+          };
           // Added after a worker's startup, WebKit refuses it; Chrome takes
           // it. It isn't heard, but neither does it stop the code that added
           // it — a listener for every request can't join the late list
           // (it would wake the worker for all of them).
           const late = (e) => { if (!/startup/i.test(String(e && e.message))) throw e; };
           try {
-            if (!Array.isArray(spec)) return add(listener, filter);
+            if (!Array.isArray(spec)) return typed((f) => add(listener, f));
             const kept = spec.filter((s) => s === "requestHeaders" || s === "responseHeaders" || s === "requestBody");
-            try { return add(listener, filter, kept); } catch (e) { if (/startup/i.test(String(e && e.message))) throw e; return add(listener, filter); }
+            try { return typed((f) => add(listener, f, kept)); } catch (e) { if (/startup/i.test(String(e && e.message))) throw e; return typed((f) => add(listener, f)); }
           } catch (e) { late(e); }
+        });
+      }
+
+      // The requests an extension's own request rules blocked. WebKit tells
+      // webRequest nothing of them, where Chrome's onErrorOccurred hears
+      // every one with net::ERR_BLOCKED_BY_CLIENT — and that is how eyeo's
+      // engine counts what it blocked: AdBlock said 0 on a page it had
+      // cleared of ads. The browser keeps them (Extensions.blocked); the
+      // background takes them while the extension listens, soon after any
+      // request it hears of, and passes them on as Chrome would. What WebKit
+      // doesn't say is filled in plainly: the page's main frame, and the
+      // kind of resource its address suggests.
+      const onError = background && chrome.webRequest && chrome.webRequest.onErrorOccurred;
+      if (onError && typeof onError.addListener === "function" && typeof onError.removeListener === "function") {
+        const listening = new Map();
+        const add = onError.addListener, remove = onError.removeListener;
+        const kinds = [[/\.m?js$/i, "script"], [/\.css$/i, "stylesheet"], [/\.(png|jpe?g|gif|webp|avif|svg|ico|bmp)$/i, "image"],
+          [/\.(woff2?|ttf|otf|eot)$/i, "font"], [/\.(mp4|webm|m3u8|mpd|mp3|m4a|aac|ogg|wav)$/i, "media"], [/\.html?$/i, "sub_frame"]];
+        const kind = (url) => {
+          let path = "";
+          try { path = new URL(url).pathname; } catch (e) {}
+          for (const [re, k] of kinds) if (re.test(path)) return k;
+          return "other";
+        };
+        // Chrome's match patterns, as a filter's urls name them.
+        const matches = (p, url) => {
+          let u;
+          try { u = new URL(url); } catch (e) { return false; }
+          const scheme = u.protocol.slice(0, -1);
+          if (p === "<all_urls>") return /^(https?|wss?|ftp|file|data)$/.test(scheme);
+          const m = /^(\*|[a-z][a-z0-9+.-]*):\/\/(\*|\*\.[^/*]+|[^/*]*)(\/.*)$/i.exec(String(p));
+          if (!m) return false;
+          if (m[1] === "*" ? !/^(https?|wss?)$/.test(scheme) : m[1].toLowerCase() !== scheme) return false;
+          const host = m[2].toLowerCase();
+          if (host.startsWith("*.")) { const base = host.slice(2); if (u.hostname !== base && !u.hostname.endsWith("." + base)) return false; }
+          else if (host && host !== "*" && u.hostname !== host) return false;
+          return new RegExp("^" + m[3].replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$").test(u.pathname + u.search);
+        };
+        const wanted = (filter, d) => {
+          if (!filter || typeof filter !== "object") return true;
+          if (Array.isArray(filter.urls) && !filter.urls.some((p) => matches(p, d.url))) return false;
+          if (Array.isArray(filter.types) && !filter.types.includes(d.type)) return false;
+          if (typeof filter.tabId === "number" && filter.tabId !== d.tabId) return false;
+          return true;
+        };
+        let timer = null, until = 0;
+        const soon = (ms) => { if (!timer && listening.size) timer = setTimeout(take, ms); };
+        const take = async () => {
+          timer = null;
+          if (!listening.size) return;
+          let items = [];
+          try { items = (await native("webRequest.blocked", [])) || []; } catch (e) { return; }
+          // While a page loads and a little after — ads come late — and as
+          // long as more keep coming; then nothing, and the worker can rest.
+          if (items.length || Date.now() < until) soon(1000);
+          if (!items.length) return;
+          let tabs = [];
+          try { tabs = await chrome.tabs.query({}); } catch (e) {}
+          for (const item of items) {
+            const tab = tabs.find((t) => t.index === item.index && (t.url === item.page || t.pendingUrl === item.page))
+              || tabs.find((t) => t.url === item.page)
+              || tabs.find((t) => t.index === item.index && t.url === undefined);
+            if (!tab) continue;
+            let origin;
+            try { origin = new URL(item.page).origin; } catch (e) {}
+            const details = {
+              requestId: "search-" + Math.round(item.time) + "-" + Math.random().toString(36).slice(2, 8),
+              url: item.url, method: "GET", frameId: 0, parentFrameId: -1, tabId: tab.id,
+              type: item.main ? "main_frame" : kind(item.url), timeStamp: item.time, fromCache: false,
+              error: "net::ERR_BLOCKED_BY_CLIENT", documentLifecycle: "active", frameType: "outermost_frame",
+            };
+            if (!item.main && origin && origin !== "null") details.initiator = origin;
+            for (const [listener, filter] of [...listening]) {
+              if (!wanted(filter, details)) continue;
+              try { listener(details); } catch (e) { setTimeout(() => { throw e; }); }
+            }
+          }
+        };
+        stirred = () => { until = Date.now() + 20000; soon(500); };
+        // eyeo's engine adds its webRequest listeners once it has started,
+        // which WebKit refuses: they hear nothing, and nothing would ever say
+        // it is time to look. A page loading is when blocked loads come, and
+        // the extension's own pages and content scripts write to it then; so
+        // a listener held from the worker's first line, in an extension whose
+        // code listens for errors, says so.
+        if (worker && new Set(__SEARCH_EVENTS__).has("webRequest.onErrorOccurred")) {
+          try { if (chrome.tabs && chrome.tabs.onUpdated) chrome.tabs.onUpdated.addListener(() => stirred()); } catch (e) {}
+          try { runtime.onMessage.addListener(() => { stirred(); }); } catch (e) {}
+          try { runtime.onConnect.addListener(() => stirred()); } catch (e) {}
+        }
+        put(onError, "addListener", (listener, filter, spec) => {
+          if (typeof listener === "function") listening.set(listener, filter);
+          soon(300);
+          return add(listener, filter, spec);
+        });
+        put(onError, "removeListener", (listener) => {
+          listening.delete(listener);
+          return remove(listener);
         });
       }
 
@@ -2969,6 +3469,10 @@ enum ExtensionShims {
         case "debug.error":
             owner.noteError(first as? String ?? "?", for: id)
             return nil
+
+        // MARK: what its request rules blocked, for webRequest.onErrorOccurred
+        case "webRequest.blocked":
+            return owner.takeBlocked(for: id)
 
         // MARK: the button's popup
         case "action.popup":
