@@ -1883,13 +1883,19 @@ final class Browser: NSObject, ObservableObject {
     /// A page for the bench: at the end of the row, behind whatever you are
     /// looking at, and marked as not yours.
     @discardableResult
-    func benchOpen(_ url: URL, userAgent: String? = nil) -> Tab {
+    func benchOpen(_ url: URL, userAgent: String? = nil, privately: Bool = false) -> Tab {
         let url = Browser.page(url)
         // At "Its own tabs", in Claude's own store, signed in to nothing of
         // yours, and without extensions — a password manager's would fill in
         // your passwords for it (see Agent.ownStore).
         let own = prefs.claude == .own ? Web.configuration(store: Agent.ownStore, extensions: false) : nil
-        let tab = Tab(bench: true, configuration: own ?? Browser.extensionConfiguration(for: url))
+        // Private, at any level: a store of its own that starts empty and
+        // goes with the tab — signed in to nothing, yours or Claude's — and no
+        // extensions, as a visitor who has never been to the site sees it.
+        // Without it, the only way to see a site signed out was to sign you
+        // out of it, everywhere, or to load it with its scripts off.
+        let fresh = privately ? Web.configuration(shy: true, extensions: false) : nil
+        let tab = Tab(shy: privately, bench: true, configuration: fresh ?? own ?? Browser.extensionConfiguration(for: url))
         prepare(tab)
         if let userAgent { tab.web.customUserAgent = userAgent }
         tabs.append(tab)
@@ -2785,7 +2791,9 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         // a sign-in window never showed: Continue with Google on a page Claude
         // had opened did nothing anyone could see, however often it was pressed.
         if let opener, opener.bench, opener.id != activeID {
-            let tab = Tab(bench: true, configuration: configuration)
+            // WebKit's configuration carries the opener's store; a private
+            // one's window is private as well, as from any private tab.
+            let tab = Tab(shy: opener.shy, bench: true, configuration: configuration)
             prepare(tab)
             tabs.append(tab)
             tab.opener = opener.id

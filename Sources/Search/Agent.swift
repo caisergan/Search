@@ -242,8 +242,10 @@ extension Bench {
                 return
             }
             // As a phone from the first request: a site picks its markup by
-            // the user agent it is sent.
-            let tab = browser.benchOpen(url, userAgent: request["mobile"] as? Bool == true ? Agent.phone : nil)
+            // the user agent it is sent. Private, in a store of its own that
+            // starts empty and goes with the tab (see benchOpen).
+            let tab = browser.benchOpen(url, userAgent: request["mobile"] as? Bool == true ? Agent.phone : nil,
+                                        privately: request["private"] as? Bool == true)
             if let size = Agent.size(request) { Agent.sizes[tab.id] = size }
             if request["show"] as? Bool == true, yours { browser.select(tab) } else { house(tab) }
             if request["wait"] as? Bool == false { answer(describe(tab)); return }
@@ -980,11 +982,12 @@ extension Bench {
     /// Claude's access set to another level while it is on. Its tabs that
     /// don't fit the new one close: down to "Its own tabs", every tab it had
     /// signed in as you; up from it, the ones in its own store, which would
-    /// say signed in as nobody under a setting that says otherwise. Your tabs
-    /// it worked in are let go to rest at once, so a page is judged by what
+    /// say signed in as nobody under a setting that says otherwise. A private
+    /// one is signed in to nothing at every level, and stays. Your tabs it
+    /// worked in are let go to rest at once, so a page is judged by what
     /// covers it again.
     func access(changed level: ClaudeAccess, browser: Browser) {
-        for tab in browser.tabs where tab.bench && Agent.inOwnStore(tab) != (level == .own) {
+        for tab in browser.tabs where tab.bench && !tab.shy && Agent.inOwnStore(tab) != (level == .own) {
             browser.close(tab)
             forget(tab)
         }
