@@ -2049,7 +2049,7 @@ final class Bench {
         let skip = Store.testing && (request["yes"] as? Bool ?? false)
         switch verb {
         case "extensions":
-            answer(["busy": extensions.busy ?? "", "extensions": extensions.installed.map { item -> [String: Any] in
+            answer(["busy": extensions.busy ?? "", "blockedSeen": extensions.blockedSeen, "extensions": extensions.installed.map { item -> [String: Any] in
                 let context = extensions.contexts[item.id]
                 let action = context?.action(for: extensions.activeAdapter)
                 return [
@@ -2065,6 +2065,7 @@ final class Bench {
                     "action": action?.label ?? "", "badge": action?.badgeText ?? "",
                     "popup": action?.presentsPopup ?? false,
                     "pinned": item.pinned ?? false, "source": item.source ?? "",
+                    "blockedSeen": extensions.blockedSeen[item.id] ?? 0,
                 ]
             }])
         case "ext-add":

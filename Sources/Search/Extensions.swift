@@ -50,6 +50,10 @@ final class Extensions: NSObject, ObservableObject {
 
     let controller: WKWebExtensionController
     @Published private(set) var installed: [Installed] = []
+    /// Whether the list of installed extensions was there and read: what
+    /// WebKit keeps for an extension not on it is let go only then (see
+    /// forgetRemoved), never because a list couldn't be read.
+    private var listRead = false
     /// The loaded ones, by id.
     @Published private(set) var contexts: [String: WKWebExtensionContext] = [:]
     /// Bumped when any extension's button changes — icon, badge, enabled.
@@ -124,7 +128,9 @@ final class Extensions: NSObject, ObservableObject {
         controller = WKWebExtensionController(configuration: configuration)
         super.init()
         controller.delegate = self
-        installed = (try? JSONDecoder().decode([Installed].self, from: Data(contentsOf: Extensions.list))) ?? []
+        let read = try? JSONDecoder().decode([Installed].self, from: Data(contentsOf: Extensions.list))
+        installed = read ?? []
+        listRead = read != nil
     }
 
     // MARK: - starting
@@ -158,6 +164,7 @@ final class Extensions: NSObject, ObservableObject {
                     }
                 }
                 Launch.mark("extensions")
+                forgetRemoved()
                 checkForUpdates()
                 // Extensions another Mac has, asked about once (see Sync.swift).
                 SettingsSync.offerExtensions(self)
@@ -263,6 +270,11 @@ final class Extensions: NSObject, ObservableObject {
                 context.setPermissionStatus(.grantedExplicitly, for: pattern)
             }
             try controller.load(context)
+            // Rule lists Search had to leave off (see ExtensionShims.ruleBudget).
+            let off = (try? JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent(ExtensionShims.rulesOff)))) as? [String] ?? []
+            for list in off {
+                noteError("declarativeNetRequest: rule list \(list) left off — with it, more rules would apply to every address than WebKit can compile", for: item.id)
+            }
             // The keys someone gave its commands in Settings › Shortcuts.
             Shortcuts.shared.apply(to: context, id: item.id)
             watch(context)
@@ -278,12 +290,103 @@ final class Extensions: NSObject, ObservableObject {
     }
 
     private func unload(_ id: String) {
+        blockedLoads[id] = nil
         guard let context = contexts[id] else { return }
         try? controller.unload(context)
         // Its ports read as gone only once WebKit has had a turn.
         DispatchQueue.main.async { ExtensionNative.stopOrphans() }
         contexts[id] = nil
         actionsChanged += 1
+    }
+
+    // MARK: - what an extension's request rules blocked
+
+    /// The requests each extension's own request rules stopped, until its
+    /// background takes them for webRequest.onErrorOccurred (see "blocked"
+    /// in the shim). WebKit tells an extension nothing of them, where
+    /// Chrome's event hears every one with net::ERR_BLOCKED_BY_CLIENT —
+    /// and that is how eyeo's engine counts what it blocked: AdBlock's
+    /// "on this page" said 0 on a page it had cleared. Kept only for an
+    /// extension that has asked, the last 400 each.
+    private var blockedLoads: [String: [[String: Any]]] = [:]
+
+    /// How many blocked loads WebKit reported per rule list, in a test run
+    /// (`./bench extensions`).
+    private(set) var blockedSeen: [String: Int] = [:]
+
+    /// From the browser's navigation delegate: a content rule list stopped a
+    /// load. An extension's list carries the extension's id.
+    func blocked(_ url: URL, by identifier: String, in tab: Tab) {
+        if Store.testing { blockedSeen[identifier, default: 0] += 1 }
+        guard var list = blockedLoads[identifier], let context = contexts[identifier], seen(tab) else { return }
+        let index = adapter(for: tab).indexInWindow(for: context)
+        guard index != NSNotFound else { return }
+        let page = tab.address?.absoluteString ?? ""
+        list.append([
+            "url": url.absoluteString, "index": index, "page": page,
+            "main": url.absoluteString == page, "time": Date().timeIntervalSince1970 * 1000,
+        ])
+        blockedLoads[identifier] = Array(list.suffix(400))
+    }
+
+    /// What was blocked since the last time this extension asked, once: a
+    /// worker started afresh gets what came while it was away, and never
+    /// what one before it already had.
+    func takeBlocked(for id: String) -> [[String: Any]] {
+        let taken = blockedLoads[id] ?? []
+        blockedLoads[id] = []
+        return taken
+    }
+
+    // MARK: - what WebKit keeps
+
+    /// Where WebKit keeps what each extension stored, its request rules and
+    /// its state, a folder per extension by its id: …/WebKit/<bundle>/
+    /// WebExtensions/<store>/<id>, the store "Default" or the identifier of
+    /// a test run's. WebKit's own layout rather than an API, so a folder is
+    /// only ever taken when it is plainly WebKit's: named by an id, holding
+    /// its State.plist.
+    private var webKitFolder: URL? {
+        guard let bundle = Bundle.main.bundleIdentifier,
+              let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
+        else { return nil }
+        let store = Store.testing && !Store.ownContainer ? Store.probeStore(2).uuidString : "Default"
+        return library.appendingPathComponent("WebKit/\(bundle)/WebExtensions/\(store)", isDirectory: true)
+    }
+
+    /// Chrome forgets an extension's data when it is removed; WebKit keeps it
+    /// under the extension's id. A removed extension came back to all of it
+    /// when added again, as if it had only been updated — its old settings
+    /// and request rules, and no first-run — and AdBlock left 160 MB of
+    /// compiled rules behind. What it stored goes through WebKit; the rules
+    /// and the state, which WebKit has no call for, with the folder.
+    private func forget(_ id: String) {
+        Task {
+            let records = await controller.dataRecords(ofTypes: WKWebExtensionController.allExtensionDataTypes)
+            let mine = records.filter { $0.uniqueIdentifier == id }
+            if !mine.isEmpty { await controller.removeData(ofTypes: WKWebExtensionController.allExtensionDataTypes, from: mine) }
+            // Added back meanwhile: what it has now is its own.
+            guard !installed.contains(where: { $0.id == id }), let folder = webKitFolder?.appendingPathComponent(id, isDirectory: true),
+                  FileManager.default.fileExists(atPath: folder.appendingPathComponent("State.plist").path)
+            else { return }
+            try? FileManager.default.removeItem(at: folder)
+        }
+    }
+
+    /// The same for extensions removed before Search forgot anything: at
+    /// launch, a folder of WebKit's for an extension that isn't installed
+    /// goes. Not in a test copy under a bundle id of its own, whose worlds
+    /// share one store and so each other's folders.
+    private func forgetRemoved() {
+        guard listRead, !(Store.testing && Store.ownContainer), let root = webKitFolder,
+              let names = try? FileManager.default.contentsOfDirectory(atPath: root.path)
+        else { return }
+        let kept = Set(installed.map(\.id))
+        for name in names where !kept.contains(name) && contexts[name] == nil {
+            let folder = root.appendingPathComponent(name, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: folder.appendingPathComponent("State.plist").path) else { continue }
+            try? FileManager.default.removeItem(at: folder)
+        }
     }
 
     private func save() {
@@ -318,7 +421,9 @@ final class Extensions: NSObject, ObservableObject {
                 let target = Extensions.folder(for: id)
                 let staged = Extensions.folder.appendingPathComponent(".staging-\(id)", isDirectory: true)
                 try Crx.unpack(zip, into: staged)
-                try ExtensionShims.prepare(staged, fresh: true)
+                // Away from the main thread: preparing reads every script and
+                // rule list the package ships (AdBlock: 37 lists, 170 MB).
+                try await Task.detached(priority: .userInitiated) { try ExtensionShims.prepare(staged, fresh: true) }.value
                 try await admit(staged, as: id, fromStore: true, finalFolder: target, confirm: confirm || !Store.testing, approved: approved)
             } catch {
                 browser?.announce(error.localizedDescription)
@@ -529,6 +634,7 @@ final class Extensions: NSObject, ObservableObject {
 
     func remove(_ id: String) {
         unload(id)
+        forget(id)
         errors[id] = nil
         Extensions.setSettings([:], for: id)
         Store.settings.removeObject(forKey: "extensions.granted.\(id)")
@@ -645,7 +751,7 @@ final class Extensions: NSObject, ObservableObject {
             let zip = try Crx.verifiedZip(try await Crx.fetch(item.id), id: item.id)
             let staged = Extensions.folder.appendingPathComponent(".staging-\(item.id)", isDirectory: true)
             try Crx.unpack(zip, into: staged)
-            try ExtensionShims.prepare(staged, fresh: true)
+            try await Task.detached(priority: .utility) { try ExtensionShims.prepare(staged, fresh: true) }.value
             let found = try await WKWebExtension(resourceBaseURL: staged)
             // Everything it could do, sites included, against what it was
             // allowed when it was added or last asked about.
