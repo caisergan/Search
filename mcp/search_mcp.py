@@ -116,7 +116,7 @@ def text(value):
 
 
 def tab_line(t):
-    mark = "claude" if t.get("bench") else ("front" if t.get("active") else "yours")
+    mark = ("claude, private" if t.get("shy") else "claude") if t.get("bench") else ("front" if t.get("active") else "yours")
     state = " (loading)" if t.get("loading") else (" (asleep)" if t.get("asleep") else "")
     return f"{t['id']}  [{mark}]  {t.get('title') or '—'}  {t.get('url')}{state}"
 
@@ -168,10 +168,11 @@ TOOLS = [
     },
     {
         "name": "tabs_create",
-        "description": "Open a new tab of Claude's own at a URL (localhost works) and wait for it to load. It opens at the end of the row with a flask, out of the user's way, 1280×800 unless width and height say otherwise. mobile: true loads it with an iPhone user agent from the first request — with width 390 and height 844, a phone. show: true brings it to the front (needs “Let Claude use Search” at “Your tabs too”).",
+        "description": "Open a new tab of Claude's own at a URL (localhost works) and wait for it to load. It opens at the end of the row with a flask, out of the user's way, 1280×800 unless width and height say otherwise. mobile: true loads it with an iPhone user agent from the first request — with width 390 and height 844, a phone. private: true opens it in a cookie jar of its own that starts empty, with no extensions: signed in to nothing, the user's accounts or Claude's — the site as a signed-out visitor sees it, scripts and all; windows its pages open stay private, and it is all gone when the tab closes. Use it to see a site signed out: never sign the user out for that, which would sign them out everywhere. show: true brings it to the front (needs “Let Claude use Search” at “Your tabs too”).",
         "inputSchema": {"type": "object", "properties": {
             "url": {"type": "string"}, "show": {"type": "boolean"},
-            "width": {"type": "number"}, "height": {"type": "number"}, "mobile": {"type": "boolean"}}, "required": ["url"]},
+            "width": {"type": "number"}, "height": {"type": "number"}, "mobile": {"type": "boolean"},
+            "private": {"type": "boolean"}}, "required": ["url"]},
     },
     {
         "name": "resize_page",
@@ -389,8 +390,18 @@ def call(name, args):
             req["width"], req["height"] = float(args["width"]), float(args["height"])
         if args.get("mobile"):
             req["mobile"] = True
+        if args.get("private"):
+            req["private"] = True
         a = ask(req)
         current["id"] = a.get("id")
+        # A Search from before private tabs opens an ordinary one instead,
+        # signed in wherever Claude's tabs are: it never passes for private.
+        if args.get("private") and a.get("id"):
+            tab = next((t for t in ask({"do": "a.tabs"}).get("tabs", []) if t.get("id") == a["id"]), None)
+            if not (tab and tab.get("shy")):
+                ask({"do": "a.close", "id": a["id"]})
+                current["id"] = None
+                raise Refused("this Search can't open a private tab yet — it needs updating. It opened an ordinary tab of Claude's instead, signed in as Claude's tabs are, and that tab is closed")
         return [text(said("a.open", a))]
 
     if name == "tabs_close":

@@ -23,7 +23,7 @@ screenshots.
 | Tool | What it does |
 |---|---|
 | `tabs_context` | Lists the tabs Claude may use: the ones it opened, and yours if allowed |
-| `tabs_create`, `tabs_close`, `tab_show` | Open a tab of Claude's at any size (as a phone with `mobile`), close it, or bring it to the front |
+| `tabs_create`, `tabs_close`, `tab_show` | Open a tab of Claude's at any size (as a phone with `mobile`, signed out of everything with `private`), close it, or bring it to the front |
 | `navigate` | Go to a URL, or back, forward, reload, `hard` (every file checked with the server, as ⇧⌘R), `empty` (the site's cache emptied first), and wait for the page to load |
 | `resize_page` | Give a tab of Claude's another viewport size: a phone's (with its user agent, the page loaded again for it), a tablet's, a wide screen's. It keeps it in your window too |
 | `read_page` | Lists what can be used on the page, one element per line with a ref and its place on screen. Same-site frames and shadow DOM included |
@@ -56,6 +56,13 @@ screenshots.
   or by a click on its tab, the tab keeps that size, in the middle, the way
   a responsive design mode shows a page. `tabs_create` with `mobile: true`
   opens a tab as a phone from its first request.
+- **As a visitor.** `tabs_create` with `private: true` opens a tab of
+  Claude's in a cookie jar of its own that starts empty, with no extensions:
+  signed in to nothing, neither as you nor in Claude's own store, at any
+  level — the site as someone signed out sees it, with its scripts running.
+  Windows its pages open stay private too, and everything in it goes when
+  the tab closes. Your sign-ins are left alone: signing out in a tab of
+  Claude's would sign you out in every tab.
 - **Fresh after a change.** `navigate` with `hard` checks every file with the
   server and drops what a service worker kept, as ⇧⌘R does. `empty` empties
   the site's cache first, for a server that says a changed file hasn't
@@ -75,7 +82,8 @@ level allows everything the one before it does, and more.
 
 Changing the level closes Claude's tabs that don't fit the new one: going
 down to *Its own tabs* closes every tab of Claude's that was signed in as
-you.
+you, and going up from it the ones in Claude's own store. A private tab of
+Claude's is signed in to nothing at every level, and stays.
 
 The level is kept in Search's settings and, beside it, as a mark in the
 keychain that only Search itself can write. A level the settings file says
@@ -85,9 +93,9 @@ mark allows and asks at the bottom of the window, *Allow* or *Don't allow*.
 
 ## Safety
 
-- Claude reaches only web pages. It never reaches a private tab, an
+- Claude reaches only web pages. It never reaches a private tab of yours, an
   extension's page (a password manager's vault is one) or a `file:` address,
-  at any level.
+  at any level. A private tab it opens itself, with `private`, is its own.
 - Below *Your tabs too*, your tabs are off-limits: Claude can't even see
   their addresses, through the MCP server or through the socket itself.
 - From *Signed in as you* up, Claude's own tabs are signed in as you. Pick
