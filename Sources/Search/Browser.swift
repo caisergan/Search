@@ -1757,8 +1757,11 @@ final class Browser: NSObject, ObservableObject {
     /// A tab for a page opened out of `source`, not yet anywhere.
     private func tab(going url: URL, from source: Tab?) -> Tab {
         let page = Browser.extensionConfiguration(for: url)
+        // Out of a private tab of Claude's, a store of its own: what Claude
+        // signed in to there isn't yours, and what you sign in to here —
+        // your password manager included — isn't Claude's.
         let tab = if let source, source.shy, page == nil {
-            Tab(shy: true, configuration: Web.configuration(shy: true, store: source.store))
+            Tab(shy: true, configuration: Web.configuration(shy: true, store: source.bench ? nil : source.store))
         } else {
             Tab(configuration: page)
         }
@@ -1835,11 +1838,12 @@ final class Browser: NSObject, ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         // A private tab stays private, and keeps its own sign-ins when it
         // had them; an extension's page it showed was in that extension's
-        // store, so going back to the web takes a new private one.
+        // store, so going back to the web takes a new private one. Claude's
+        // stays without extensions (see benchOpen).
         let page = Browser.extensionConfiguration(for: url)
         let fresh = if tab.shy {
             Tab(shy: true, bench: tab.bench, configuration: page
-                ?? Web.configuration(shy: true, store: tab.store.isPersistent ? nil : tab.store))
+                ?? Web.configuration(shy: true, store: tab.store.isPersistent ? nil : tab.store, extensions: !tab.bench))
         } else {
             Tab(bench: tab.bench, configuration: page)
         }

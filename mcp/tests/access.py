@@ -212,6 +212,29 @@ def cookies(yours):
     ask({"do": "a.close", "id": "all"})
 
 
+def private_link():
+    print("a link ⌘-clicked out of Claude's private tab")
+    level(2)
+    claude = ask({"do": "a.open", "url": PAGE + "/?private", "private": True})["id"]
+    js("document.cookie = 'claude=private; path=/'", claude)
+    js(f"document.body.insertAdjacentHTML('beforeend', '<a id=out href=\"{PAGE}/?opened\">out</a>')", claude)
+    ask({"do": "a.click", "id": claude, "selector": "#out", "mods": ["cmd"]})
+    opened = None
+    for _ in range(40):
+        opened = next((t for t in ask({"do": "tabs"})["tabs"] if "?opened" in t["url"] and not t["bench"]), None)
+        if opened and not opened["loading"]:
+            break
+        time.sleep(0.25)
+    check("it opens a tab of yours", opened is not None)
+    if opened:
+        check("that tab is private", opened["shy"])
+        jar = str(ask({"do": "eval", "id": opened["id"], "js": "document.cookie"}).get("value"))
+        check("it has none of Claude's private sign-ins", "claude=private" not in jar, jar)
+        check("nor yours", "mine=yes" not in jar, jar)
+        ask({"do": "close", "id": opened["id"]})
+    ask({"do": "a.close", "id": "all"})
+
+
 def clipboard():
     print("the clipboard")
     for n, name in ((1, "Its own tabs"), (2, "Signed in as you")):
@@ -394,6 +417,7 @@ def main():
     try:
         yours = levels()
         cookies(yours)
+        private_link()
         clipboard()
         batch()
         upload()
