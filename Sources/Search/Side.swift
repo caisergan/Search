@@ -78,7 +78,7 @@ struct SideBar: View {
                 DragStrip()
                     .frame(width: 10 + Metrics.sideLights)
                 Color.clear
-                    .frame(width: Metrics.helm + (prefs.showsGhostMenu ? 30 : 0) + corner + 8)
+                    .frame(width: Metrics.helm + (prefs.showsGhostMenu ? Metrics.ghostDoor : 0) + corner + 8)
                     .allowsHitTesting(false)
                 DragStrip()
             }
@@ -93,9 +93,7 @@ struct SideBar: View {
                     Color.clear.frame(width: Metrics.sideLights)
                     HStack(spacing: 4) {
                         Helm(browser: browser)
-                        if prefs.showsGhostMenu {
-                            TabGhostMenu(browser: browser)
-                        }
+                        if prefs.showsGhostMenu { GhostDoor(browser: browser) }
                         DownloadsAndExtensions(always: true, room: extensionRoom)
                             .background {
                                 GeometryReader { box in
@@ -199,7 +197,7 @@ struct SideBar: View {
                     .onEnded { _ in grabbed = nil }
             )
             .modifier(OneClick(double: true) {
-                withAnimation(Motion.settle) { prefs.sideWidth = Metrics.side }
+                withAnimation(Motion.settle) { prefs.sideWidth = Metrics.side(ghosts: prefs.showsGhostMenu) }
             })
             .animation(Motion.quick, value: onEdge)
     }
@@ -693,12 +691,13 @@ struct SideBar: View {
     /// The doors at the bottom: the spaces, the extensions and the
     /// bookmarks, and a new tab, when it was asked to live here, alone in
     /// the far corner where it never moves.
-    /// The pinned extension buttons that fit between reload and the puzzle:
-    /// the column less its padding, the lights, the three doors and the
-    /// puzzle with a little air, at a door and its gap each.
+    /// The pinned extension buttons that fit between reload (or the
+    /// recently closed door after it) and the puzzle: the column less its
+    /// padding, the lights, the doors and the puzzle with a little air, at a
+    /// door and its gap each.
     private var extensionRoom: Int {
-        let doors: CGFloat = prefs.showsGhostMenu ? (4 * 26 + 3 * 4) : (3 * 26 + 2 * 2)
-        let free = prefs.sideWidth - 20 - Metrics.sideLights - doors - 26 - 4
+        let ghost = prefs.showsGhostMenu ? Metrics.ghostDoor : 0
+        let free = prefs.sideWidth - 20 - Metrics.sideLights - (3 * 26 + 2 * 2) - ghost - 26 - 4
         return max(0, Int(free / 28))
     }
 
@@ -1218,6 +1217,9 @@ struct CaptureMark: View {
 struct Door: View {
     let icon: String
     var on = false
+    /// The symbol stood on end, about its middle: the three dots of a menu,
+    /// which SF Symbols only draws lying down.
+    var turned = false
     var help = ""
     let act: () -> Void
 
@@ -1227,6 +1229,7 @@ struct Door: View {
         Button(action: act) {
             Image(systemName: icon)
                 .font(.system(size: 11, weight: .medium))
+                .rotationEffect(.degrees(turned ? 90 : 0))
                 .foregroundStyle(on ? Palette.ink : (hovering ? Palette.ink.opacity(0.7) : Palette.muted))
                 .frame(width: 26, height: 26)
                 .background(

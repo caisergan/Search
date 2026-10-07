@@ -518,9 +518,15 @@ enum Metrics {
     /// The address field, in both the places it shows up.
     static let fieldWidth: CGFloat = 560
     /// The column of titles down the left, in the way that has one.
-    static let side: CGFloat = 260
-    static let sideMin: CGFloat = 250
+    static let side: CGFloat = 232
+    static let sideMin: CGFloat = 176
     static let sideMax: CGFloat = 440
+    /// The recently closed door after reload, and the gap before it.
+    static let ghostDoor: CGFloat = 26 + 4
+    /// The column's width to start at, and to go back to on a double-click
+    /// of its edge: wide enough for the row along its top, with or without
+    /// the recently closed door in it.
+    static func side(ghosts: Bool) -> CGFloat { side + (ghosts ? ghostDoor : 0) }
 }
 
 // One spring for anything that moves between two places, one for anything that

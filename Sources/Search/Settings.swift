@@ -402,10 +402,6 @@ struct SettingsPanel: View {
                 Segmented(options: Glyph.allCases.map { ($0, $0.title) }, selection: $prefs.glyph)
             }
             Rule()
-            Line("Three-dot menu", "A menu beside navigation to reopen recently closed tabs") {
-                Segmented(options: [(true, "On"), (false, "Off")], selection: $prefs.showsGhostMenu)
-            }
-            Rule()
             Line("Open new tabs", "Where ⌘T puts a new tab in the row. Pinned tabs stay first") {
                 Picker("", selection: $prefs.newTabSpot) {
                     ForEach(NewTabSpot.allCases) { spot in
@@ -427,6 +423,10 @@ struct SettingsPanel: View {
             Rule()
             Line("Show how far you've read", "The tab you're on fills with grey as you scroll down the page") {
                 Switch(on: $prefs.showsReading)
+            }
+            Rule()
+            Line("Show recently closed tabs", "A ⋮ after back, forward and reload lists the tabs you closed, to bring one back. History › Recently Closed and ⇧⌘T have them either way.") {
+                Switch(on: $prefs.showsGhostMenu)
             }
             Rule()
             Line("Sleep tabs you aren't using", "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
