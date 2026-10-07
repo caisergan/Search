@@ -78,10 +78,9 @@ struct SideBar: View {
                 DragStrip()
                     .frame(width: 10 + Metrics.sideLights)
                 Color.clear
-                    .frame(width: Metrics.helm + (prefs.showsGhostMenu ? 30 : 0))
+                    .frame(width: Metrics.helm + (prefs.showsGhostMenu ? 30 : 0) + corner + 8)
                     .allowsHitTesting(false)
-                // Not under the puzzle and its pinned buttons at the far end.
-                DragStrip(trailing: corner + 10)
+                DragStrip()
             }
             .frame(height: Metrics.strip)
 
@@ -92,25 +91,21 @@ struct SideBar: View {
                 // row to put them at in this mode.
                 HStack(spacing: 0) {
                     Color.clear.frame(width: Metrics.sideLights)
-                    if prefs.showsGhostMenu {
-                        HStack(spacing: 4) {
-                            Helm(browser: browser)
+                    HStack(spacing: 4) {
+                        Helm(browser: browser)
+                        if prefs.showsGhostMenu {
                             TabGhostMenu(browser: browser)
                         }
-                    } else {
-                        Helm(browser: browser)
+                        DownloadsAndExtensions(always: true, room: extensionRoom)
+                            .background {
+                                GeometryReader { box in
+                                    Color.clear
+                                        .onAppear { corner = box.size.width }
+                                        .onChange(of: box.size.width) { _, width in corner = width }
+                                }
+                            }
                     }
                     Spacer(minLength: 0)
-                    // The downloads and the extensions, in the corner
-                    // across from the lights.
-                    DownloadsAndExtensions(always: true, room: extensionRoom)
-                        .background {
-                            GeometryReader { box in
-                                Color.clear
-                                    .onAppear { corner = box.size.width }
-                                    .onChange(of: box.size.width) { _, width in corner = width }
-                            }
-                        }
                 }
                 .frame(height: Metrics.strip)
 
