@@ -78,7 +78,7 @@ struct SideBar: View {
                 DragStrip()
                     .frame(width: 10 + Metrics.sideLights)
                 Color.clear
-                    .frame(width: Metrics.helm + 30)
+                    .frame(width: Metrics.helm + (prefs.showsGhostMenu ? 30 : 0))
                     .allowsHitTesting(false)
                 // Not under the puzzle and its pinned buttons at the far end.
                 DragStrip(trailing: corner + 10)
@@ -91,12 +91,14 @@ struct SideBar: View {
                 // bar, moved beside the lights since there's no far end of a
                 // row to put them at in this mode.
                 HStack(spacing: 0) {
-                    Color.clear
-                        .frame(width: Metrics.sideLights)
-                        .fixedSize()
-                    HStack(spacing: 4) {
+                    Color.clear.frame(width: Metrics.sideLights)
+                    if prefs.showsGhostMenu {
+                        HStack(spacing: 4) {
+                            Helm(browser: browser)
+                            TabGhostMenu(browser: browser)
+                        }
+                    } else {
                         Helm(browser: browser)
-                        TabGhostMenu(browser: browser)
                     }
                     Spacer(minLength: 0)
                     // The downloads and the extensions, in the corner
@@ -700,7 +702,8 @@ struct SideBar: View {
     /// the column less its padding, the lights, the three doors and the
     /// puzzle with a little air, at a door and its gap each.
     private var extensionRoom: Int {
-        let free = prefs.sideWidth - 20 - Metrics.sideLights - (4 * 26 + 3 * 4) - 26 - 4
+        let doors: CGFloat = prefs.showsGhostMenu ? (4 * 26 + 3 * 4) : (3 * 26 + 2 * 2)
+        let free = prefs.sideWidth - 20 - Metrics.sideLights - doors - 26 - 4
         return max(0, Int(free / 28))
     }
 

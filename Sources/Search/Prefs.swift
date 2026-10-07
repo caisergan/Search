@@ -379,6 +379,11 @@ final class Preferences: ObservableObject {
     @Published var showsReading: Bool {
         didSet { store.set(showsReading, forKey: "tabs.reading") }
     }
+    /// A three-dot menu beside navigation to reopen recently closed tabs.
+    /// On unless turned off.
+    @Published var showsGhostMenu: Bool {
+        didSet { store.set(showsGhostMenu, forKey: "tabs.ghostmenu") }
+    }
     /// A line along the top of the page while it loads (see LoadingBar in
     /// Stage.swift). Off unless asked for.
     @Published var showsLoading: Bool {
@@ -591,6 +596,7 @@ final class Preferences: ObservableObject {
         customEngine = store.string(forKey: "search.custom") ?? ""
         sleepsTabs = store.object(forKey: "tabs.sleep") as? Bool ?? true
         showsReading = store.object(forKey: "tabs.reading") as? Bool ?? true
+        showsGhostMenu = store.object(forKey: "tabs.ghostmenu") as? Bool ?? true
         showsLoading = store.bool(forKey: "pages.loading")
         shielded = store.object(forKey: "shield") as? Bool ?? true
         extensionsInPrivate = store.bool(forKey: "extensions.private")

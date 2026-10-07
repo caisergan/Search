@@ -402,6 +402,10 @@ struct SettingsPanel: View {
                 Segmented(options: Glyph.allCases.map { ($0, $0.title) }, selection: $prefs.glyph)
             }
             Rule()
+            Line("Three-dot menu", "A menu beside navigation to reopen recently closed tabs") {
+                Segmented(options: [(true, "On"), (false, "Off")], selection: $prefs.showsGhostMenu)
+            }
+            Rule()
             Line("Open new tabs", "Where ⌘T puts a new tab in the row. Pinned tabs stay first") {
                 Picker("", selection: $prefs.newTabSpot) {
                     ForEach(NewTabSpot.allCases) { spot in
