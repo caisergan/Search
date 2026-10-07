@@ -130,6 +130,7 @@ struct TabBar: View {
                     HStack(spacing: Metrics.tabGap) {
                         DownloadsAndExtensions()
                         Helm(browser: browser)
+                        TabGhostMenu(browser: browser)
                             .padding(.trailing, 8)
                         Door(icon: "bookmark", help: "Bookmarks") { browser.bookmarksOpen.toggle() }
                             .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .bottom) {
