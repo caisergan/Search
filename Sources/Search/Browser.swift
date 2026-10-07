@@ -1023,6 +1023,9 @@ final class Browser: NSObject, ObservableObject {
         /// only as its last address. Nil for a page there is none to take
         /// from: one that never loaded, an extension's.
         var memory: Any?
+        /// When it closed. Nil for a tab left behind at launch, which only
+        /// came into the list then.
+        var closed: Date?
 
         var label: String { title.isEmpty ? Address.pretty(url) : title }
 
@@ -1670,6 +1673,12 @@ final class Browser: NSObject, ObservableObject {
         reopen(ghost)
     }
 
+    /// Every one of them, oldest first, so each goes back to its place in
+    /// the row and the newest ends up the tab on screen.
+    func reopenAll() {
+        for ghost in ghosts { reopen(ghost) }
+    }
+
     /// One of them by name, from the History menu.
     func reopen(_ ghost: Ghost) {
         ghosts.removeAll { $0.id == ghost.id }
@@ -1688,7 +1697,7 @@ final class Browser: NSObject, ObservableObject {
     /// while there is still a page to ask.
     private func remember(_ tab: Tab, at index: Int) {
         guard !tab.shy, let url = tab.address else { return }
-        ghosts.append(Ghost(url: url, title: tab.title, index: index, memory: tab.remembered))
+        ghosts.append(Ghost(url: url, title: tab.title, index: index, memory: tab.remembered, closed: Date()))
         if ghosts.count > 12 { ghosts.removeFirst() }
     }
 

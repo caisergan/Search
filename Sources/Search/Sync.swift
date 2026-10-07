@@ -37,7 +37,7 @@ enum SettingsSync {
         "passwords.fill", "passwords.save", "passwords.never", "passwords.suggest", "autofill.forms", "pinned.load",
         "search.custom", "search.engine", "shield", "shield.paused",
         "sidebar", "sidebar.address", "sidebar.hides", "sidebar.newtab.foot", "sidebar.pinned.folded",
-        "sidebar.reveal", "sidebar.width", "start.load", "start.restore", "tabs.reading", "tabs.size", "tabs.sleep",
+        "sidebar.reveal", "sidebar.width", "start.load", "start.restore", "tabs.ghostmenu", "tabs.reading", "tabs.size", "tabs.sleep",
         "theme", "zoomspot", "downloads.ask", "shortcuts", "shortcuts.extensions",
         "WebAutomaticDashSubstitutionEnabled", "WebAutomaticQuoteSubstitutionEnabled",
         "WebAutomaticSpellingCorrectionEnabled",

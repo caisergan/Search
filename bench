@@ -37,6 +37,7 @@
     ./bench ext-remove ID
     ./bench strip PATH [WIDTH]         the row of tabs across the top, drawn off screen to a PNG
     ./bench column PATH [HEIGHT]       the column of tabs, drawn off screen to a PNG
+    ./bench ghosts PATH                the recently closed list from the door beside reload, drawn to a PNG
     ./bench print state|cancel         test run: whether a print sheet is up, and the last print (from a frame or
                                        the page); cancel puts the sheet away
     ./bench print to PATH              test run: the next print written to PATH as a PDF, without the sheet
@@ -301,6 +302,9 @@ def main(argv):
             request["security"] = args[1] == "security"
             request["permissions"] = args[1] == "permissions"
             request["translation"] = args[1] == "translation"
+    elif verb == "ghosts":
+        if len(args) != 1: sys.exit("usage: bench ghosts PATH")
+        request["path"] = os.path.abspath(args[0])
     elif verb == "column":
         if not 1 <= len(args) <= 2: sys.exit("usage: bench column PATH [HEIGHT]")
         request["path"] = os.path.abspath(args[0])

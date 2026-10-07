@@ -1893,6 +1893,14 @@ final class Bench {
                 window.contentView = nil
             }
 
+        case "ghosts":
+            // The recently closed list from the door beside reload, as a picture.
+            guard let path = request["path"] as? String, let data = ghostListPicture(browser)?.representation(using: .png, properties: [:]) else {
+                answer(["error": "ghosts needs a path"])
+                return
+            }
+            do { try data.write(to: URL(fileURLWithPath: path)); answer(["saved": path]) }
+            catch { answer(["error": error.localizedDescription]) }
         case "column":
             // The column of tabs, drawn off screen at its width, with what the
             // browser has now — the rows, the card for a new space, the dots.
@@ -2077,7 +2085,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "print", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "pin", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "fold", "pointer", "consent", "site", "little", "ui",
+                "tabs", "open", "go", "close", "wait", "sleep", "select", "print", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "resize", "hit", "film", "window", "pages", "picture", "place", "pin", "field", "bookmark", "menu", "keyeq", "pull", "space", "strip", "column", "ghosts", "fold", "pointer", "consent", "site", "little", "ui",
             ]])
         }
     }

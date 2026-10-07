@@ -379,6 +379,11 @@ final class Preferences: ObservableObject {
     @Published var showsReading: Bool {
         didSet { store.set(showsReading, forKey: "tabs.reading") }
     }
+    /// A door after reload listing the tabs you closed, to bring one back
+    /// (see GhostDoor). On unless turned off.
+    @Published var showsGhostMenu: Bool {
+        didSet { store.set(showsGhostMenu, forKey: "tabs.ghostmenu") }
+    }
     /// A line along the top of the page while it loads (see LoadingBar in
     /// Stage.swift). Off unless asked for.
     @Published var showsLoading: Bool {
@@ -582,7 +587,10 @@ final class Preferences: ObservableObject {
         newTabInFoot = store.bool(forKey: "sidebar.newtab.foot")
         newTabOver = store.bool(forKey: "newtab.over")
         newTabSpot = store.string(forKey: "newtab.spot").flatMap(NewTabSpot.init) ?? .bottom
-        let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)
+        // Before the column's width, which starts wide enough for its door.
+        let ghosts = store.object(forKey: "tabs.ghostmenu") as? Bool ?? true
+        showsGhostMenu = ghosts
+        let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side(ghosts: ghosts))
         sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
         tabSize = store.string(forKey: "tabs.size").flatMap(TabSize.init) ?? .regular

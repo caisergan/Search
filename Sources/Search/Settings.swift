@@ -425,6 +425,10 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.showsReading)
             }
             Rule()
+            Line("Show recently closed tabs", "A ⋮ after back, forward and reload lists the tabs you closed, to bring one back. History › Recently Closed and ⇧⌘T have them either way.") {
+                Switch(on: $prefs.showsGhostMenu)
+            }
+            Rule()
             Line("Sleep tabs you aren't using", "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
                 Switch(on: $prefs.sleepsTabs)
             }

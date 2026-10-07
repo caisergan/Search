@@ -29,7 +29,7 @@ struct TabBar: View {
             ZStack(alignment: .leading) {
                 // The empty half of the strip is what you grab to move the
                 // window; the tabs keep the run they sit on.
-                DragStrip(reserved: Metrics.lights + dot + (making ? min(540, room(in: geo.size.width)) : run(in: geo.size.width)) + Metrics.tabGap + Metrics.plusWidth, trailing: Metrics.helm + 26 + 24)
+                DragStrip(reserved: Metrics.lights + dot + (making ? min(540, room(in: geo.size.width)) : run(in: geo.size.width)) + Metrics.tabGap + Metrics.plusWidth, trailing: Metrics.helm + (browser.prefs.showsGhostMenu ? Metrics.ghostDoor : 0) + 26 + 24)
                 // And the corner the lights sit in, which is title bar too —
                 // the one stretch left to take hold of when tabs fill the row.
                 DragStrip()
@@ -129,8 +129,11 @@ struct TabBar: View {
                     // of the row. The dropdown hangs from the last one.
                     HStack(spacing: Metrics.tabGap) {
                         DownloadsAndExtensions()
-                        Helm(browser: browser)
-                            .padding(.trailing, 8)
+                        HStack(spacing: 4) {
+                            Helm(browser: browser)
+                            if browser.prefs.showsGhostMenu { GhostDoor(browser: browser) }
+                        }
+                        .padding(.trailing, 8)
                         Door(icon: "bookmark", help: "Bookmarks") { browser.bookmarksOpen.toggle() }
                             .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .bottom) {
                                 BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
