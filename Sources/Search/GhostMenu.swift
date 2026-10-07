@@ -34,24 +34,42 @@ struct TabGhostMenu: View {
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             }
         } label: {
-            Image(systemName: "ellipsis")
-                .rotationEffect(.degrees(90))
+            Image(nsImage: TabGhostMenu.verticalEllipsis)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(hovering ? Palette.ink.opacity(0.7) : Palette.muted)
                 .frame(width: 26, height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(hovering ? Palette.hover : .clear)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .frame(width: 26, height: 26)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(hovering ? Palette.hover : .clear)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onHover { hovering = $0 }
         .help("Recently closed tabs")
         .animation(Motion.quick, value: hovering)
     }
+
+    /// The three dots drawn vertically from top to bottom.
+    private static let verticalEllipsis: NSImage = {
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        guard let base = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)?.withSymbolConfiguration(config) else {
+            return NSImage()
+        }
+        let size = NSSize(width: base.size.height, height: base.size.width)
+        let rotated = NSImage(size: size, flipped: false) { rect in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.translateBy(x: rect.midX, y: rect.midY)
+            context.rotate(by: -.pi / 2)
+            let drawRect = CGRect(x: -base.size.width / 2, y: -base.size.height / 2, width: base.size.width, height: base.size.height)
+            base.draw(in: drawRect)
+            return true
+        }
+        rotated.isTemplate = true
+        return rotated
+    }()
 
     /// The cached icon is sixty-four points across; a menu wants sixteen.
     private static func small(_ icon: NSImage) -> NSImage {
