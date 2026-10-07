@@ -78,9 +78,10 @@ struct SideBar: View {
                 DragStrip()
                     .frame(width: 10 + Metrics.sideLights)
                 Color.clear
-                    .frame(width: Metrics.helm + (prefs.showsGhostMenu ? Metrics.ghostDoor : 0) + corner + 8)
+                    .frame(width: Metrics.helm + (prefs.showsGhostMenu ? Metrics.ghostDoor : 0))
                     .allowsHitTesting(false)
-                DragStrip()
+                // Not under the puzzle and its pinned buttons at the far end.
+                DragStrip(trailing: corner + 10)
             }
             .frame(height: Metrics.strip)
 
@@ -94,16 +95,18 @@ struct SideBar: View {
                     HStack(spacing: 4) {
                         Helm(browser: browser)
                         if prefs.showsGhostMenu { GhostDoor(browser: browser) }
-                        DownloadsAndExtensions(always: true, room: extensionRoom)
-                            .background {
-                                GeometryReader { box in
-                                    Color.clear
-                                        .onAppear { corner = box.size.width }
-                                        .onChange(of: box.size.width) { _, width in corner = width }
-                                }
-                            }
                     }
                     Spacer(minLength: 0)
+                    // The downloads and the extensions, in the corner
+                    // across from the lights, with or without the door.
+                    DownloadsAndExtensions(always: true, room: extensionRoom)
+                        .background {
+                            GeometryReader { box in
+                                Color.clear
+                                    .onAppear { corner = box.size.width }
+                                    .onChange(of: box.size.width) { _, width in corner = width }
+                            }
+                        }
                 }
                 .frame(height: Metrics.strip)
 
