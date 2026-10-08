@@ -1761,19 +1761,32 @@ final class Bench {
             // What printing is doing: whether a sheet is up and the last
             // print, from a frame or the page. `to PATH` writes the next print
             // to a PDF there, without the sheet, so what went on the paper can
-            // be read; `cancel` puts the sheet away, as its Cancel button does.
+            // be read; `cancel` puts the sheet away, as its Cancel button does;
+            // `pdf` chooses Save as PDF.
             // Only on a SEARCH_PROBE run.
             guard Store.testing else { answer(["error": "print only works on a --test run"]); return }
             let window = Links.window
             switch request["action"] as? String ?? "" {
             case "to": Printing.toFile = (request["path"] as? String).map { URL(fileURLWithPath: $0) }
             case "cancel": if let window, let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
+            case "pdf":
+                // The PDF menu's Save as PDF, as if chosen: the save panel
+                // comes down over the print sheet.
+                func combo(_ v: NSView) -> NSComboButton? { (v as? NSComboButton) ?? v.subviews.lazy.compactMap(combo).first }
+                guard let sheet = window?.attachedSheet, let root = sheet.contentView, let menu = combo(root)?.menu,
+                      let item = menu.items.first(where: { $0.title.contains("PDF") && $0.isEnabled }) else { answer(["error": "no Save as PDF"]); return }
+                menu.performActionForItem(at: menu.index(of: item))
             default: break
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 answer([
                     "busy": Printing.busy,
                     "sheet": window?.attachedSheet.map { "\(type(of: $0))" } ?? "",
+                    // Each sheet's size, the print sheet's first and one over
+                    // it after, so their room can be read (see Printing.Room).
+                    "sizes": sequence(first: window?.attachedSheet) { $0?.attachedSheet }.prefix { $0 != nil }.compactMap { $0 }
+                        .map { [Int($0.frame.width), Int($0.frame.height)] },
+                    "window": window.map { [Int($0.frame.width), Int($0.frame.height)] } ?? [],
                     "to": Printing.toFile?.path ?? "",
                     "last": Printing.last,
                 ])
