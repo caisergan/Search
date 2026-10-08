@@ -2641,6 +2641,9 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             decisionHandler(.cancel)
             return
         }
+        // A page from this Mac may need putting right on the way in, and a
+        // form sent to one has to go with it (see LocalUpgrade.swift).
+        LocalUpgrade.shared.asking(action, in: webView)
         // "Download Image", "Download Linked File" from the page's own
         // context menu, and a link with the `download` attribute all arrive
         // as an ordinary-looking action with this one flag set. Answered
@@ -2869,6 +2872,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
             decisionHandler(.download)
             return
         }
+        // A page from this Mac asking for every file over https, which its
+        // dev server doesn't speak: kept, and shown without asking that
+        // (see LocalUpgrade.swift).
+        if LocalUpgrade.shared.wants(response, in: webView) {
+            decisionHandler(.download)
+            return
+        }
         decisionHandler(response.canShowMIMEType ? .allow : .download)
     }
 
@@ -2886,6 +2896,8 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         navigationResponse: WKNavigationResponse,
         didBecome download: WKDownload
     ) {
+        // Not a download at all: a page of this Mac's being put right.
+        if LocalUpgrade.shared.take(download, response: navigationResponse.response, in: webView) { return }
         keep(download)
         dropIfOnlyForDownload(webView)
     }
@@ -3067,6 +3079,13 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         Favicons.shared.fetch(for: tab)
         // What the page is written in, and whether to offer it in yours.
         Translator.shared.read(tab, browser: self)
+        // A page of this Mac's that asked for https in a <meta> tag: put to
+        // sleep and woken, which is a new view with the same history.
+        LocalUpgrade.shared.check(webView) { [weak tab] in
+            guard let tab else { return }
+            tab.sleep(picture: nil)
+            tab.reload()
+        }
         guard !tab.shy, !tab.bench else { return }
         history.record(url, title: tab.title)
     }
