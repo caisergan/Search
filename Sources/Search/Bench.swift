@@ -1092,29 +1092,44 @@ final class Bench {
             // Two fingers sideways over the page: DX points in STEPS scroll
             // events spread over MS milliseconds, with a trackpad's phases,
             // handed to the page's view — for the swipe back and forward.
-            // Reports where the tab is after. Only on a SEARCH_PROBE run.
+            // ZOOM magnifies the page first, as a pinch would. Reports where
+            // the tab is after. Only on a SEARCH_PROBE run.
             guard Store.testing else { answer(["error": "pull only works on a --test run"]); return }
             guard let tab = browser.active, let web = tab.built, let dx = request["dx"] as? Double
             else { answer(["error": "pull needs a loaded tab and a distance"]); return }
             let steps = max(2, request["steps"] as? Int ?? 10)
             let ms = max(1, request["ms"] as? Double ?? 200)
             let before = tab.address?.absoluteString ?? ""
+            // Over the middle of the page, so the page has an element under
+            // the fingers to say whether the swipe is its own. A made event
+            // has no window, and WebKit reads its place on screen as a place
+            // in the window.
+            let middle = web.convert(CGPoint(x: web.bounds.midX, y: web.bounds.midY), to: nil)
+            let ground = NSScreen.screens.first?.frame.height ?? 0
             func send(_ phase: Int64, _ delta: Double) {
                 guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: Int32(delta), wheel3: 0) else { return }
+                cg.location = CGPoint(x: middle.x, y: ground - middle.y)
                 cg.setIntegerValueField(CGEventField(rawValue: 88)!, value: 1) // kCGScrollWheelEventIsContinuous
                 cg.setIntegerValueField(CGEventField(rawValue: 99)!, value: phase) // kCGScrollWheelEventScrollPhase
                 cg.setIntegerValueField(CGEventField(rawValue: 97)!, value: Int64(delta)) // kCGScrollWheelEventPointDeltaAxis2
                 if let event = NSEvent(cgEvent: cg) { web.scrollWheel(with: event) }
             }
-            send(1, 0)
-            for n in 1...steps {
-                DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000 * Double(n) / Double(steps)) {
-                    send(2, dx / Double(steps))
-                    if n == steps { send(4, 0) }
-                }
+            var wait = 0.0
+            if let zoom = request["zoom"] as? Double {
+                web.setMagnification(zoom, centeredAt: CGPoint(x: web.bounds.midX, y: web.bounds.midY))
+                wait = 0.5
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000 + 1.2) {
-                answer(["before": before, "after": tab.address?.absoluteString ?? ""])
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                send(1, 0)
+                for n in 1...steps {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000 * Double(n) / Double(steps)) {
+                        send(2, dx / Double(steps))
+                        if n == steps { send(4, 0) }
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000 + 1.2) {
+                    answer(["before": before, "after": tab.address?.absoluteString ?? "", "zoom": Double(web.magnification)])
+                }
             }
 
         case "leave":
