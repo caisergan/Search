@@ -38,8 +38,9 @@
     ./bench strip PATH [WIDTH]         the row of tabs across the top, drawn off screen to a PNG
     ./bench column PATH [HEIGHT]       the column of tabs, drawn off screen to a PNG
     ./bench ghosts PATH                the recently closed list from the door beside reload, drawn to a PNG
-    ./bench print state|cancel         test run: whether a print sheet is up, and the last print (from a frame or
-                                       the page); cancel puts the sheet away
+    ./bench print state|cancel|pdf     test run: whether a print sheet is up, the sizes of it and a sheet over it,
+                                       and the last print (from a frame or the page); cancel puts the sheet away,
+                                       pdf chooses Save as PDF
     ./bench print to PATH              test run: the next print written to PATH as a PDF, without the sheet
     ./bench consent [grant [LEVEL]|revoke|set LEVEL]
                                        test run: the mark Settings' "Let Claude use Search" leaves in the
@@ -256,8 +257,8 @@ def main(argv):
         request["path"] = os.path.abspath(args[0])
         if len(args) == 2: request["width"] = float(args[1])
     elif verb == "print":
-        if not args or args[0] not in ("state", "to", "cancel") or (args[0] == "to") != (len(args) == 2) or len(args) > 2:
-            sys.exit("usage: bench print state | to PATH | cancel")
+        if not args or args[0] not in ("state", "to", "cancel", "pdf") or (args[0] == "to") != (len(args) == 2) or len(args) > 2:
+            sys.exit("usage: bench print state | to PATH | cancel | pdf")
         request["action"] = args[0]
         if args[0] == "to": request["path"] = os.path.abspath(args[1])
     elif verb == "claude-setup":
