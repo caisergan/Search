@@ -490,6 +490,20 @@ final class Bench {
             wait(for: tab, until: limit, answer)
 
         case "sleep":
+            // The sweep the timer makes once a minute, now — test runs only,
+            // since it puts your tabs to sleep. A second on, every tab with
+            // whether it went (see Sleep.swift).
+            if (request["id"] as? String) == "sweep" {
+                guard Store.testing else {
+                    answer(["error": "sleep sweep only works on a --test run — it would put your tabs to sleep"])
+                    return
+                }
+                browser.sleepIdle()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [self] in
+                    answer(["tabs": browser.tabs.map(describe)])
+                }
+                return
+            }
             // Now rather than after half an hour, but past every other check
             // a tab has to clear — the answer says which one kept it awake.
             guard let tab = find(request, in: browser) else { answer(missing(request)); return }
@@ -2246,6 +2260,8 @@ final class Bench {
             "shy": tab.shy,
             "noisy": tab.noisy,
             "muted": tab.muted,
+            // What its page costs the Mac, as the heavy-tab sleep reads it (see Sleep.swift).
+            "footprintMB": browser.flatMap { $0.footprint(of: tab) }.map { Int($0 / 1_048_576) } ?? 0,
             "extensions": { if #available(macOS 15.4, *) { return tab.carriesExtensions } else { return false } }(),
         ]
     }
