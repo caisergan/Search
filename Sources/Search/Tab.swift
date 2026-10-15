@@ -1885,7 +1885,12 @@ final class PageView: WKWebView {
             axis = nil
             free = nil
             asked = nil
-            spent = false
+            // Pinched in, two fingers sideways look round the magnified page,
+            // as in Chrome, and never leave it. The page can't be asked: the
+            // magnified view pans even where the page has hidden its own
+            // sideways overflow, as most sites do, and such a page answers
+            // that nothing would scroll.
+            spent = magnification > 1.01
             closing = false
             armedNow = false
             showing = false
