@@ -136,6 +136,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <string>Websites you visit can ask to use your camera. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Websites you visit can ask to use your microphone. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
+  <!-- Speech recognition is the one that refuses instead of crashing: without
+       this sentence WebKit answers a page's SpeechRecognition with
+       service-not-allowed before macOS is ever asked, so dictation boxes and
+       spoken answers never get a word. -->
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Websites you visit can ask to turn what you say into text; macOS does the listening, as it does for Dictation. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
   <key>NSLocationUsageDescription</key>
   <string>Websites you visit can ask where you are — a map, the weather, a shop nearby. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
