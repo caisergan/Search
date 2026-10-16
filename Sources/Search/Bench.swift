@@ -1293,6 +1293,9 @@ final class Bench {
                     location["secondsAgo"] = Int(-handed.at.timeIntervalSinceNow)
                 }
                 out["location"] = location
+                // Speech recognition, as macOS lets Search have it (see SpeechAccess.swift).
+                out["speech"] = ["macOS": SpeechAccess.authorization, "refused": browser.speechRefused?.rawValue ?? NSNull(),
+                                 "heard": SpeechAccess.heard] as [String: Any]
                 return out
             }
             let action = request["action"] as? String ?? "state"
@@ -1337,6 +1340,8 @@ final class Bench {
                         VStack(spacing: 8) {
                             if let sample { PermissionCard(ask: sample, browser: browser) }
                             PopupNotice(blocked: notice, browser: browser)
+                            SpeechNotice(refusal: .permission, browser: browser)
+                            SpeechNotice(refusal: .service, browser: browser)
                         }
                         .padding(24)
                         .frame(width: 560)
