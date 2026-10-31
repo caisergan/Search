@@ -78,13 +78,24 @@ enum Swipe {
         return false;
       }
 
+      // Whether the view, pinched in, has room to pan that way: hidden
+      // overflow or not, WebKit pans a magnified page, and then innerWidth
+      // is the part of it on screen. Only the top page's view is magnified.
+      function pans(e) {
+        if (window !== window.top) return false;
+        var left = window.scrollX || 0;
+        var max = document.documentElement.scrollWidth - window.innerWidth;
+        return max > 1 && (e.deltaX > 0 ? left < max - 1 : left > 1);
+      }
+
       window.addEventListener('wheel', function (e) {
         if (!e.isTrusted) return;
         if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
-        var t = taken(e), now = Date.now();
-        if (t === was && now - said < 100) return;
-        was = t; said = now;
-        window.webkit.messageHandlers.officeScroll.postMessage({ side: t ? 'taken' : 'free' });
+        var t = taken(e), p = pans(e), now = Date.now();
+        var key = (t ? 't' : 'f') + (p ? 'p' : '');
+        if (key === was && now - said < 100) return;
+        was = key; said = now;
+        window.webkit.messageHandlers.officeScroll.postMessage({ side: t ? 'taken' : 'free', pans: p });
       }, { passive: true, capture: true });
     })();
     """

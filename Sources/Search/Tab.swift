@@ -1949,10 +1949,16 @@ final class PageView: WKWebView {
         }
     }
 
-    /// The page has said whether the swipe would scroll something.
-    func answer(free yes: Bool) {
+    /// The page has said whether the swipe would scroll something, and
+    /// whether the view, pinched in, has room to pan that way.
+    func answer(free yes: Bool, pans: Bool) {
         guard axis != .down, !spent else { return }
-        guard yes else {
+        // Pinched in, two fingers sideways look round the magnified page and
+        // only leave it from its edge, as in Chrome. The page's own answer
+        // isn't enough: the magnified view pans even where the page has
+        // hidden its sideways overflow, as most sites do, and such a page
+        // answers that nothing would scroll.
+        guard yes, !(pans && magnified) else {
             free = false
             spent = true
             settle(nil)
@@ -1963,14 +1969,17 @@ final class PageView: WKWebView {
         tell()
     }
 
+    private var magnified: Bool { magnification > 1.01 }
+
     /// Only the distance in the direction it set off in. Past the origin the
     /// other way is just nought.
     private var travel: CGFloat { max(0, back ? sideways : -sideways) }
 
     private func tell() {
-        if free == nil, let asked, Date().timeIntervalSince(asked) > 0.18 {
+        if free == nil, !magnified, let asked, Date().timeIntervalSince(asked) > 0.18 {
             // A page that never answers — a PDF, a page that failed to load —
-            // still has to be leavable by hand.
+            // still has to be leavable by hand. Pinched in, it can't say
+            // whether the view has room to pan, so the swipe stays a pan.
             free = true
         }
         guard free == true else { return }
@@ -2044,7 +2053,8 @@ final class ScrollRelay: NSObject, WKScriptMessageHandler {
     ) {
         guard let body = message.body as? [String: Any] else { return }
         if let side = body["side"] as? String {
-            MainActor.assumeIsolated { tab?.web.answer(free: side == "free") }
+            let pans = body["pans"] as? Bool ?? false
+            MainActor.assumeIsolated { tab?.web.answer(free: side == "free", pans: pans) }
             return
         }
         guard let y = body["y"] as? Double,
