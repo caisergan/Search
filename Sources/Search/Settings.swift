@@ -429,7 +429,7 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.showsGhostMenu)
             }
             Rule()
-            Line("Sleep tabs you aren't using", "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake.") {
+            Line("Sleep tabs you aren't using", "After half an hour away they come back where you left them. Pinned tabs, sound, calls and anything typed stay awake. A page grown past 1.5 GB, pinned or not, sleeps after five minutes away, before it slows the others down.") {
                 Switch(on: $prefs.sleepsTabs)
             }
             Rule()

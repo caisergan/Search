@@ -154,9 +154,24 @@ final class HostPipe: @unchecked Sendable {
     private let output = Pipe()
     private var buffer = Data()
     private let lock = NSLock()
-    var onMessage: ((Any) -> Void)?
-    var onExit: (() -> Void)?
     private var waiters: [CheckedContinuation<Any?, Error>] = []
+    // The host's end is heard twice — its stdout closing and the process
+    // ending, each on a queue of its own — and often at the same moment, as
+    // when the Mac wakes and a helper quits. Both used to run `finish`,
+    // calling and clearing `onExit` together: its closure was released
+    // twice and the browser crashed. So the handlers are kept under the
+    // lock, and the end is taken once.
+    private var finished = false
+    private var messageHandler: ((Any) -> Void)?
+    private var exitHandler: (() -> Void)?
+    var onMessage: ((Any) -> Void)? {
+        get { lock.withLock { messageHandler } }
+        set { lock.withLock { messageHandler = newValue } }
+    }
+    var onExit: (() -> Void)? {
+        get { lock.withLock { exitHandler } }
+        set { lock.withLock { exitHandler = newValue } }
+    }
 
     init(program: URL, origin: String) {
         process.executableURL = program
@@ -173,13 +188,15 @@ final class HostPipe: @unchecked Sendable {
     func start() throws {
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
-            guard let self else { return }
+            // At its end a closed stdout reads empty for good: let go of it
+            // even if the pipe is already gone, or this runs on, a core's
+            // worth, for as long as the browser does.
             if chunk.isEmpty {
                 handle.readabilityHandler = nil
-                self.finish()
+                self?.finish()
                 return
             }
-            self.take(chunk)
+            self?.take(chunk)
         }
         process.terminationHandler = { [weak self] _ in self?.finish() }
         try process.run()
@@ -225,18 +242,22 @@ final class HostPipe: @unchecked Sendable {
             handed.append((waiters.removeFirst(), message))
         }
         let rest = messages.dropFirst(handed.count)
+        let deliver = messageHandler
         lock.unlock()
         handed.forEach { $0.0.resume(returning: $0.1) }
-        rest.forEach { onMessage?($0) }
+        rest.forEach { deliver?($0) }
     }
 
     private func finish() {
         lock.lock()
+        guard !finished else { lock.unlock(); return }
+        finished = true
         let pending = waiters
         waiters = []
+        let exit = exitHandler
+        exitHandler = nil
         lock.unlock()
         pending.forEach { $0.resume(throwing: ExtensionNative.Refused(why: "Native host has exited.")) }
-        onExit?()
-        onExit = nil
+        exit?()
     }
 }
