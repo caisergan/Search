@@ -141,7 +141,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
        service-not-allowed before macOS is ever asked, so dictation boxes and
        spoken answers never get a word. -->
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Websites you visit can ask to turn what you say into text; macOS does the listening, as it does for Dictation. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
+  <string>Websites you visit can ask to turn what you say into text; macOS does the listening, as it does for Dictation. A site that does still needs your microphone: Search asks you the first time each site wants it and keeps your answer; Settings › Privacy forgets them.</string>
   <key>NSLocationUsageDescription</key>
   <string>Websites you visit can ask where you are — a map, the weather, a shop nearby. Search asks you the first time each site does and keeps your answer; Settings › Privacy forgets them.</string>
   <key>NSLocationWhenInUseUsageDescription</key>

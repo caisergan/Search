@@ -74,31 +74,44 @@ enum SpeechAccess {
 /// The page's word that its recognizer was refused, passed to Search's side.
 final class SpeechRelay: NSObject, WKScriptMessageHandler {
     static let name = "officeSpeech"
-    static let refused = "search-speech-refused"
+    /// The event the page's side tells Search's side with, through the DOM
+    /// both worlds share. Made afresh each launch, so a page can neither
+    /// listen for it nor send it: it never appears in anything the page can
+    /// read.
+    static let refused = "search-speech-" + UUID().uuidString.prefix(8).lowercased()
 
     /// In the page's own world, before the site's scripts: each recognizer the
     /// page starts is listened to, once however often it starts, for
-    /// "service-not-allowed". Nothing the page hears changes, and nothing of
-    /// Search's is left for it to find but the wrapped start.
+    /// "service-not-allowed". Nothing the page hears changes. `start` is
+    /// wrapped in a Proxy, which keeps its name and length and shows no
+    /// source — WebKit prints it as "function ProxyObject() { [native code]
+    /// }" — and what the wrapper uses is taken before the site's scripts
+    /// run, so a page that replaces addEventListener or dispatchEvent
+    /// neither breaks it nor sees it.
     static let page = """
     (function () {
-      var seen = [];
+      var name = '\(refused)', apply = Reflect.apply, Custom = CustomEvent;
+      var listen = EventTarget.prototype.addEventListener, tell = EventTarget.prototype.dispatchEvent;
+      var has = WeakSet.prototype.has, add = WeakSet.prototype.add, seen = [];
       [window.SpeechRecognition, window.webkitSpeechRecognition].forEach(function (Recognition) {
         if (typeof Recognition !== 'function' || seen.indexOf(Recognition) >= 0) return;
         seen.push(Recognition);
         var start = Recognition.prototype.start, watched = new WeakSet();
         if (typeof start !== 'function') return;
-        Recognition.prototype.start = function () {
-          if (!watched.has(this)) {
-            watched.add(this);
-            var recognizer = this;
-            this.addEventListener('error', function (event) {
-              if (event.error !== 'service-not-allowed') return;
-              window.dispatchEvent(new CustomEvent('\(refused)', { detail: String(recognizer.lang || '') }));
-            });
+        Recognition.prototype.start = new Proxy(start, {
+          apply: function (target, recognizer, args) {
+            if (recognizer && typeof recognizer === 'object' && !apply(has, watched, [recognizer])) {
+              apply(add, watched, [recognizer]);
+              try {
+                apply(listen, recognizer, ['error', function (event) {
+                  if (event.error !== 'service-not-allowed') return;
+                  apply(tell, window, [new Custom(name, { detail: String(recognizer.lang || '') })]);
+                }]);
+              } catch (e) {}
+            }
+            return apply(target, recognizer, args);
           }
-          return start.apply(this, arguments);
-        };
+        });
       });
     })();
     """
