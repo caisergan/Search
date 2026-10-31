@@ -453,6 +453,52 @@ struct LocationNotice: View {
     }
 }
 
+/// A page wanted to turn what you say into text, and macOS said no: where to
+/// change that, since nothing in Search can — Search not allowed, or speech
+/// recognition off on this Mac (see SpeechAccess.swift).
+struct SpeechNotice: View {
+    let refusal: SpeechAccess.Refusal
+    let browser: Browser
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "mic.slash")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Palette.muted)
+            Text(refusal == .permission ? "macOS doesn't let Search turn speech into text" : "Speech recognition is off on this Mac")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Palette.ink)
+                .lineLimit(1)
+            Button {
+                browser.speechRefused = nil
+                SpeechAccess.openSettings(for: refusal)
+            } label: {
+                Text("Open Settings")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.ground)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 4)
+                    .background(Palette.ink, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            Button { browser.speechRefused = nil } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Palette.muted)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .background(Palette.ground, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 16, y: 5)
+    }
+}
+
 // MARK: - asking
 
 extension Browser {

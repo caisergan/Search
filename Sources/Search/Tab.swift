@@ -28,7 +28,8 @@ enum Web {
     /// included, and registering a name twice is a hard crash.
     @MainActor static func release(_ controller: WKUserContentController) {
         for name in [ScrollRelay.name, VeilRelay.name, FormRelay.name, ImageRelay.name,
-                     StoreRelay.name, PasskeyRelay.name, MiddleRelay.name, TranslateRelay.name, AutoFillRelay.name] {
+                     StoreRelay.name, PasskeyRelay.name, MiddleRelay.name, TranslateRelay.name, AutoFillRelay.name,
+                     SpeechRelay.name] {
             controller.removeScriptMessageHandler(forName: name, contentWorld: world)
             controller.removeScriptMessageHandler(forName: name, contentWorld: .page)
         }
@@ -455,6 +456,8 @@ final class Tab: ObservableObject, Identifiable {
     private let shop = StoreRelay()
     private let middles = MiddleRelay()
     private let passkeyRelay = PasskeyRelay()
+    /// A page's speech recognition refused by macOS (see SpeechAccess.swift).
+    private let speech = SpeechRelay()
     private let hovered = HoveredLink()
     private let ears = AudioWatch()
     /// The page's pieces to translate, on their way (see Translate.swift).
@@ -674,6 +677,7 @@ final class Tab: ObservableObject, Identifiable {
         controller.add(middles, contentWorld: Web.world, name: MiddleRelay.name)
         controller.add(translation, contentWorld: Web.world, name: TranslateRelay.name)
         controller.add(filling, contentWorld: Web.world, name: AutoFillRelay.name)
+        controller.add(speech, contentWorld: Web.world, name: SpeechRelay.name)
         Shield.shared.protect(controller)
         built = web
         // A tab muted before it went to sleep wakes muted.
@@ -825,6 +829,14 @@ final class Tab: ObservableObject, Identifiable {
         }
         controller.addUserScript(
             WKUserScript(source: PasskeyRelay.bridge, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Web.world)
+        )
+        // Every frame: a page's recognizer refused by macOS says so to Search,
+        // which shows where the switch is (see SpeechAccess.swift).
+        controller.addUserScript(
+            WKUserScript(source: SpeechRelay.page, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+        )
+        controller.addUserScript(
+            WKUserScript(source: SpeechRelay.bridge, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Web.world)
         )
         // Full screen in this window rather than a space of its own, as in
         // Chrome, unless Settings › General says otherwise (see Fullscreen.swift).

@@ -458,6 +458,10 @@ struct ContentView: View {
                             LocationNotice(browser: browser)
                                 .transition(.move(edge: .top).combined(with: .opacity))
                         }
+                        if let refusal = browser.speechRefused {
+                            SpeechNotice(refusal: refusal, browser: browser)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                         // A page in another language offered in yours, and the
                         // translation under way (see Translate.swift).
                         TranslateNotice(tab: tab, browser: browser)
@@ -468,6 +472,7 @@ struct ContentView: View {
                 .animation(Motion.settle, value: browser.asking)
                 .animation(Motion.settle, value: browser.blockedPopup)
                 .animation(Motion.settle, value: browser.locationRefused)
+                .animation(Motion.settle, value: browser.speechRefused)
                 .animation(Motion.quick, value: browser.suggesting)
                 .animation(Motion.quick, value: browser.autofilling)
                 .overlay(alignment: browser.prefs.zoomSpot.alignment) { zoomNote }

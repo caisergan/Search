@@ -696,6 +696,9 @@ final class Browser: NSObject, ObservableObject {
     /// A page allowed to know where you are asked, and macOS said Search may
     /// not (see Location.swift).
     @Published var locationRefused = false
+    /// A page wanted to turn what you say into text, and macOS said no — why
+    /// (see SpeechAccess.swift).
+    @Published var speechRefused: SpeechAccess.Refusal?
 
     /// Everything every site has been allowed or refused, for the day you
     /// want to change your mind.
@@ -1081,6 +1084,7 @@ final class Browser: NSObject, ObservableObject {
         // Settings › General › Sync settings through iCloud Drive (see Sync.swift).
         SettingsSync.start { [weak self] line in self?.announce(line) }
         LocationFeed.shared.onRefused = { [weak self] in self?.locationRefused = true }
+        SpeechAccess.onRefused = { [weak self] in self?.speechRefused = $0 }
         FormRelay.passkeysOffered = prefs.passkeys
 
         // The History menu lists what the history holds, and the menu is drawn
