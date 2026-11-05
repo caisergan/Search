@@ -808,6 +808,21 @@ struct TabMenu: View {
         }
         .disabled(tab.isBlank)
         Button(tab.muted ? "Unmute Tab" : "Mute Tab") { tab.toggleMute() }
+        // Only where groups are drawn: across the top, a tab is just a tab.
+        if browser.prefs.tabGroups, browser.prefs.sidebar, tab.place == .loose {
+            let others = browser.groups.filter { $0.id != tab.group }
+            if !others.isEmpty || tab.group != nil { Divider() }
+            if !others.isEmpty {
+                Menu("Move to Group") {
+                    ForEach(others) { group in
+                        Button(group.name) { browser.put(tab, into: group.id) }
+                    }
+                }
+            }
+            if tab.group != nil {
+                Button("Remove from Group") { browser.put(tab, into: nil, at: 0) }
+            }
+        }
         Divider()
         Button("Close Tab", action: close)
         Button("Close Other Tabs") { browser.closeOthers(but: tab) }

@@ -14,11 +14,15 @@ enum Session {
         var kept: Bool?
         /// The name you gave the tab, when you gave it one.
         var name: String?
+        /// The group it is in, one of the shape's. Absent for every other
+        /// tab, and in a file from before there were groups.
+        var group: TabGroup.ID?
     }
 
     struct Shape: Codable {
         var tabs: [Entry]
         var active: Int
+        var groups: [TabGroup]?
     }
 
     /// The first space's is the session there always was; each other space

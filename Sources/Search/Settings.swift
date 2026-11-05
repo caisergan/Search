@@ -356,6 +356,13 @@ struct SettingsPanel: View {
                         set: { on in withAnimation(Motion.glide) { prefs.newTabInFoot = on } }
                     ))
                 }
+                Rule()
+                Line("Tab groups", "Group, beside Clear in the sidebar, gathers the tabs of each site that aren't pinned under a line of their own. Off puts them back among the others") {
+                    Switch(on: Binding(
+                        get: { prefs.tabGroups },
+                        set: { on in withAnimation(Motion.settle) { prefs.tabGroups = on } }
+                    ))
+                }
             }
         }
     }

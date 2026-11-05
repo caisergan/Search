@@ -148,6 +148,7 @@ struct Parked {
     /// The tabs the row was opened without (see Browser.lastRow), to be
     /// offered as closed ones when it first comes on screen.
     var left: [Browser.Ghost] = []
+    var groups: [TabGroup] = []
 }
 
 extension Browser {
@@ -179,13 +180,13 @@ extension Browser {
         // The row on screen is parked as it is, sound and all: music or a
         // stream keeps playing in the space you left, as it does in a tab
         // you left. ⌘⇧M, or its speaker, stops it.
-        parked[spaceID] = Parked(tabs: tabs, active: activeID)
+        parked[spaceID] = Parked(tabs: tabs, active: activeID, groups: groups)
 
         spaceID = id
         Spaces.current = id
         Store.settings.set(id.uuidString, forKey: "space.current")
         if let back = parked.removeValue(forKey: id), !back.tabs.isEmpty {
-            showRow(back.tabs, active: back.active)
+            showRow(back.tabs, active: back.active, groups: back.groups)
             recall(back.left)
             if let active, !active.wake() { active.revive() }
             wakePinned()

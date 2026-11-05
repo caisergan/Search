@@ -1237,6 +1237,116 @@ final class Bench {
             }
             answer(["at": browser.tabs.firstIndex { $0.id == tab.id } ?? -1, "asleep": tab.asleep])
 
+        case "groups":
+            // The tabs' groups, and what the column's own controls do to
+            // them. `press` is the group's line pressed where a hand would,
+            // `drag` a hand carrying a line; both go through the window's
+            // real views. Only on a SEARCH_PROBE run.
+            guard Store.testing else { answer(["error": "groups only works on a --test run"]); return }
+            let name = request["name"] as? String ?? ""
+            let group = browser.groups.first { $0.name == name }
+            func presser(_ index: Int) -> GroupPresser? {
+                func all(in view: NSView) -> [GroupPresser] {
+                    (view as? GroupPresser).map { [$0] } ?? view.subviews.flatMap(all)
+                }
+                guard let frame = Links.window?.contentView?.superview else { return nil }
+                let found = all(in: frame).sorted {
+                    $0.convert($0.bounds, to: nil).minY > $1.convert($1.bounds, to: nil).minY
+                }
+                return found.indices.contains(index) ? found[index] : nil
+            }
+            func state() -> [String: Any] {
+                [
+                    "groups": browser.groups.map { group in
+                        ["name": group.name, "site": group.site, "folded": group.folded,
+                         "tabs": browser.tabs.filter { $0.group == group.id }.map(\.label)] as [String: Any]
+                    },
+                    "free": browser.tabs.filter { $0.place == .loose && $0.group == nil }.map(\.label),
+                    "row": browser.tabs.map(\.label),
+                    "active": browser.active?.label ?? "",
+                    "canGroup": browser.canGroup,
+                    "closed": browser.closedGroups.map(\.pages.count),
+                    "editing": browser.editingGroup != nil,
+                    "ghosts": browser.ghosts.count,
+                ]
+            }
+            switch request["how"] as? String ?? "state" {
+            case "state": break
+            case "group": browser.groupBySite()
+            case "clear": browser.clearTabs()
+            case "new": browser.newTab()
+            case "reopen": browser.reopen()
+            case "switch": browser.prefs.tabGroups = request["name"] as? String != "off"
+            case "fold": if let group { browser.toggleFold(group.id) }
+            case "ungroup": if let group { browser.ungroup(group.id) }
+            case "close": if let group { browser.closeGroup(group.id) }
+            case "undo": if let last = browser.closedGroups.last { browser.reopenGroup(last) }
+            case "rename": if let group { browser.beginGroupRename(group.id); browser.finishGroupRename(group.id, name: request["to"] as? String ?? "") }
+            case "press":
+                guard let window = Links.window, let view = presser(request["index"] as? Int ?? 0) else {
+                    answer(["error": "no group line there"])
+                    return
+                }
+                let middle = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+                let clicks = request["clicks"] as? Int ?? 1
+                for click in 1...max(1, clicks) {
+                    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                        guard let event = NSEvent.mouseEvent(
+                            with: type, location: middle, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: click,
+                            pressure: type == .leftMouseUp ? 0 : 1
+                        ) else { continue }
+                        if type == .leftMouseDown { view.mouseDown(with: event) } else { view.mouseUp(with: event) }
+                    }
+                }
+            case "where":
+                guard let view = presser(request["index"] as? Int ?? 0), let window = Links.window else {
+                    answer(["error": "no group line there"])
+                    return
+                }
+                let box = view.convert(view.bounds, to: nil)
+                answer(["x": box.midX, "y": window.frame.height - box.midY])
+                return
+            case "drag":
+                guard let window = Links.window, let from = request["from"] as? [Double], let to = request["to"] as? [Double],
+                      from.count == 2, to.count == 2
+                else { answer(["error": "drag needs from and to"]); return }
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                let height = Double(window.frame.height)
+                func send(_ type: NSEvent.EventType, _ x: Double, _ y: Double) {
+                    guard let event = NSEvent.mouseEvent(
+                        with: type, location: NSPoint(x: x, y: height - y), modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1
+                    ) else { return }
+                    window.sendEvent(event)
+                }
+                let steps = request["steps"] as? Int ?? 24
+                func step(_ n: Int) {
+                    let t = Double(n) / Double(steps)
+                    let (x, y) = (from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t)
+                    if n == 0 { send(.leftMouseDown, x, y) }
+                    send(.leftMouseDragged, x, y)
+                    if n < steps {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { step(n + 1) }
+                    } else {
+                        send(.leftMouseUp, x, y)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            answer(state().merging(["key": window.isKeyWindow, "appActive": NSApp.isActive]) { $1 })
+                        }
+                    }
+                }
+                // Dropped by a window that isn't key yet, which takes a moment.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { step(0) }
+                return
+            default:
+                answer(["error": "groups [state|group|clear|new|reopen|switch on|off|fold NAME|ungroup NAME|close NAME|undo|rename NAME TO|press N [CLICKS]|where N|drag X Y X Y]"])
+                return
+            }
+            // After the animation's start, so what is asked of it has landed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { answer(state()) }
+
         case "window":
             // The browser's window, when a probe started hidden came up
             // without one: the Window menu's own item for it.
@@ -2277,6 +2387,7 @@ final class Bench {
             "asleep": tab.asleep,
             "pin": tab.pin ?? "",
             "kept": tab.kept,
+            "group": tab.group.flatMap { id in browser?.groups.first { $0.id == id }?.name } ?? "",
             "shy": tab.shy,
             "noisy": tab.noisy,
             "muted": tab.muted,
