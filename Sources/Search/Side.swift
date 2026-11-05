@@ -18,6 +18,9 @@ struct SideBar: View {
     @State private var travel: CGFloat = 0
     /// Where the line held was when it was picked up, in the rows' space.
     @State private var startY: CGFloat = 0
+    /// Where the line held would go if let go now. The others make way for
+    /// it by this alone; the row itself changes once, when it is let go.
+    @State private var aimed: Aim?
     /// A line held over the squares, to become one of them when let go.
     @State private var overGrid = false
     /// True for as long as a line, or a square, is being dragged. SwiftUI
@@ -495,8 +498,8 @@ struct SideBar: View {
                 // before or after the reset above is SwiftUI's to say.
                 if below(value) {
                     // Where among the lines it was let go, in their space.
-                    let (place, slot) = aim(places.gridTop + value.location.y - places.rowsTop, holding: tab)
-                    withAnimation(Motion.settle) { browser.put(tab, place, at: slot) }
+                    let aim = aim(places.gridTop + value.location.y - places.rowsTop, holding: tab)
+                    withAnimation(Motion.settle) { land(tab, aim) }
                 }
                 letGoOfSquare()
             }
@@ -534,19 +537,71 @@ struct SideBar: View {
         return keptBlock + SideBar.divider + CGFloat(index) * step
     }
 
-    /// The block, and the place in it, that a tab held at `y` in the rows'
-    /// space would take: above the middle of the line with Clear, the pinned
-    /// lines; under it, the rest. Folded, the lines out of sight can't be
-    /// aimed between: one already pinned stays where it is, and another goes
-    /// at their end — which opens them to show it (see `Browser.put`).
-    private func aim(_ y: CGFloat, holding tab: Tab) -> (Browser.Place, Int) {
-        let kept = keptTabs.filter { $0.id != tab.id }.count
+    /// A block, and a place among the other lines drawn in it.
+    private struct Aim: Equatable {
+        var place: Browser.Place
+        var slot: Int
+    }
+
+    /// Where a tab whose middle is held at `y` in the rows' space would go:
+    /// the place among the other lines, the held one left out, whose middle
+    /// is nearest — among the pinned lines while it is nearer the last of
+    /// them than the first line under Clear. Measured against the others
+    /// alone, which don't move as it does, so the aim can't swing back and
+    /// forth under a hand held still.
+    private func aim(_ y: CGFloat, holding tab: Tab) -> Aim {
+        let kept = shownKept.filter { $0.id != tab.id }.count
         let loose = looseTabs.filter { $0.id != tab.id }.count
-        if y < keptBlock + SideBar.divider / 2 {
-            guard !prefs.pinnedFolded else { return (.kept, keptTabs.firstIndex { $0.id == tab.id } ?? kept) }
-            return (.kept, min(max(0, Int(floor((y - SideBar.heading) / step))), kept))
+        let head = browser.keptCount > 0 ? SideBar.heading : 0
+        func nearest(from top: CGFloat, among count: Int) -> Int {
+            min(max(0, Int(((y - top - row / 2) / step).rounded())), count)
         }
-        return (.loose, min(max(0, Int(floor((y - keptBlock - SideBar.divider) / step))), loose))
+        // A tab with no address can't be pinned (see `Browser.put`).
+        if !tab.isBlank, y < head + CGFloat(kept) * step + (SideBar.divider + row) / 2 {
+            return Aim(place: .kept, slot: nearest(from: head, among: kept))
+        }
+        return Aim(place: .loose, slot: nearest(from: head + CGFloat(kept) * step + SideBar.divider, among: loose))
+    }
+
+    /// The place in the row an aim puts a tab at. Folded, the lines out of
+    /// sight can't be aimed between: one already pinned stays where it is,
+    /// and another goes at their end — which opens them to show it (see
+    /// `Browser.put`).
+    private func slot(_ aim: Aim, holding tab: Tab) -> Int {
+        guard aim.place == .kept, prefs.pinnedFolded else { return aim.slot }
+        return keptTabs.firstIndex { $0.id == tab.id } ?? keptTabs.count
+    }
+
+    /// Puts a tab where an aim says, in the row itself.
+    private func land(_ tab: Tab, _ aim: Aim) {
+        let slot = slot(aim, holding: tab)
+        if aim.place == tab.place {
+            browser.move(tab, to: browser.block(aim.place).lowerBound + slot)
+        } else {
+            browser.put(tab, aim.place, at: slot)
+        }
+    }
+
+    /// How far each of the other lines, and the line with Clear, stands off
+    /// its place while a line is held: they close up behind it and open a
+    /// gap where it is aimed, as if it were already there.
+    private func makingWay() -> (lines: [Tab.ID: CGFloat], divider: CGFloat) {
+        guard let held = dragging, let aimed else { return ([:], 0) }
+        let head = browser.keptCount > 0 ? SideBar.heading : 0
+        let kept = shownKept.filter { $0.id != held }
+        let loose = looseTabs.filter { $0.id != held }
+        func room(_ place: Browser.Place, _ index: Int) -> Int {
+            aimed.place == place && index >= aimed.slot ? 1 : 0
+        }
+        let divider = head + CGFloat(kept.count + (aimed.place == .kept ? 1 : 0)) * step
+        var lines: [Tab.ID: CGFloat] = [:]
+        for (index, tab) in kept.enumerated() {
+            lines[tab.id] = head + CGFloat(index + room(.kept, index)) * step - top(of: tab)
+        }
+        for (index, tab) in loose.enumerated() {
+            lines[tab.id] = divider + SideBar.divider + CGFloat(index + room(.loose, index)) * step - top(of: tab)
+        }
+        return (lines, divider - keptBlock)
     }
 
     /// One piece of the rows: the heading over the pinned lines, a tab's
@@ -582,7 +637,7 @@ struct SideBar: View {
         return pieces
     }
 
-    private func line(_ tab: Tab) -> some View {
+    private func line(_ tab: Tab, making way: CGFloat) -> some View {
         let held = dragging == tab.id
         return SideRow(
             browser: browser,
@@ -593,12 +648,12 @@ struct SideBar: View {
             close: { browser.close(tab, asking: true) }
         )
         .padding(.bottom, SideBar.gap)
-        .offset(y: held ? startY + travel - top(of: tab) : 0)
-        // Under the hand exactly. Its place in the row springs when it
-        // passes another tab, and the offset springs back the same way —
-        // until the next move of the hand cuts the offset's spring short
-        // and leaves the place's running: the tab jumped a whole slot and
-        // drifted back each time it passed one. Only the others glide.
+        .offset(y: held ? startY + travel - top(of: tab) : way)
+        // Under the hand exactly; only the others glide. Its place in the
+        // row stays put until it is let go: moved as it passed each tab,
+        // the place sprang there while the offset didn't, a transaction
+        // here can't stop a place its stack gives it from springing, and
+        // the tab jumped back a whole slot and drifted forward each time.
         .transaction { if held { $0.animation = nil } }
         .zIndex(held ? 1 : 0)
         .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
@@ -611,7 +666,7 @@ struct SideBar: View {
     /// squares, which makes it one of them once it is let go there.
     private func reorder(tab: Tab) -> some Gesture {
         // See the grid: the drag is measured in the rows' space, not the
-        // line's, so a line that has just moved keeps its bearings.
+        // line's.
         DragGesture(minimumDistance: 5, coordinateSpace: .named("rows"))
             .updating($holdingLine) { _, holding, _ in holding = true }
             .onChanged { value in
@@ -621,24 +676,24 @@ struct SideBar: View {
                 }
                 travel = value.translation.height
                 overGrid = over(value, holding: tab)
-                guard !overGrid else { return }
-                let (place, slot) = aim(startY + travel + row / 2, holding: tab)
-                let now = tab.place
-                let index = (now == .kept ? keptTabs : looseTabs).firstIndex { $0.id == tab.id } ?? 0
-                guard place != now || slot != index else { return }
-                withAnimation(Motion.settle) {
-                    if place == now {
-                        browser.move(tab, to: browser.block(place).lowerBound + slot)
-                    } else {
-                        browser.put(tab, place, at: slot)
-                    }
+                // Over the squares, the lines close up behind it.
+                let aim = overGrid ? nil : aim(startY + travel + row / 2, holding: tab)
+                if aim != aimed {
+                    withAnimation(Motion.settle) { aimed = aim }
                 }
             }
             .onEnded { value in
                 // Read from the gesture, not from state: whether this runs
-                // before or after the reset above is SwiftUI's to say.
-                if over(value, holding: tab) {
-                    withAnimation(Motion.settle) { browser.pin(tab) }
+                // before or after the reset above is SwiftUI's to say. The
+                // line springs from under the hand to its new place, and the
+                // others from the gap they made to the same place in the row:
+                // their offsets and their places spring together, and cancel.
+                withAnimation(Motion.settle) {
+                    if over(value, holding: tab) {
+                        browser.pin(tab)
+                    } else {
+                        land(tab, aim(startY + value.translation.height + row / 2, holding: tab))
+                    }
                 }
                 letGoOfLine()
             }
@@ -650,11 +705,12 @@ struct SideBar: View {
     }
 
     private func letGoOfLine() {
-        guard dragging != nil || travel != 0 || overGrid else { return }
+        guard dragging != nil || travel != 0 || overGrid || aimed != nil else { return }
         withAnimation(Motion.settle) {
             dragging = nil
             travel = 0
             overGrid = false
+            aimed = nil
         }
     }
 
@@ -664,17 +720,19 @@ struct SideBar: View {
     private var rows: some View {
         let open = keptTabs.contains { !$0.asleep }
         let clears = !looseTabs.isEmpty
+        let way = makingWay()
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(SideBar.pieces(of: browser.tabs, active: browser.activeID, folded: prefs.pinnedFolded)) { piece in
                 switch piece {
                 case .heading:
                     PinnedHeading(prefs: prefs, open: open)
                 case .tab(let tab):
-                    line(tab)
+                    line(tab, making: way.lines[tab.id] ?? 0)
                 case .divider:
                     ClearLine(clears: clears) {
                         withAnimation(Motion.settle) { browser.clearTabs() }
                     }
+                    .offset(y: way.divider)
                 }
             }
             if !prefs.newTabInFoot { newTab }
