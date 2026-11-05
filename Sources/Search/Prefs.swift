@@ -340,6 +340,12 @@ final class Preferences: ObservableObject {
     @Published var newTabInFoot: Bool {
         didSet { store.set(newTabInFoot, forKey: "sidebar.newtab.foot") }
     }
+    /// Group beside Clear, which sorts the ordinary tabs into a group for
+    /// each site. On in this build; for anywhere that keeps new things off
+    /// unless asked for, the default below is the one word to change.
+    @Published var tabGroups: Bool {
+        didSet { store.set(tabGroups, forKey: "sidebar.groups") }
+    }
     /// ⌘T raises the field over the page you're on instead of opening an
     /// empty tab; the tab is made when you go somewhere. Off unless asked for.
     @Published var newTabOver: Bool {
@@ -585,6 +591,7 @@ final class Preferences: ObservableObject {
         restoresTabs = store.object(forKey: "start.restore") as? Bool ?? true
         sideReveal = store.string(forKey: "sidebar.reveal").flatMap(Reveal.init) ?? .human
         newTabInFoot = store.bool(forKey: "sidebar.newtab.foot")
+        tabGroups = store.object(forKey: "sidebar.groups") as? Bool ?? true
         newTabOver = store.bool(forKey: "newtab.over")
         newTabSpot = store.string(forKey: "newtab.spot").flatMap(NewTabSpot.init) ?? .bottom
         // Before the column's width, which starts wide enough for its door.

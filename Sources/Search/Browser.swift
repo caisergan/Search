@@ -9,8 +9,12 @@ import Combine
 @MainActor
 final class Browser: NSObject, ObservableObject {
     @Published private(set) var tabs: [Tab] = [] {
-        // A closed tab's question goes with it.
-        didSet { if !asks.isEmpty { refreshAsking() } }
+        didSet {
+            // A closed tab's question goes with it.
+            if !asks.isEmpty { refreshAsking() }
+            // And a group's last tab, the group.
+            if !groups.isEmpty { dropEmptyGroups() }
+        }
     }
     @Published var activeID: Tab.ID? {
         didSet {
@@ -714,6 +718,13 @@ final class Browser: NSObject, ObservableObject {
     /// and that letter arrives selected so the next keystroke replaces it.
     @Published var editingPin: Tab.ID?
 
+    /// The groups of the row on screen, in the order they are drawn.
+    @Published var groups: [TabGroup] = []
+    /// Groups just closed, each while its line offers Undo.
+    @Published private(set) var closedGroups: [ClosedGroup] = []
+    /// The group whose name is being typed.
+    @Published var editingGroup: TabGroup.ID?
+
     var pinnedCount: Int { tabs.filter { $0.place == .essential }.count }
 
     /// The tabs pinned as lines in the column, which come straight after the
@@ -738,8 +749,16 @@ final class Browser: NSObject, ObservableObject {
     /// A row in the order the blocks keep. Every change here keeps that
     /// order; this puts right a row written down that doesn't, rather than
     /// let `block` count across one it would misread.
-    static func ordered(_ row: [Tab]) -> [Tab] {
-        Place.allCases.flatMap { place in row.filter { $0.place == place } }
+    static func ordered(_ row: [Tab], groups: [TabGroup] = []) -> [Tab] {
+        let known = Set(groups.map(\.id))
+        return Place.allCases.flatMap { place -> [Tab] in
+            let here = row.filter { $0.place == place }
+            guard place == .loose, !known.isEmpty else { return here }
+            // The groups' tabs first, each group's together, and the others
+            // after them, where a new tab goes.
+            return groups.flatMap { group in here.filter { $0.group == group.id } }
+                + here.filter { tab in tab.group.map { !known.contains($0) } ?? true }
+        }
     }
 
     /// Makes the tab one of `place`'s, at `slot` among them — at their end
@@ -756,10 +775,14 @@ final class Browser: NSObject, ObservableObject {
         if place == .essential, tab.pin == nil { tab.pin = tab.monogram }
         if place != .essential { tab.pin = nil }
         tab.kept = place == .kept
+        tab.group = nil
         var row = tabs
         row.remove(at: here)
-        let start = row.filter { $0.place < place }.count
-        let count = row.filter { $0.place == place }.count
+        // Among the ordinary tabs, a place is one among those in no group:
+        // the groups' come first, and aren't to be got in among.
+        let grouped = place == .loose ? row.filter { $0.place == .loose && $0.group != nil }.count : 0
+        let start = row.filter { $0.place < place }.count + grouped
+        let count = row.filter { $0.place == place }.count - grouped
         row.insert(tab, at: start + min(max(0, slot ?? count), count))
         // Always, even when the tab kept its index: which block a tab is in
         // lives on the tab, which the browser doesn't watch, and the column
@@ -818,12 +841,17 @@ final class Browser: NSObject, ObservableObject {
     }
 
     /// Clear, on the line under the pinned tabs: every ordinary tab goes, as
-    /// in Zen. The squares and the pinned lines stay, and you land on the
-    /// one of them you last looked at — or on a new tab, with none awake.
+    /// in Zen. The squares, the pinned lines and the groups stay, and you land
+    /// on the one of them you last looked at — or on a new tab, with none
+    /// awake.
     func clearTabs() {
         // Each page is asked whether it may go (see `mayGo`); one that is
         // still being asked goes when it has answered, or stays.
-        let going = tabs.filter { $0.place == .loose && mayGo($0) }
+        sweep(tabs.filter { $0.place == .loose && $0.group == nil && mayGo($0) })
+    }
+
+    /// Tabs that may go, gone in one breath.
+    private func sweep(_ going: [Tab]) {
         guard !going.isEmpty else { return }
         cancelTabEdit()
         if let floating, going.contains(where: { $0.id == floating }) { land() }
@@ -843,6 +871,195 @@ final class Browser: NSObject, ObservableObject {
             }
         }
         writeSession(now: true)
+    }
+
+    // MARK: - groups
+
+    /// The tabs in groups come first among the ordinary ones, so this is
+    /// where the others start, and the highest a new tab goes.
+    var freeStart: Int {
+        block(.loose).lowerBound + tabs.filter { $0.place == .loose && $0.group != nil }.count
+    }
+
+    /// The site a tab could be grouped by, if it could be grouped at all. A
+    /// script's tabs are the script's, and a private tab keeps to itself.
+    private func groupingSite(of tab: Tab) -> String? {
+        guard tab.place == .loose, tab.group == nil, !tab.bench, !tab.shy else { return nil }
+        return TabGroup.site(of: tab.pending ?? tab.address)
+    }
+
+    /// How many of each site's tabs are out among the ungrouped.
+    private func looseSites() -> [String: Int] {
+        var count: [String: Int] = [:]
+        for tab in tabs { if let site = groupingSite(of: tab) { count[site, default: 0] += 1 } }
+        return count
+    }
+
+    /// Whether Group has anything to do: a site with two tabs out, or with
+    /// one and a group of its own to go to. A site's one tab stays where it
+    /// is, as a group of one would only lengthen the column by a line.
+    var canGroup: Bool {
+        let sites = looseSites()
+        return sites.contains { site, count in count >= 2 || groups.contains { $0.site == site } }
+    }
+
+    /// Group, beside Clear: every ordinary tab into the group of its site,
+    /// which is made if there are two to put in it.
+    func groupBySite() {
+        let sites = looseSites()
+        var made: [TabGroup.ID: [Tab]] = [:]
+        for tab in tabs {
+            guard let site = groupingSite(of: tab) else { continue }
+            var group = groups.first { $0.site == site }
+            if group == nil, sites[site, default: 0] >= 2 {
+                let fresh = TabGroup(site: site, name: site)
+                groups.append(fresh)
+                group = fresh
+                made[fresh.id] = []
+            }
+            guard let group else { continue }
+            tab.group = group.id
+            made[group.id]?.append(tab)
+        }
+        // Named once all its tabs are in, for the most titles to read from.
+        for (id, members) in made {
+            guard let at = groups.firstIndex(where: { $0.id == id }) else { continue }
+            groups[at].name = TabGroup.name(of: groups[at].site, from: members.map(\.title))
+        }
+        tabs = Browser.ordered(tabs, groups: groups)
+        writeSession(now: true)
+    }
+
+    /// Ungroup: the group goes and its tabs stay, first among the ungrouped.
+    func ungroup(_ id: TabGroup.ID) {
+        guard groups.contains(where: { $0.id == id }) else { return }
+        if editingGroup == id { editingGroup = nil }
+        for tab in tabs where tab.group == id { tab.group = nil }
+        groups.removeAll { $0.id == id }
+        tabs = Browser.ordered(tabs, groups: groups)
+        writeSession(now: true)
+    }
+
+    /// The group's cross: its tabs go with it, each page asked first as Clear
+    /// asks, and its line offers them back for a moment. One still being
+    /// asked stays in the group until it has answered.
+    func closeGroup(_ id: TabGroup.ID) {
+        guard let at = groups.firstIndex(where: { $0.id == id }) else { return }
+        let group = groups[at]
+        let going = tabs.filter { $0.group == id && mayGo($0) }
+        guard !going.isEmpty else { return }
+        if editingGroup == id { editingGroup = nil }
+        let pages = going.compactMap { tab in
+            tab.address.map { ClosedGroup.Page(url: $0, title: tab.title, name: tab.name, memory: tab.remembered) }
+        }
+        let looked = going.filter { $0.address != nil }.firstIndex { $0.id == activeID }
+        let before = Set(ghosts.map(\.id))
+        sweep(going)
+        let line = ClosedGroup(
+            group: group, pages: pages, at: at, looked: looked,
+            ghosts: ghosts.map(\.id).filter { !before.contains($0) }
+        )
+        closedGroups.append(line)
+        DispatchQueue.main.asyncAfter(deadline: .now() + ClosedGroup.patience) { [weak self] in
+            self?.closedGroups.removeAll { $0.id == line.id }
+        }
+    }
+
+    /// Undo, on the line of a group just closed. Asleep, as tabs from last
+    /// time are, with what they knew: only the one you were on loads now.
+    func reopenGroup(_ closed: ClosedGroup) {
+        guard closedGroups.contains(where: { $0.id == closed.id }) else { return }
+        closedGroups.removeAll { $0.id == closed.id }
+        ghosts.removeAll { closed.ghosts.contains($0.id) }
+        // Group pressed in the meantime may have made the site a new group:
+        // its tabs join that one rather than make a second.
+        var home = groups.first { $0.id == closed.group.id || $0.site == closed.group.site }?.id
+        if home == nil {
+            groups.insert(closed.group, at: min(closed.at, groups.count))
+            home = closed.group.id
+        }
+        let back = closed.pages.map { page -> Tab in
+            let tab = Tab()
+            prepare(tab)
+            tab.restore(url: page.url, title: page.title, name: page.name, memory: page.memory)
+            tab.group = home
+            return tab
+        }
+        tabs = Browser.ordered(tabs + back, groups: groups)
+        if let looked = closed.looked, back.indices.contains(looked) { select(back[looked]) }
+        writeSession(now: true)
+    }
+
+    /// A tab dragged or sent into a group, at `slot` among its tabs and at
+    /// their end with none; or, with no group, among the ungrouped.
+    func put(_ tab: Tab, into group: TabGroup.ID?, at slot: Int? = nil) {
+        guard let here = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        if editingPin == tab.id { editingPin = nil }
+        tab.pin = nil
+        tab.kept = false
+        tab.group = group
+        var row = tabs
+        row.remove(at: here)
+        let beside = row.filter { $0.place == .loose && $0.group == group }
+        var at = row.count
+        if let slot, beside.indices.contains(slot) {
+            at = row.firstIndex { $0.id == beside[slot].id } ?? at
+        } else if let last = beside.last {
+            at = (row.firstIndex { $0.id == last.id } ?? at - 1) + 1
+        }
+        row.insert(tab, at: at)
+        tabs = Browser.ordered(row, groups: groups)
+        rememberSession()
+    }
+
+    func toggleFold(_ id: TabGroup.ID) {
+        guard let at = groups.firstIndex(where: { $0.id == id }) else { return }
+        groups[at].folded.toggle()
+        rememberSession()
+    }
+
+    func beginGroupRename(_ id: TabGroup.ID) {
+        cancelTabEdit()
+        editingGroup = id
+    }
+
+    /// Return, or a press anywhere else. Nothing typed keeps the name it had.
+    func finishGroupRename(_ id: TabGroup.ID, name: String) {
+        guard editingGroup == id else { return }
+        editingGroup = nil
+        let typed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty, let at = groups.firstIndex(where: { $0.id == id }) else { return }
+        groups[at].name = typed
+        writeSession(now: true)
+    }
+
+    /// A group is there for as long as it has tabs.
+    private func dropEmptyGroups() {
+        let inUse = Set(tabs.compactMap(\.group))
+        guard groups.contains(where: { !inUse.contains($0.id) }) else { return }
+        groups.removeAll { !inUse.contains($0.id) }
+    }
+
+    /// The switch in Settings turned off: every space's tabs back among the
+    /// others, and nothing left to come back on its own.
+    func dissolveGroups() {
+        closedGroups = []
+        editingGroup = nil
+        for tab in tabs + parkedTabs { tab.group = nil }
+        groups = []
+        for space in parked.keys { parked[space]?.groups = [] }
+        tabs = Browser.ordered(tabs)
+        writeSession(now: true)
+    }
+
+    /// Which of a row's saved groups it still has tabs in. Any other is
+    /// forgotten, and with the switch off all of them are, tabs and all.
+    private func settle(_ saved: [TabGroup]?, on row: [Tab]) -> [TabGroup] {
+        let inUse = Set(row.compactMap(\.group))
+        let kept = prefs.tabGroups ? (saved ?? []).filter { inUse.contains($0.id) } : []
+        let known = Set(kept.map(\.id))
+        for tab in row where tab.group.map({ !known.contains($0) }) == true { tab.group = nil }
+        return kept
     }
 
     /// Change Letter, or a double-click on the square itself.
@@ -1200,23 +1417,25 @@ final class Browser: NSObject, ObservableObject {
             tab.restore(url: url, title: entry.title, name: entry.name)
             tab.pin = entry.pin
             tab.kept = entry.pin == nil && entry.kept == true
+            tab.group = entry.pin == nil && entry.kept != true ? entry.group : nil
             tabs.append(tab)
         }
         guard !tabs.isEmpty else {
             adopt(Tab())
             return
         }
+        groups = settle(saved.groups, on: tabs)
         guard prefs.restoresTabs else {
             // A fresh start: a new tab on screen, after the pinned ones,
             // which load as Settings › Tabs › Load with Search says.
-            tabs = Browser.ordered(tabs)
+            tabs = Browser.ordered(tabs, groups: groups)
             blank()
             wakePinned()
             return
         }
         // Where you were is kept by tab, not by index, through the reorder.
         let looked = tabs[min(max(0, saved.active), tabs.count - 1)].id
-        tabs = Browser.ordered(tabs)
+        tabs = Browser.ordered(tabs, groups: groups)
         let here = tabs.firstIndex { $0.id == looked } ?? 0
         activeID = tabs[here].id
         // The one you were looking at loads now; the pinned ones follow,
@@ -1354,6 +1573,10 @@ final class Browser: NSObject, ObservableObject {
         // WebKit read the defaults once at the start and keeps its own copy.
         // The only way to change its mind while running is the same action
         // the Edit menu would send it, which also writes the default back.
+        prefs.$tabGroups
+            .dropFirst()
+            .sink { [weak self] on in if !on { self?.dissolveGroups() } }
+            .store(in: &bag)
         prefs.$autocorrect
             .dropFirst()
             .sink { [weak self] on in
@@ -1390,10 +1613,11 @@ final class Browser: NSObject, ObservableObject {
                     else { return nil }
                     return Session.Entry(
                         url: url.absoluteString, title: tab.title, pin: tab.pin,
-                        kept: tab.kept ? true : nil, name: tab.name
+                        kept: tab.kept ? true : nil, name: tab.name, group: tab.group
                     )
                 },
-                active: tabs.firstIndex { $0.id == activeID } ?? 0
+                active: tabs.firstIndex { $0.id == activeID } ?? 0,
+                groups: groups.isEmpty ? nil : groups
             )
         )
     }
@@ -1690,7 +1914,7 @@ final class Browser: NSObject, ObservableObject {
         prepare(tab)
         leaving()
         // Never into the pinned blocks: it comes back as an ordinary tab.
-        tabs.insert(tab, at: min(max(ghost.index, block(.loose).lowerBound), tabs.count))
+        tabs.insert(tab, at: min(max(ghost.index, freeStart), tabs.count))
         activeID = tab.id
         editing = false
         typed = ""
@@ -1835,7 +2059,7 @@ final class Browser: NSObject, ObservableObject {
     /// under, at the end.
     private func slot(under source: Tab.ID?) -> Int {
         guard let source, let here = tabs.firstIndex(where: { $0.id == source }) else { return tabs.count }
-        var at = max(here + 1, block(.loose).lowerBound)
+        var at = max(here + 1, freeStart)
         while at < tabs.count, tabs[at].parent == source { at += 1 }
         return at
     }
@@ -1866,6 +2090,7 @@ final class Browser: NSObject, ObservableObject {
         // throw every count of the blocks out.
         fresh.pin = tab.pin
         fresh.kept = tab.kept
+        fresh.group = tab.group
         fresh.name = tab.name
         let wasActive = activeID == tab.id
         tabs[index] = fresh
@@ -2087,21 +2312,26 @@ final class Browser: NSObject, ObservableObject {
             tab.restore(url: url, title: entry.title, name: entry.name)
             tab.pin = entry.pin
             tab.kept = entry.pin == nil && entry.kept == true
+            tab.group = entry.pin == nil && entry.kept != true ? entry.group : nil
             row.append(tab)
         }
+        let groups = settle(saved.groups, on: row)
         guard prefs.restoresTabs || row.isEmpty else {
             // A fresh start here too: a new tab after what was pinned.
             let fresh = Tab(configuration: Web.configuration(space: space))
             prepare(fresh)
-            return Parked(tabs: Browser.ordered(row) + [fresh], active: fresh.id, left: left)
+            return Parked(tabs: Browser.ordered(row, groups: groups) + [fresh], active: fresh.id, left: left, groups: groups)
         }
         let active = row.indices.contains(saved.active) ? row[saved.active].id : row.first?.id
-        return Parked(tabs: Browser.ordered(row), active: active)
+        return Parked(tabs: Browser.ordered(row, groups: groups), active: active, groups: groups)
     }
 
     /// Another space's row put on screen in place of this one (see
     /// Spaces.swift) — empty, for one that restores its own.
-    func showRow(_ row: [Tab], active: Tab.ID?) {
+    func showRow(_ row: [Tab], active: Tab.ID?, groups: [TabGroup] = []) {
+        closedGroups = []
+        editingGroup = nil
+        self.groups = groups
         tabs = row
         activeID = active ?? row.first?.id
     }
@@ -2112,12 +2342,12 @@ final class Browser: NSObject, ObservableObject {
     /// (#219).
     func placeForNew() -> Int {
         guard let here = tabs.firstIndex(where: { $0.id == activeID }) else { return tabs.count }
-        return max(here + 1, pinnedCount)
+        return max(here + 1, groups.isEmpty ? pinnedCount : freeStart)
     }
 
     /// A tab made outside the row — a peek being kept — put in it at `index`.
     func insert(_ tab: Tab, at index: Int) {
-        tabs.insert(tab, at: min(max(0, index), tabs.count))
+        tabs.insert(tab, at: min(max(groups.isEmpty ? 0 : freeStart, index), tabs.count))
         rememberSession()
     }
 
@@ -2131,15 +2361,15 @@ final class Browser: NSObject, ObservableObject {
     /// tabs, or just under or over the one you are on. Never among the pins —
     /// from a pinned tab, under and over both mean first after them.
     func newTabSlot() -> Int {
-        let loose = block(.loose)
+        let start = freeStart
         guard let here = tabs.firstIndex(where: { $0.id == activeID }) else {
-            return prefs.newTabSpot == .top ? loose.lowerBound : tabs.count
+            return prefs.newTabSpot == .top ? start : tabs.count
         }
         switch prefs.newTabSpot {
-        case .top: return loose.lowerBound
+        case .top: return start
         case .bottom: return tabs.count
-        case .under: return max(here + 1, loose.lowerBound)
-        case .over: return max(here, loose.lowerBound)
+        case .under: return max(here + 1, start)
+        case .over: return max(here, start)
         }
     }
 

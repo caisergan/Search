@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// The tabs, down the left instead of across the top.
 ///
@@ -52,7 +53,7 @@ struct SideBar: View {
     @State private var pinFrom = 0
     @State private var pinTravel: CGSize = .zero
 
-    private static let gap: CGFloat = 2
+    static let gap: CGFloat = 2
     private static let pinGap: CGFloat = 4
     /// The heading over the tabs pinned as lines, and the line with Clear
     /// that parts them from the rest.
@@ -161,6 +162,8 @@ struct SideBar: View {
         .animation(Motion.settle, value: browser.pinnedCount)
         .animation(Motion.settle, value: browser.keptCount)
         .animation(Motion.settle, value: prefs.pinnedFolded)
+        .animation(Motion.settle, value: browser.groups)
+        .animation(Motion.settle, value: browser.closedGroups.map(\.id))
         .onChange(of: holdingLine) { _, holding in if !holding { letGoOfLine() } }
         .onChange(of: holdingSquare) { _, holding in if !holding { letGoOfSquare() } }
     }
@@ -310,7 +313,7 @@ struct SideBar: View {
     private func preview(_ row: Parked, pill: Namespace.ID) -> some View {
         let pins = row.tabs.filter { $0.place == .essential }
         let open = row.tabs.contains { $0.place == .kept && !$0.asleep }
-        let clears = row.tabs.contains { $0.place == .loose }
+        let clears = row.tabs.contains { $0.place == .loose && $0.group == nil }
         let cols = SideBar.pinColumns(pins.count)
         let width = pinWidth(for: pins.count)
         let height = min(square, width)
@@ -326,15 +329,20 @@ struct SideBar: View {
                 }
                 .padding(.bottom, 10)
             }
-            ForEach(SideBar.pieces(of: row.tabs, active: row.active, folded: prefs.pinnedFolded)) { piece in
+            ForEach(SideBar.pieces(of: row.tabs, active: row.active, folded: prefs.pinnedFolded, groups: row.groups)) { piece in
                 switch piece {
                 case .heading:
                     PinnedHeading(prefs: prefs, open: open)
                 case .tab(let tab):
-                    SideRow(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active, pill: pill, close: {})
-                        .padding(.bottom, SideBar.gap)
+                    SideBar.nested(tab) {
+                        SideRow(browser: browser, prefs: prefs, tab: tab, live: tab.id == row.active, pill: pill, close: {})
+                    }
                 case .divider:
-                    ClearLine(clears: clears) {}
+                    ClearLine(clears: clears, groups: false, group: {}, clear: {})
+                case .group(let group, let members):
+                    GroupLine(browser: browser, prefs: prefs, group: group, members: members)
+                case .closed(let closed):
+                    ClosedLine(browser: browser, prefs: prefs, closed: closed)
                 }
             }
             if !prefs.newTabInFoot { newTab }
@@ -356,10 +364,15 @@ struct SideBar: View {
     }
 
     /// What the rows take, top to bottom: the pinned lines, the line with
-    /// Clear, the other tabs and the row that makes another. The same sum
+    /// Clear, what is under it and the row that makes another. The same sum
     /// the drags work from, so the three can't disagree.
     private var rowsHeight: CGFloat {
-        keptBlock + SideBar.divider + CGFloat(looseTabs.count) * step + (prefs.newTabInFoot ? 0 : row)
+        keptBlock + SideBar.divider + CGFloat(lines.count) * step + (prefs.newTabInFoot ? 0 : row)
+    }
+
+    /// What is drawn under the line with Clear, all of it a line's height.
+    private var lines: [Piece] {
+        SideBar.lines(of: browser.tabs, active: browser.activeID, groups: browser.groups, closed: browser.closedGroups)
     }
 
     // MARK: - the pinned squares
@@ -498,8 +511,8 @@ struct SideBar: View {
                 // before or after the reset above is SwiftUI's to say.
                 if below(value) {
                     // Where among the lines it was let go, in their space.
-                    let aim = aim(places.gridTop + value.location.y - places.rowsTop, holding: tab)
-                    withAnimation(Motion.settle) { land(tab, aim) }
+                    let target = aim(places.gridTop + value.location.y - places.rowsTop, holding: tab)
+                    withAnimation(Motion.settle) { land(tab, target) }
                 }
                 letGoOfSquare()
             }
@@ -533,89 +546,165 @@ struct SideBar: View {
         if let index = shownKept.firstIndex(where: { $0.id == tab.id }) {
             return SideBar.heading + CGFloat(index) * step
         }
-        let index = looseTabs.firstIndex { $0.id == tab.id } ?? 0
+        let index = lines.firstIndex {
+            if case .tab(let other) = $0 { return other.id == tab.id }
+            return false
+        } ?? 0
         return keptBlock + SideBar.divider + CGFloat(index) * step
     }
 
-    /// A block, and a place among the other lines drawn in it.
-    private struct Aim: Equatable {
-        var place: Browser.Place
-        var slot: Int
+    /// Where a tab held in the rows would go.
+    private enum Aim: Equatable {
+        case kept(Int)
+        /// Before this one of a group's tabs; with none, into a folded group.
+        case group(TabGroup.ID, Int?)
+        case free(Int)
+    }
+
+    /// Everything under the line but the tab in the hand.
+    private func others(than held: Tab.ID) -> [Piece] {
+        lines.filter {
+            if case .tab(let other) = $0 { return other.id != held }
+            return true
+        }
     }
 
     /// Where a tab whose middle is held at `y` in the rows' space would go:
-    /// the place among the other lines, the held one left out, whose middle
-    /// is nearest — among the pinned lines while it is nearer the last of
-    /// them than the first line under Clear. Measured against the others
-    /// alone, which don't move as it does, so the aim can't swing back and
-    /// forth under a hand held still.
+    /// among the pinned lines while it is nearer the last of them than the
+    /// first thing under Clear, and under it, whatever it is over — so over a
+    /// group's line it goes into the group. Measured against the others alone,
+    /// which don't move as it does, so the aim can't swing back and forth
+    /// under a hand held still.
     private func aim(_ y: CGFloat, holding tab: Tab) -> Aim {
         let kept = shownKept.filter { $0.id != tab.id }.count
-        let loose = looseTabs.filter { $0.id != tab.id }.count
         let head = browser.keptCount > 0 ? SideBar.heading : 0
-        func nearest(from top: CGFloat, among count: Int) -> Int {
-            min(max(0, Int(((y - top - row / 2) / step).rounded())), count)
-        }
+        func nearest(from top: CGFloat) -> Int { Int(((y - top - row / 2) / step).rounded()) }
         // A tab with no address can't be pinned (see `Browser.put`).
         if !tab.isBlank, y < head + CGFloat(kept) * step + (SideBar.divider + row) / 2 {
-            return Aim(place: .kept, slot: nearest(from: head, among: kept))
+            return .kept(min(max(0, nearest(from: head)), kept))
         }
-        return Aim(place: .loose, slot: nearest(from: head + CGFloat(kept) * step + SideBar.divider, among: loose))
+        let free = looseTabs.filter { $0.group == nil && $0.id != tab.id }
+        let at = max(0, nearest(from: head + CGFloat(kept) * step + SideBar.divider))
+        for piece in others(than: tab.id).dropFirst(at) {
+            switch piece {
+            case .group(let group, _):
+                return .group(group.id, group.folded ? nil : 0)
+            case .tab(let other):
+                if let id = other.group {
+                    // Folded, the one tab showing is no place to aim between.
+                    guard browser.groups.first(where: { $0.id == id })?.folded == false else { return .group(id, nil) }
+                    let beside = looseTabs.filter { $0.group == id && $0.id != tab.id }
+                    return .group(id, beside.firstIndex { $0.id == other.id })
+                }
+                return .free(free.firstIndex { $0.id == other.id } ?? free.count)
+            default:
+                continue
+            }
+        }
+        return .free(free.count)
     }
 
-    /// The place in the row an aim puts a tab at. Folded, the lines out of
-    /// sight can't be aimed between: one already pinned stays where it is,
-    /// and another goes at their end — which opens them to show it (see
-    /// `Browser.put`).
-    private func slot(_ aim: Aim, holding tab: Tab) -> Int {
-        guard aim.place == .kept, prefs.pinnedFolded else { return aim.slot }
-        return keptTabs.firstIndex { $0.id == tab.id } ?? keptTabs.count
+    /// Whether the tab already has that place.
+    private func holds(_ tab: Tab, _ aim: Aim) -> Bool {
+        switch aim {
+        case .kept(let slot):
+            guard tab.place == .kept else { return false }
+            return prefs.pinnedFolded || keptTabs.firstIndex { $0.id == tab.id } == slot
+        case .group(let group, let slot):
+            guard tab.group == group else { return false }
+            guard let slot else { return true }
+            return looseTabs.filter { $0.group == group }.firstIndex { $0.id == tab.id } == slot
+        case .free(let slot):
+            return tab.place == .loose && tab.group == nil
+                && looseTabs.filter { $0.group == nil }.firstIndex { $0.id == tab.id } == slot
+        }
     }
 
-    /// Puts a tab where an aim says, in the row itself.
+    /// Puts a tab where an aim says, in the row itself. Folded, the pinned
+    /// lines out of sight can't be aimed between: one already pinned stays
+    /// where it is, and another goes at their end — which opens them to show
+    /// it (see `Browser.put`).
     private func land(_ tab: Tab, _ aim: Aim) {
-        let slot = slot(aim, holding: tab)
-        if aim.place == tab.place {
-            browser.move(tab, to: browser.block(aim.place).lowerBound + slot)
-        } else {
-            browser.put(tab, aim.place, at: slot)
+        guard !holds(tab, aim) else { return }
+        switch aim {
+        case .kept(let slot):
+            let slot = prefs.pinnedFolded ? keptTabs.count : slot
+            if tab.place == .kept {
+                browser.move(tab, to: browser.block(.kept).lowerBound + slot)
+            } else {
+                browser.put(tab, .kept, at: slot)
+            }
+        case .group(let group, let slot):
+            browser.put(tab, into: group, at: slot)
+        case .free(let slot):
+            browser.put(tab, into: nil, at: slot)
         }
     }
 
     /// How far each of the other lines, and the line with Clear, stands off
-    /// its place while a line is held: they close up behind it and open a
-    /// gap where it is aimed, as if it were already there.
-    private func makingWay() -> (lines: [Tab.ID: CGFloat], divider: CGFloat) {
+    /// its place while a line is held: they close up behind it and open a gap
+    /// where it is aimed, as if it were already there. A folded group opens
+    /// none: what goes in goes out of sight.
+    private func makingWay() -> (lines: [AnyHashable: CGFloat], divider: CGFloat) {
         guard let held = dragging, let aimed else { return ([:], 0) }
         let head = browser.keptCount > 0 ? SideBar.heading : 0
         let kept = shownKept.filter { $0.id != held }
-        let loose = looseTabs.filter { $0.id != held }
-        func room(_ place: Browser.Place, _ index: Int) -> Int {
-            aimed.place == place && index >= aimed.slot ? 1 : 0
-        }
-        let divider = head + CGFloat(kept.count + (aimed.place == .kept ? 1 : 0)) * step
-        var lines: [Tab.ID: CGFloat] = [:]
+        var keptGap: Int?
+        if case .kept(let slot) = aimed { keptGap = slot }
+        let dividerTop = head + CGFloat(kept.count + (keptGap == nil ? 0 : 1)) * step
+
+        var way: [AnyHashable: CGFloat] = [:]
         for (index, tab) in kept.enumerated() {
-            lines[tab.id] = head + CGFloat(index + room(.kept, index)) * step - top(of: tab)
+            let room = keptGap.map { index >= $0 ? 1 : 0 } ?? 0
+            way[tab.id] = head + CGFloat(index + room) * step - top(of: tab)
         }
-        for (index, tab) in loose.enumerated() {
-            lines[tab.id] = divider + SideBar.divider + CGFloat(index + room(.loose, index)) * step - top(of: tab)
+
+        let drawn = lines
+        let under = others(than: held)
+        var gap: Int?
+        switch aimed {
+        case .kept, .group(_, nil):
+            break
+        case .group(let id, let slot?):
+            let line = under.firstIndex {
+                if case .group(let group, _) = $0 { return group.id == id }
+                return false
+            }
+            gap = line.map { $0 + 1 + slot }
+        case .free(let slot):
+            let free = under.indices.filter {
+                if case .tab(let tab) = under[$0] { return tab.group == nil }
+                return false
+            }
+            gap = slot < free.count ? free[slot] : under.count
         }
-        return (lines, divider - keptBlock)
+        var now: [AnyHashable: Int] = [:]
+        for (index, piece) in drawn.enumerated() { now[piece.id] = index }
+        let top = dividerTop + SideBar.divider
+        for (index, piece) in under.enumerated() {
+            let room = gap.map { index >= $0 ? 1 : 0 } ?? 0
+            let drawnAt = keptBlock + SideBar.divider + CGFloat(now[piece.id] ?? index) * step
+            way[piece.id] = top + CGFloat(index + room) * step - drawnAt
+        }
+        return (way, dividerTop - keptBlock)
     }
 
     /// One piece of the rows: the heading over the pinned lines, a tab's
-    /// line, or the line with Clear.
+    /// line, the line with Clear, or a group's line, closed or not.
     private enum Piece: Identifiable {
         case heading
         case tab(Tab)
         case divider
+        case group(TabGroup, [Tab])
+        case closed(ClosedGroup)
 
         var id: AnyHashable {
             switch self {
             case .heading: return "heading"
             case .tab(let tab): return tab.id
             case .divider: return "divider"
+            case .group(let group, _): return group.id
+            case .closed(let closed): return closed.id
             }
         }
     }
@@ -625,7 +714,10 @@ struct SideBar: View {
     /// the other made it a new view, the drag it was under ended with the
     /// old one, and the line stayed held where it was left, over another.
     /// Folded, the pinned line on screen still shows (see `shownKept`).
-    private static func pieces(of tabs: [Tab], active: Tab.ID?, folded: Bool) -> [Piece] {
+    private static func pieces(
+        of tabs: [Tab], active: Tab.ID?, folded: Bool,
+        groups: [TabGroup] = [], closed: [ClosedGroup] = []
+    ) -> [Piece] {
         let kept = tabs.filter { $0.place == .kept }
         var pieces: [Piece] = []
         if !kept.isEmpty {
@@ -633,27 +725,64 @@ struct SideBar: View {
             pieces += kept.filter { !folded || $0.id == active }.map(Piece.tab)
         }
         pieces.append(.divider)
-        pieces += tabs.filter { $0.place == .loose }.map(Piece.tab)
+        pieces += lines(of: tabs, active: active, groups: groups, closed: closed)
         return pieces
+    }
+
+    /// The pieces under the divider: the groups, each line followed by the
+    /// tabs it shows, and then the tabs in no group. A folded group still
+    /// shows the tab you are on, as the pinned lines do.
+    private static func lines(of tabs: [Tab], active: Tab.ID?, groups: [TabGroup], closed: [ClosedGroup]) -> [Piece] {
+        let loose = tabs.filter { $0.place == .loose }
+        var waiting = closed.sorted { $0.at < $1.at }
+        var lines: [Piece] = []
+        for (index, group) in groups.enumerated() {
+            while let next = waiting.first, next.at <= index { lines.append(.closed(waiting.removeFirst())) }
+            let members = loose.filter { $0.group == group.id }
+            guard !members.isEmpty else { continue }
+            lines.append(.group(group, members))
+            lines += members.filter { !group.folded || $0.id == active }.map(Piece.tab)
+        }
+        lines += waiting.map(Piece.closed)
+        lines += loose.filter { $0.group == nil }.map(Piece.tab)
+        return lines
+    }
+
+    /// A tab's line with the air under it, and in a group, set in from the
+    /// group's chevron with a hairline running down from it. One view either
+    /// way: a line going into a group under the hand stays the line it was.
+    private static func nested<Content: View>(_ tab: Tab, @ViewBuilder content: () -> Content) -> some View {
+        let inside = tab.group != nil
+        return content()
+            .padding(.leading, inside ? 20 : 0)
+            .padding(.bottom, SideBar.gap)
+            .background(alignment: .leading) {
+                Rectangle()
+                    .fill(Palette.hairline)
+                    .frame(width: 1)
+                    .padding(.leading, 18)
+                    .opacity(inside ? 1 : 0)
+            }
     }
 
     private func line(_ tab: Tab, making way: CGFloat) -> some View {
         let held = dragging == tab.id
-        return SideRow(
-            browser: browser,
-            prefs: prefs,
-            tab: tab,
-            live: tab.id == browser.activeID,
-            pill: pill,
-            close: { browser.close(tab, asking: true) }
-        )
-        .padding(.bottom, SideBar.gap)
+        return SideBar.nested(tab) {
+            SideRow(
+                browser: browser,
+                prefs: prefs,
+                tab: tab,
+                live: tab.id == browser.activeID,
+                pill: pill,
+                close: { browser.close(tab, asking: true) }
+            )
+        }
         .offset(y: held ? startY + travel - top(of: tab) : way)
         // Under the hand exactly; only the others glide. Its place in the
-        // row stays put until it is let go: moved as it passed each tab,
-        // the place sprang there while the offset didn't, a transaction
-        // here can't stop a place its stack gives it from springing, and
-        // the tab jumped back a whole slot and drifted forward each time.
+        // row stays put until it is let go: moved as it passed each tab, the
+        // place sprang there while the offset didn't, a transaction here
+        // can't stop a place its stack gives it from springing, and the tab
+        // jumped back a whole slot and drifted forward each time.
         .transaction { if held { $0.animation = nil } }
         .zIndex(held ? 1 : 0)
         .shadow(color: .black.opacity(held ? 0.14 : 0), radius: 12, y: 4)
@@ -666,20 +795,21 @@ struct SideBar: View {
     /// squares, which makes it one of them once it is let go there.
     private func reorder(tab: Tab) -> some Gesture {
         // See the grid: the drag is measured in the rows' space, not the
-        // line's.
+        // line's, so a line that has just moved keeps its bearings.
         DragGesture(minimumDistance: 5, coordinateSpace: .named("rows"))
             .updating($holdingLine) { _, holding, _ in holding = true }
             .onChanged { value in
                 if dragging != tab.id {
                     startY = top(of: tab)
                     dragging = tab.id
+                    places.held = tab.id
                 }
                 travel = value.translation.height
                 overGrid = over(value, holding: tab)
-                // Over the squares, the lines close up behind it.
-                let aim = overGrid ? nil : aim(startY + travel + row / 2, holding: tab)
-                if aim != aimed {
-                    withAnimation(Motion.settle) { aimed = aim }
+                // Over the squares, the lines go back to their places.
+                let target = overGrid ? nil : aim(startY + travel + row / 2, holding: tab)
+                if target != aimed {
+                    withAnimation(Motion.settle) { aimed = target }
                 }
             }
             .onEnded { value in
@@ -688,13 +818,16 @@ struct SideBar: View {
                 // line springs from under the hand to its new place, and the
                 // others from the gap they made to the same place in the row:
                 // their offsets and their places spring together, and cancel.
-                withAnimation(Motion.settle) {
-                    if over(value, holding: tab) {
-                        browser.pin(tab)
-                    } else {
-                        land(tab, aim(startY + value.translation.height + row / 2, holding: tab))
+                if places.held == tab.id {
+                    withAnimation(Motion.settle) {
+                        if over(value, holding: tab) {
+                            browser.pin(tab)
+                        } else {
+                            land(tab, aim(startY + value.translation.height + row / 2, holding: tab))
+                        }
                     }
                 }
+                places.held = nil
                 letGoOfLine()
             }
     }
@@ -719,20 +852,34 @@ struct SideBar: View {
     /// the way to another is down in the foot.
     private var rows: some View {
         let open = keptTabs.contains { !$0.asleep }
-        let clears = !looseTabs.isEmpty
+        let clears = looseTabs.contains { $0.group == nil }
         let way = makingWay()
+        var aimedGroup: TabGroup.ID?
+        if case .group(let id, _) = aimed { aimedGroup = id }
         return VStack(alignment: .leading, spacing: 0) {
-            ForEach(SideBar.pieces(of: browser.tabs, active: browser.activeID, folded: prefs.pinnedFolded)) { piece in
+            ForEach(SideBar.pieces(
+                of: browser.tabs, active: browser.activeID, folded: prefs.pinnedFolded,
+                groups: browser.groups, closed: browser.closedGroups
+            )) { piece in
                 switch piece {
                 case .heading:
                     PinnedHeading(prefs: prefs, open: open)
                 case .tab(let tab):
                     line(tab, making: way.lines[tab.id] ?? 0)
                 case .divider:
-                    ClearLine(clears: clears) {
-                        withAnimation(Motion.settle) { browser.clearTabs() }
-                    }
+                    ClearLine(
+                        clears: clears,
+                        groups: prefs.tabGroups && browser.canGroup,
+                        group: { withAnimation(Motion.settle) { browser.groupBySite() } },
+                        clear: { withAnimation(Motion.settle) { browser.clearTabs() } }
+                    )
                     .offset(y: way.divider)
+                case .group(let group, let members):
+                    GroupLine(browser: browser, prefs: prefs, group: group, members: members, aimedAt: aimedGroup == group.id)
+                        .offset(y: way.lines[group.id] ?? 0)
+                case .closed(let closed):
+                    ClosedLine(browser: browser, prefs: prefs, closed: closed)
+                        .offset(y: way.lines[closed.id] ?? 0)
                 }
             }
             if !prefs.newTabInFoot { newTab }
@@ -787,6 +934,9 @@ private final class Places {
     var rowsTop: CGFloat = 0
     var gridTop: CGFloat = 0
     var gridBottom: CGFloat = 0
+    /// The line a drag has picked up, which outlives the state saying so:
+    /// that may be put back before the drag's end is heard.
+    var held: Tab.ID?
 }
 
 /// The pinned squares' grid, every cell laid out at once. A lazy grid makes
@@ -1068,6 +1218,11 @@ private struct SideRow: View {
         .overlay { MiddleClick { if !(tab.kept && tab.asleep) { close() } } }
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: close) }
+        // The browser doesn't hear a tab go somewhere, and where its tabs are
+        // is what says whether Group has anything to do.
+        .onChange(of: tab.address) { _, _ in
+            if prefs.tabGroups, tab.group == nil { browser.objectWillChange.send() }
+        }
         .animation(Motion.quick, value: hovering)
         .animation(Motion.glide, value: editing)
         .onChange(of: browser.refusals) { _, _ in
@@ -1158,33 +1313,372 @@ private struct PinnedHeading: View {
     }
 }
 
-/// The line between the pinned tabs and the rest, with Clear at its end:
-/// every tab under it goes, the pinned ones and the squares stay.
+/// The line between the pinned tabs and the rest, with Group and Clear at its
+/// end: Group gathers the tabs under it by site, Clear closes the ones in no
+/// group. The pinned ones and the squares are neither's.
 private struct ClearLine: View {
     let clears: Bool
+    let groups: Bool
+    let group: () -> Void
     let clear: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(Palette.hairline).frame(height: 1)
+            if groups {
+                LineWord(title: "Group", help: "Gather the tabs that aren't pinned by site", act: group)
+            }
+            if clears {
+                LineWord(title: "Clear", help: "Close every tab that isn't pinned or in a group", act: clear)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: SideBar.divider)
+    }
+}
+
+private struct LineWord: View {
+    let title: String
+    let help: String
+    let act: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: act) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(hovering ? Palette.ink.opacity(0.7) : Palette.faint)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+        .transition(.opacity)
+        .animation(Motion.quick, value: hovering)
+    }
+}
+
+/// A group's line: a click folds or opens it, a double-click renames it, and
+/// under the pointer its end offers Ungroup and the cross.
+private struct GroupLine: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject var prefs: Preferences
+    let group: TabGroup
+    let members: [Tab]
+    /// A tab in the hand would go into it if let go now.
+    var aimedAt = false
+
+    @State private var hovering = false
+
+    /// What the end of the line keeps to itself under the pointer, out of
+    /// reach of the press (a real view, asked before any other; see DragStrip).
+    private static let endRoom: CGFloat = 112
+
+    private var editing: Bool { browser.editingGroup == group.id }
+    private var open: Bool { hovering && !editing }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8.5, weight: .semibold))
+                .rotationEffect(.degrees(group.folded ? -90 : 0))
+                .foregroundStyle(hovering ? Palette.ink.opacity(0.7) : Palette.muted)
+                .frame(width: prefs.tabSize.mark)
+            if prefs.glyph == .icons {
+                GroupMark(tabs: members, letter: String(group.name.prefix(1)).uppercased(), size: prefs.tabSize.mark)
+            }
+            if editing {
+                GroupNameField(browser: browser, group: group, size: prefs.tabSize.text)
+                    .frame(height: prefs.tabSize.field)
+            } else {
+                Text(group.name)
+                    .font(.system(size: prefs.tabSize.text, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(hovering ? Palette.ink.opacity(0.7) : Palette.muted)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, open ? GroupLine.endRoom : 34)
+        .frame(height: prefs.tabSize.row)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(aimedAt ? Palette.wash : hovering ? Palette.hover : .clear)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            if !editing {
+                GroupPress { clicks in
+                    withAnimation(Motion.settle) {
+                        // The first of two has folded or opened it already.
+                        browser.toggleFold(group.id)
+                        if clicks >= 2 { browser.beginGroupRename(group.id) }
+                    }
+                }
+                .padding(.trailing, open ? GroupLine.endRoom : 0)
+            }
+        }
+        .overlay(alignment: .trailing) { end }
+        .onHover { hovering = $0 }
+        .contextMenu {
+            Button("Rename") { browser.beginGroupRename(group.id) }
+            Button(group.folded ? "Expand" : "Collapse") {
+                withAnimation(Motion.settle) { browser.toggleFold(group.id) }
+            }
+            Divider()
+            Button("Ungroup") { withAnimation(Motion.settle) { browser.ungroup(group.id) } }
+            Button(members.count == 1 ? "Close 1 Tab" : "Close \(members.count) Tabs") {
+                withAnimation(Motion.settle) { browser.closeGroup(group.id) }
+            }
+        }
+        .padding(.bottom, SideBar.gap)
+        .animation(Motion.quick, value: hovering)
+        .animation(Motion.quick, value: aimedAt)
+        .transition(.opacity)
+    }
+
+    private var end: some View {
+        HStack(spacing: 6) {
+            // Nothing of it to see until one of them plays. Each hears its
+            // own tab: the browser doesn't hear a page start to.
+            ZStack {
+                ForEach(members) { GroupSound(tab: $0) }
+            }
+            if open {
+                GroupWord(title: "Ungroup", help: "Keep the tabs, drop the group") {
+                    withAnimation(Motion.settle) { browser.ungroup(group.id) }
+                }
+                Button {
+                    withAnimation(Motion.settle) { browser.closeGroup(group.id) }
+                } label: {
+                    TabEnd(unpins: false, size: prefs.tabSize)
+                }
+                .buttonStyle(.plain)
+                .help(members.count == 1 ? "Close 1 tab" : "Close \(members.count) tabs")
+            } else {
+                Text("\(members.count)")
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(Palette.muted)
+                    .allowsHitTesting(false)
+                    .padding(.trailing, 3)
+            }
+        }
+        .padding(.trailing, 7)
+    }
+}
+
+/// The site's mark on a group's line: the icon of the first of its tabs that
+/// has one, and the name's letter until one does. Each tab is listened to, as
+/// a sleeping tab's icon may arrive long after the line is drawn.
+private struct GroupMark: View {
+    let tabs: [Tab]
+    let letter: String
+    let size: CGFloat
+
+    @State private var heard = 0
+
+    var body: some View {
+        let _ = heard
+        Mark(icon: tabs.lazy.compactMap(\.icon).first, letter: letter, size: size)
+            .onReceive(Publishers.MergeMany(tabs.map(\.$icon))) { _ in
+                // Said as it is about to change: read once it has.
+                DispatchQueue.main.async { heard &+= 1 }
+            }
+    }
+}
+
+/// The speaker of a tab playing out of sight in a group: press it to quiet the
+/// tab, which then has no more to say here.
+private struct GroupSound: View {
+    @ObservedObject var tab: Tab
+
+    var body: some View {
+        if tab.noisy, !tab.muted { Speaker(tab: tab) }
+    }
+}
+
+private struct GroupWord: View {
+    let title: String
+    let help: String
+    let act: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: act) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(hovering ? Palette.ink.opacity(0.7) : Palette.muted)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(Palette.ink.opacity(hovering ? 0.07 : 0), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+        .animation(Motion.quick, value: hovering)
+    }
+}
+
+/// A press on a group's line, and how many clicks it was. The press has to be
+/// done with at once for a fold to feel like one, which rules out SwiftUI's
+/// pair of tap gestures: with both, the single waits to be sure it is one. So
+/// a real view, there for the left button and nothing else (see MiddleClick).
+struct GroupPress: NSViewRepresentable {
+    let act: (Int) -> Void
+
+    func makeNSView(context: Context) -> NSView { GroupPresser() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        (view as? GroupPresser)?.act = act
+    }
+}
+
+final class GroupPresser: NSView {
+    var act: (Int) -> Void = { _ in }
+    private var pressed = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = NSApp.currentEvent, event.type == .leftMouseDown || event.type == .leftMouseUp
+        else { return nil }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) { pressed = true }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { pressed = false }
+        guard pressed, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        act(event.clickCount)
+    }
+}
+
+/// A group's name being typed: Return or a press anywhere else keeps it, and
+/// esc leaves it as it was. As a tab's own field (TabAddressField).
+private struct GroupNameField: NSViewRepresentable {
+    @ObservedObject var browser: Browser
+    let group: TabGroup
+    let size: CGFloat
+
+    func makeCoordinator() -> Coordinator { Coordinator(browser: browser, id: group.id) }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.delegate = context.coordinator
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: size, weight: .medium)
+        field.textColor = Palette.NS.ink
+        field.cell?.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.stringValue = group.name
+        context.coordinator.watch(field)
+        DispatchQueue.main.async {
+            field.window?.makeFirstResponder(field)
+            guard let editor = field.currentEditor() as? NSTextView else { return }
+            editor.selectedTextAttributes = [
+                .backgroundColor: NSColor(Palette.ink.opacity(0.11)),
+                .foregroundColor: Palette.NS.ink,
+            ]
+            editor.selectAll(nil)
+        }
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {}
+
+    static func dismantleNSView(_ field: NSTextField, coordinator: Coordinator) {
+        coordinator.unwatch()
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        let browser: Browser
+        let id: TabGroup.ID
+        private var watcher: Any?
+
+        init(browser: Browser, id: TabGroup.ID) {
+            self.browser = browser
+            self.id = id
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
+            switch command {
+            case #selector(NSResponder.insertNewline(_:)):
+                browser.finishGroupRename(id, name: control.stringValue)
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                browser.finishGroupRename(id, name: "")
+                return true
+            default:
+                return false
+            }
+        }
+
+        func controlTextDidEndEditing(_ note: Notification) {
+            guard let field = note.object as? NSTextField else { return }
+            browser.finishGroupRename(id, name: field.stringValue)
+        }
+
+        /// A press on what takes no focus leaves the field focused, so presses
+        /// are watched for while it is there (see TabAddressField).
+        @MainActor func watch(_ field: NSTextField) {
+            watcher = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self, weak field] event in
+                guard let self, let field, event.window === field.window,
+                      !field.bounds.contains(field.convert(event.locationInWindow, from: nil))
+                else { return event }
+                let (browser, id, name) = (self.browser, self.id, field.stringValue)
+                DispatchQueue.main.async { browser.finishGroupRename(id, name: name) }
+                return event
+            }
+        }
+
+        @MainActor func unwatch() {
+            if let watcher { NSEvent.removeMonitor(watcher) }
+            watcher = nil
+        }
+    }
+}
+
+/// Where a group was, just after its cross: the line says how many went, and
+/// for a moment they can come back.
+private struct ClosedLine: View {
+    @ObservedObject var browser: Browser
+    @ObservedObject var prefs: Preferences
+    let closed: ClosedGroup
 
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 8) {
-            Rectangle().fill(Palette.hairline).frame(height: 1)
-            if clears {
-                Button(action: clear) {
-                    Text("Clear")
-                        .font(.system(size: 11))
-                        .foregroundStyle(hovering ? Palette.ink.opacity(0.7) : Palette.faint)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { hovering = $0 }
-                .help("Close every tab that isn't pinned")
-                .transition(.opacity)
+            Text(closed.pages.count == 1 ? "1 tab closed" : "\(closed.pages.count) tabs closed")
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.muted)
+            Spacer(minLength: 0)
+            Button {
+                withAnimation(Motion.settle) { browser.reopenGroup(closed) }
+            } label: {
+                Text("Undo")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.ink)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Palette.ink.opacity(hovering ? 0.07 : 0), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
         }
-        .padding(.horizontal, 10)
-        .frame(height: SideBar.divider)
+        .padding(.leading, 10)
+        .padding(.trailing, 7)
+        .frame(height: prefs.tabSize.row)
+        .padding(.bottom, SideBar.gap)
         .animation(Motion.quick, value: hovering)
+        .transition(.opacity)
     }
 }
 

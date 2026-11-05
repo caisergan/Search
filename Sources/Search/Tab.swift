@@ -499,6 +499,9 @@ final class Tab: ObservableObject, Identifiable {
     /// leaves it. Never set together with `pin`.
     @Published var kept = false
 
+    /// The group it is in (see Groups.swift). Only ever on an ordinary tab.
+    @Published var group: TabGroup.ID?
+
     /// Which of the row's three blocks it is in.
     var place: Browser.Place { pin != nil ? .essential : kept ? .kept : .loose }
 
@@ -1065,11 +1068,12 @@ final class Tab: ObservableObject, Identifiable {
 
     /// Brought back from the last session: everything the row needs to draw it,
     /// and nothing fetched.
-    func restore(url: URL, title: String, name: String? = nil) {
+    func restore(url: URL, title: String, name: String? = nil, memory: Any? = nil) {
         address = url
         self.title = title
         self.name = name
         pending = url
+        if let memory { self.memory = memory }
         adoptIcon()
     }
 
