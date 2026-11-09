@@ -755,7 +755,6 @@ struct SideBar: View {
         let inside = tab.group != nil
         return content()
             .padding(.leading, inside ? 20 : 0)
-            .padding(.bottom, SideBar.gap)
             .background(alignment: .leading) {
                 Rectangle()
                     .fill(Palette.hairline)
@@ -1210,7 +1209,11 @@ private struct SideRow: View {
         .animation(Motion.quick, value: speaker)
         .background { ground }
         .modifier(Shake(travel: shake))
-        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        // The gap under the line is the line's to the pointer: left out, the
+        // pointer fell between two lines for a pixel on its way down, and the
+        // hover and the cursor flickered off and back.
+        .padding(.bottom, SideBar.gap)
+        .contentShape(Rectangle())
         .modifier(OneClick(double: false) {
             if live { browser.beginTabEdit(tab) } else { browser.select(tab) }
         })
@@ -1408,7 +1411,9 @@ private struct GroupLine: View {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(aimedAt ? Palette.wash : hovering ? Palette.hover : .clear)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        // The gap under it is its own to the pointer, as a tab's line's is.
+        .padding(.bottom, SideBar.gap)
+        .contentShape(Rectangle())
         .overlay {
             if !editing {
                 GroupPress { clicks in
@@ -1421,7 +1426,7 @@ private struct GroupLine: View {
                 .padding(.trailing, open ? GroupLine.endRoom : 0)
             }
         }
-        .overlay(alignment: .trailing) { end }
+        .overlay(alignment: .trailing) { end.padding(.bottom, SideBar.gap) }
         .onHover { hovering = $0 }
         .contextMenu {
             Button("Rename") { browser.beginGroupRename(group.id) }
@@ -1434,7 +1439,6 @@ private struct GroupLine: View {
                 withAnimation(Motion.settle) { browser.closeGroup(group.id) }
             }
         }
-        .padding(.bottom, SideBar.gap)
         .animation(Motion.quick, value: hovering)
         .animation(Motion.quick, value: aimedAt)
         .transition(.opacity)
