@@ -70,7 +70,9 @@ enum ExtensionSocket {
                 // first one, sent as the port opened, is often lost. The
                 // worker says "open" until it hears back, so a repeat is
                 // only answered.
-                post(["ready": true])
+                // "heard" tells the opening's answer from the first word
+                // above: the worker keeps asking until it has this one.
+                post(["ready": true, "heard": true])
                 guard task == nil else { return }
                 start(address, protocols: message["protocols"] as? [String] ?? [], userAgent: message["userAgent"] as? String)
             } else if let text = message["send"] as? String {
