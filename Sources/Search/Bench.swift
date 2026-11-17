@@ -1895,13 +1895,27 @@ final class Bench {
                 return ["phase": phase, "configured": vpn.configured, "server": vpn.server.host,
                         "proxies": Vpn.proxies.count, "exit": vpn.exit?.ip ?? "", "latency": vpn.latency ?? -1,
                         "down": vpn.meter.down, "up": vpn.meter.up, "connections": vpn.meter.connections,
-                        "month": vpn.meter.month,
+                        "month": vpn.meter.month, "late": vpn.late,
+                        // Pages whose store isn't pointed where the rest are: should be none.
+                        "uncovered": Web.pages.allObjects.filter { $0.configuration.websiteDataStore.proxyConfigurations.count != Vpn.proxies.count }.count,
+                        "pages": Web.pages.allObjects.count,
                         "sites": vpn.meter.sites.map { ["site": $0.site, "bytes": $0.bytes] }]
             }
             switch request["what"] as? String ?? "state" {
             case "on", "off":
                 guard Store.testing else { answer(["error": "vpn on|off only works on a --test run"]); return }
                 request["what"] as? String == "on" ? vpn.turnOn() : vpn.turnOff()
+                answer(state())
+            case "forget", "import":
+                // What Forget this server, and Import client.yaml… then Save, do.
+                guard Store.testing else { answer(["error": "vpn forget|import only works on a --test run"]); return }
+                if request["what"] as? String == "forget" {
+                    vpn.use(VpnServer())
+                } else {
+                    guard let path = request["path"] as? String, let text = try? String(contentsOfFile: path, encoding: .utf8)
+                    else { answer(["error": "vpn import needs a readable client.yaml"]); return }
+                    vpn.use(VpnServer.reading(yaml: text))
+                }
                 answer(state())
             case "measure":
                 Task { @MainActor in await vpn.measure(); answer(state()) }

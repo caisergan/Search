@@ -36,9 +36,10 @@
     ./bench ext-answer yes|no|ask      test run: answer extensions' questions without asking; lists what was asked
     ./bench ext-enable ID on|off       switch an extension on or off
     ./bench ext-remove ID
-    ./bench vpn [state|on|off|measure|panel PATH]
-                                       the VPN: its state, what went through it and to which sites; on/off
-                                       (test run); measure the exit IP and latency; the panel drawn to a PNG
+    ./bench vpn [state|on|off|measure|forget|import PATH|panel PATH]
+                                       the VPN: its state, what went through it and to which sites; on/off,
+                                       forget the server, or import a client.yaml and save it (test run);
+                                       measure the exit IP and latency; the panel drawn to a PNG
     ./bench strip PATH [WIDTH]         the row of tabs across the top, drawn off screen to a PNG
     ./bench column PATH [HEIGHT]       the column of tabs, drawn off screen to a PNG
     ./bench groups [state|group|clear|new|reopen|switch on|off|fold NAME|ungroup NAME|close NAME|undo|rename NAME TO|press N [CLICKS]|where N|drag X Y X Y]
@@ -261,11 +262,11 @@ def main(argv):
         request["width"], request["height"] = float(args[0]), float(args[1])
         if len(args) == 3: request["steps"] = int(args[2])
     elif verb == "vpn":
-        if args and args[0] == "panel":
-            if len(args) != 2: sys.exit("usage: bench vpn panel PATH")
-            request["what"], request["path"] = "panel", os.path.abspath(args[1])
-        elif len(args) > 1 or (args and args[0] not in ("state", "on", "off", "measure")):
-            sys.exit("usage: bench vpn [state|on|off|measure|panel PATH]")
+        if args and args[0] in ("panel", "import"):
+            if len(args) != 2: sys.exit(f"usage: bench vpn {args[0]} PATH")
+            request["what"], request["path"] = args[0], os.path.abspath(args[1])
+        elif len(args) > 1 or (args and args[0] not in ("state", "on", "off", "measure", "forget")):
+            sys.exit("usage: bench vpn [state|on|off|measure|forget|import PATH|panel PATH]")
         elif args:
             request["what"] = args[0]
     elif verb == "strip":

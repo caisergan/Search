@@ -93,6 +93,8 @@ struct VpnButton: View {
     var edge: Edge = .bottom
     @State private var hovering = false
     @State private var angle: Double = 0
+    /// This window's: another window's button doesn't open with it.
+    @State private var open = false
 
     private var look: VpnLook { VpnLook(vpn.phase) }
 
@@ -106,7 +108,7 @@ struct VpnButton: View {
     }
 
     var body: some View {
-        Button { vpn.panelOpen.toggle() } label: {
+        Button { open.toggle() } label: {
             ZStack {
                 if look == .busy {
                     Circle()
@@ -121,13 +123,13 @@ struct VpnButton: View {
                 }
                 Image(systemName: symbol)
                     .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(look == .off ? (hovering || vpn.panelOpen ? Palette.ink : Palette.muted) : look.tint)
+                    .foregroundStyle(look == .off ? (hovering || open ? Palette.ink : Palette.muted) : look.tint)
                     .contentTransition(.symbolEffect(.replace))
             }
             .frame(width: 26, height: 26)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(vpn.panelOpen ? Palette.wash : (hovering ? Palette.hover : .clear))
+                    .fill(open ? Palette.wash : (hovering ? Palette.hover : .clear))
             )
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
@@ -136,8 +138,8 @@ struct VpnButton: View {
         .help(help)
         .animation(Motion.quick, value: hovering)
         .animation(Motion.settle, value: look)
-        .popover(isPresented: $vpn.panelOpen, arrowEdge: edge) {
-            VpnPanel(vpn: vpn, meter: vpn.meter)
+        .popover(isPresented: $open, arrowEdge: edge) {
+            VpnPanel(vpn: vpn, meter: vpn.meter) { open = false }
         }
     }
 
@@ -157,6 +159,7 @@ struct VpnButton: View {
 struct VpnPanel: View {
     @ObservedObject var vpn: Vpn
     @ObservedObject var meter: VpnMeter
+    var close: () -> Void = {}
 
     private var look: VpnLook { VpnLook(vpn.phase) }
 
@@ -175,6 +178,10 @@ struct VpnPanel: View {
                     VpnNotice(symbol: "exclamationmark.triangle.fill", tint: VpnTint.amber,
                               text: "\(why). Pages aren't loading until it connects or the VPN is turned off — nothing goes around it.",
                               actions: [("Try again", vpn.tryAgain), ("Turn off", vpn.turnOff)])
+                }
+                if vpn.late, vpn.phase != .off {
+                    VpnNotice(symbol: "exclamationmark.circle", tint: VpnTint.amber,
+                              text: "Sites opened before the VPN was set up may keep their connections straight out until they close them. Restart Search to be sure.")
                 }
                 if vpn.phase == .reconnecting {
                     VpnNotice(symbol: "arrow.triangle.2.circlepath", tint: VpnTint.violet,
@@ -365,7 +372,7 @@ struct VpnPanel: View {
             Spacer()
             Door(icon: "doc.text.magnifyingglass", help: "Hysteria's log") { vpn.openLog() }
             Door(icon: "gearshape", help: "VPN settings") {
-                vpn.panelOpen = false
+                close()
                 Store.settings.set(SettingsPanel.Page.vpn.rawValue, forKey: "settings.page")
                 Browser.front?.tuning = true
             }

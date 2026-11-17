@@ -191,7 +191,11 @@ final class Vpn: ObservableObject {
     @Published private(set) var since: Date?
     @Published private(set) var exit: VpnExit?
     @Published private(set) var latency: Int?
-    @Published var panelOpen = false
+    /// The relay came up after pages had already opened connections
+    /// straight out, which WebKit keeps and the relay can't end: those
+    /// sites go around it until they close their connections, or Search
+    /// restarts.
+    @Published private(set) var late = false
 
     /// Whether the person wants the VPN on: what the proxy follows, whatever
     /// Hysteria is doing.
@@ -207,6 +211,7 @@ final class Vpn: ObservableObject {
     private var retry: DispatchWorkItem?
     private var lastError: String?
     private var stores = NSHashTable<WKWebsiteDataStore>.weakObjects()
+    private var relayFailures = 0
 
     private init() {
         // A Hysteria of ours a crash left running holds a port and a
@@ -215,6 +220,7 @@ final class Vpn: ObservableObject {
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { Vpn.shared.endHysteria() }
         }
+        relay.onFailure = { [weak self] in self?.relayFailed() }
         wire()
         if configured, atLaunch { turnOn() }
     }
@@ -259,18 +265,32 @@ final class Vpn: ObservableObject {
     nonisolated(unsafe) private static var tunneled: URLSession?
 
     /// The relay listening and the stores pointed at it once there is a
-    /// server; neither when there isn't.
+    /// server; neither when there isn't. A relay that can't listen leaves
+    /// pages straight out with the VPN off — and, with it on, pointed at it
+    /// anyway: failing, rather than going around the tunnel.
     private func wire() {
-        if configured, relay.start() {
-            point(true)
-        } else {
+        guard configured else {
             point(false)
             relay.stop()
+            return
         }
+        let listening = relay.start()
+        point(listening || wanted)
+    }
+
+    /// The relay's port went away under it: another, and the stores told.
+    private func relayFailed() {
+        relayFailures += 1
+        guard configured, relayFailures <= 5 else { point(wanted); return }
+        relay.renew()
+        wire()
     }
 
     private func point(_ on: Bool) {
-        let proxies = on ? [ProxyConfiguration(socksv5Proxy: .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: relay.port)!))] : []
+        if on, Vpn.proxies.isEmpty, !stores.allObjects.isEmpty { late = true }
+        // Port 1 when there is none: nothing listens there, so pages fail.
+        let port = NWEndpoint.Port(rawValue: relay.port == 0 ? 1 : relay.port)!
+        let proxies = on ? [ProxyConfiguration(socksv5Proxy: .hostPort(host: "127.0.0.1", port: port))] : []
         Vpn.lock.lock()
         Vpn.current = proxies
         Vpn.tunneled?.invalidateAndCancel()
@@ -284,17 +304,14 @@ final class Vpn: ObservableObject {
     func toggle() { wanted ? turnOff() : turnOn() }
 
     func turnOn() {
-        guard configured else { return }
-        wire()
-        guard !Vpn.proxies.isEmpty else {
-            phase = .failed("Couldn't open a port on this Mac for the tunnel")
-            return
-        }
+        // On already — connecting, or given up and waiting for Try again.
+        guard configured, !wanted else { return }
         wanted = true
         Store.settings.set(true, forKey: "vpn.on")
         // What is open straight out ends here; what comes next waits for
         // the tunnel.
         relay.route(.hold)
+        wire()
         retries = 0
         meter.begin(relay)
         launch()
@@ -306,6 +323,7 @@ final class Vpn: ObservableObject {
         retry?.cancel()
         endHysteria()
         relay.route(.direct)
+        wire()
         meter.end()
         phase = .off
         since = nil
@@ -318,7 +336,11 @@ final class Vpn: ObservableObject {
     func use(_ server: VpnServer) {
         server.save()
         self.server = server
-        if !server.configured { turnOff() }
+        if !server.configured {
+            turnOff()
+            // Hysteria's config has the password in it.
+            try? FileManager.default.removeItem(at: Vpn.folder)
+        }
         wire()
         if server.configured, wanted {
             retries = 0
@@ -352,6 +374,8 @@ final class Vpn: ObservableObject {
     }
 
     private func launch() {
+        // Never two: one still running is ended first.
+        endHysteria()
         retry?.cancel()
         lastError = nil
         phase = wanted && since != nil && retries > 0 ? .reconnecting : .connecting
@@ -571,9 +595,12 @@ final class VpnMeter: ObservableObject {
         sites = []
         samples = Array(repeating: Sample(down: 0, up: 0), count: 60)
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        // On while a menu is open or the page scrolls, too.
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     func end() {
@@ -646,35 +673,70 @@ final class Relay: @unchecked Sendable {
     private var up: UInt64 = 0
     private var sites: [String: UInt64] = [:]
 
-    /// Listens, if it isn't already. Synchronous about the port: the stores
-    /// are pointed at it before the listener has said it is ready.
+    /// Told, on the main thread, when the listener fails after it was up.
+    var onFailure: (() -> Void)?
+    /// Which listener is the current one, so a failure from one stopped on
+    /// purpose isn't taken for the current one's.
+    private var generation = 0
+
+    /// Listens, if it isn't already, and waits until it is: the stores are
+    /// pointed at it as soon as this returns, before any page loads.
+    /// Called on the main thread.
     func start() -> Bool {
-        if listener != nil { return true }
+        if queue.sync(execute: { listener != nil }) { return true }
         if port == 0 { port = Relay.freePort() ?? 0 }
         guard port != 0, let number = NWEndpoint.Port(rawValue: port) else { return false }
         let parameters = NWParameters.tcp
         parameters.requiredInterfaceType = .loopback
         parameters.acceptLocalOnly = true
         parameters.allowLocalEndpointReuse = true
-        guard let listener = try? NWListener(using: parameters, on: number) else { return false }
+        guard let listener = try? NWListener(using: parameters, on: number) else {
+            port = 0
+            return false
+        }
+        let mine: Int = queue.sync {
+            generation += 1
+            self.listener = listener
+            return generation
+        }
+        let ready = DispatchSemaphore(value: 0)
+        var up = false
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
-        listener.stateUpdateHandler = { [weak self, weak listener] state in
-            guard case .failed = state, let self else { return }
-            // The port went away under it (sleep, a network change): listen
-            // again at the same one, which the stores still point at.
-            self.queue.asyncAfter(deadline: .now() + 1) {
-                guard self.listener === listener else { return }
+        listener.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                up = true
+                ready.signal()
+            case .failed:
+                ready.signal()
+                guard let self, self.generation == mine else { return }
+                self.listener?.cancel()
                 self.listener = nil
-                DispatchQueue.main.async { _ = self.start() }
+                if up { DispatchQueue.main.async { self.onFailure?() } }
+            default: break
             }
         }
         listener.start(queue: queue)
-        self.listener = listener
-        return true
+        _ = ready.wait(timeout: .now() + 2)
+        let listening = queue.sync { up && self.listener === listener }
+        if !listening {
+            queue.sync {
+                if self.listener === listener { self.listener = nil }
+                generation += 1
+            }
+            listener.cancel()
+            // Another port next time.
+            port = 0
+        }
+        return listening
     }
+
+    /// A port of its own again at the next start.
+    func renew() { port = 0 }
 
     func stop() {
         queue.sync {
+            generation += 1
             listener?.cancel()
             listener = nil
             for pair in waiting { pair.close() }
@@ -796,6 +858,7 @@ final class Relay: @unchecked Sendable {
             guard let self, let pair else { return }
             switch state {
             case .ready:
+                guard !pair.connected else { return }
                 pair.connected = true
                 // Succeeded; the address it was bound to is nobody's business.
                 pair.inbound.send(content: Data([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]), completion: .contentProcessed { [weak self] _ in
@@ -906,6 +969,8 @@ final class Relay: @unchecked Sendable {
     static func isLocal(_ host: String) -> Bool {
         let name = host.lowercased()
         if name == "localhost" || name.hasSuffix(".localhost") || name.hasSuffix(".local") { return true }
+        // A name of one word — router, nas — is the local network's own.
+        if !name.contains("."), !name.contains(":") { return true }
         if let v4 = IPv4Address(name) {
             let b = [UInt8](v4.rawValue)
             return b[0] == 127 || b[0] == 10 || (b[0] == 172 && (16...31).contains(b[1])) || (b[0] == 192 && b[1] == 168)
