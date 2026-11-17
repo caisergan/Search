@@ -21,6 +21,14 @@ import WebKit
 // rather than going around the tunnel. And it counts what goes through: how
 // much, how fast, to which sites. Addresses on this Mac and its local
 // network always go straight out: the server has no way to reach them.
+//
+// Calls are the exception a proxy can't carry: WebRTC — Discord's voice and
+// video, Meet, any call in a page — sends UDP of its own, straight from
+// WebKit, past any proxy. So while the VPN is on, every page's
+// RTCPeerConnection is made relay-only, its relay a TURN server on the VPN
+// server reached through the tunnel itself (Hysteria forwards a loopback UDP
+// port to it). Calls come out where the pages do, and nothing of them goes
+// around the tunnel: with no relay set up, they don't connect at all.
 
 /// The server, as Hysteria's client config has it. Kept in a file of its own
 /// readable only by this user (vpn.json), never in the settings that iCloud
@@ -41,6 +49,31 @@ struct VpnServer: Codable, Equatable {
     /// Brutal's rates in Mbps; both empty leaves Hysteria on BBR.
     var up = ""
     var down = ""
+    /// The TURN relay for calls, as the server sees it: on the server's own
+    /// loopback, reached through the tunnel. Empty: calls are blocked while
+    /// the VPN is on.
+    var turn = "127.0.0.1:3478"
+
+    init() {}
+
+    /// Any field missing from an older vpn.json takes its default, rather
+    /// than the whole server failing to load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let blank = VpnServer()
+        server = try c.decodeIfPresent(String.self, forKey: .server) ?? blank.server
+        auth = try c.decodeIfPresent(String.self, forKey: .auth) ?? blank.auth
+        sni = try c.decodeIfPresent(String.self, forKey: .sni) ?? blank.sni
+        ca = try c.decodeIfPresent(String.self, forKey: .ca) ?? blank.ca
+        pin = try c.decodeIfPresent(String.self, forKey: .pin) ?? blank.pin
+        insecure = try c.decodeIfPresent(Bool.self, forKey: .insecure) ?? blank.insecure
+        obfs = try c.decodeIfPresent(String.self, forKey: .obfs) ?? blank.obfs
+        up = try c.decodeIfPresent(String.self, forKey: .up) ?? blank.up
+        down = try c.decodeIfPresent(String.self, forKey: .down) ?? blank.down
+        turn = try c.decodeIfPresent(String.self, forKey: .turn) ?? blank.turn
+    }
+
+    var relaysCalls: Bool { !turn.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var configured: Bool { !server.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -74,7 +107,7 @@ struct VpnServer: Codable, Equatable {
 
     /// The client config Hysteria is started with: this server, and a SOCKS5
     /// listener on loopback at `port` for the relay to reach.
-    func yaml(port: UInt16) -> String {
+    func yaml(port: UInt16, turnPort: UInt16) -> String {
         func quoted(_ text: String) -> String {
             "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
         }
@@ -99,6 +132,10 @@ struct VpnServer: Codable, Equatable {
             }
         }
         lines += ["socks5:", "  listen: 127.0.0.1:\(port)", "  disableUDP: true"]
+        if relaysCalls, turnPort != 0 {
+            lines += ["udpForwarding:", "  - listen: 127.0.0.1:\(turnPort)",
+                      "    remote: \(quoted(trimmed(turn)))", "    timeout: 300s"]
+        }
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -212,6 +249,14 @@ final class Vpn: ObservableObject {
     private var lastError: String?
     private var stores = NSHashTable<WKWebsiteDataStore>.weakObjects()
     private var relayFailures = 0
+    private var controllers = NSHashTable<WKUserContentController>.weakObjects()
+    private var shimmed = NSHashTable<WKUserContentController>.weakObjects()
+    /// The loopback UDP port pages are given as their TURN relay: the
+    /// relay's, which counts what goes by and passes it to Hysteria's.
+    private(set) var turnPort: UInt16 = 0
+    /// Hysteria's UDP port forwarded to the server's TURN relay, new each
+    /// time Hysteria starts.
+    private var hysteriaTurnPort: UInt16 = 0
 
     private init() {
         // A Hysteria of ours a crash left running holds a port and a
@@ -274,6 +319,7 @@ final class Vpn: ObservableObject {
             relay.stop()
             return
         }
+        for controller in controllers.allObjects { shim(controller) }
         let listening = relay.start()
         point(listening || wanted)
     }
@@ -307,6 +353,8 @@ final class Vpn: ObservableObject {
         // On already — connecting, or given up and waiting for Try again.
         guard configured, !wanted else { return }
         wanted = true
+        openCalls()
+        updateCalls()
         Store.settings.set(true, forKey: "vpn.on")
         // What is open straight out ends here; what comes next waits for
         // the tunnel.
@@ -324,6 +372,8 @@ final class Vpn: ObservableObject {
         endHysteria()
         relay.route(.direct)
         wire()
+        relay.stopCalls()
+        updateCalls()
         meter.end()
         phase = .off
         since = nil
@@ -342,6 +392,10 @@ final class Vpn: ObservableObject {
             try? FileManager.default.removeItem(at: Vpn.folder)
         }
         wire()
+        if wanted {
+            if server.relaysCalls { openCalls() } else { relay.stopCalls() }
+        }
+        updateCalls()
         if server.configured, wanted {
             retries = 0
             since = nil
@@ -396,7 +450,9 @@ final class Vpn: ObservableObject {
         try? files.createDirectory(at: Vpn.folder, withIntermediateDirectories: true)
         try? files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: Vpn.folder.path)
         do {
-            try server.yaml(port: port).write(to: Vpn.config, atomically: true, encoding: .utf8)
+            if server.relaysCalls { openCalls() }
+            hysteriaTurnPort = server.relaysCalls ? Relay.freePort(udp: true) ?? 0 : 0
+            try server.yaml(port: port, turnPort: hysteriaTurnPort).write(to: Vpn.config, atomically: true, encoding: .utf8)
             try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Vpn.config.path)
         } catch {
             phase = .failed("Couldn't write Hysteria's config: \(error.localizedDescription)")
@@ -451,6 +507,9 @@ final class Vpn: ObservableObject {
         let text = line.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression)
         let fields = text.components(separatedBy: "\t")
         let level = fields.count > 1 ? fields[1].trimmingCharacters(in: .whitespaces).uppercased() : ""
+        if text.contains("UDP forwarding listening"), hysteriaTurnPort != 0 {
+            relay.calls(to: hysteriaTurnPort)
+        }
         if text.contains("SOCKS5 server listening") {
             relay.route(.tunnel(port))
             retries = 0
@@ -488,6 +547,7 @@ final class Vpn: ObservableObject {
 
     func endHysteria() {
         stopping = true
+        relay.calls(to: nil)
         guard let process else { return }
         self.process = nil
         process.terminationHandler = nil
@@ -517,6 +577,127 @@ final class Vpn: ObservableObject {
         let text = (message + detail).trimmingCharacters(in: .whitespaces)
         return text.prefix(1).uppercased() + text.dropFirst()
     }
+
+    // MARK: - calls
+
+    /// Every tab's scripts come through here each time they are set up
+    /// afresh (Tab.arm), so that a call in any of its pages goes the way the
+    /// page does.
+    func rearm(_ controller: WKUserContentController) {
+        if !controllers.contains(controller) { controllers.add(controller) }
+        shimmed.remove(controller)
+        shim(controller)
+    }
+
+    /// The calls' relay listening, at the port pages were told if it can,
+    /// at another (and pages told) if not.
+    private func openCalls() {
+        guard server.relaysCalls else { return }
+        if turnPort != 0, relay.startCalls(turnPort) { return }
+        let before = turnPort
+        turnPort = Relay.freePort(udp: true) ?? 0
+        if turnPort == 0 || !relay.startCalls(turnPort) { turnPort = 0 }
+        if turnPort != before { updateCalls() }
+    }
+
+    /// What calls do now: relay-only while the VPN is on — through the
+    /// tunnel's TURN port, or nowhere — and untouched while it's off.
+    var callsRelay: String? {
+        guard wanted, server.relaysCalls, turnPort != 0 else { return nil }
+        return "turn:127.0.0.1:\(turnPort)?transport=udp"
+    }
+
+    private var callsState: String {
+        let url = callsRelay.map { "\"\($0)\"" } ?? "null"
+        return "window[\"\(Vpn.key)\"] && window[\"\(Vpn.key)\"]({ relay: \(wanted), url: \(url) });"
+    }
+
+    private func shim(_ controller: WKUserContentController) {
+        guard configured, !shimmed.contains(controller) else { return }
+        shimmed.add(controller)
+        controller.addUserScript(WKUserScript(source: Vpn.shimSource, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+        controller.addUserScript(WKUserScript(source: callsState, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+    }
+
+    /// The VPN went on or off, or its relay changed: pages loaded from now
+    /// on start with it — a script added after the others runs after them —
+    /// and pages already open are told at once.
+    private func updateCalls() {
+        let state = callsState
+        for controller in controllers.allObjects {
+            if shimmed.contains(controller) {
+                controller.addUserScript(WKUserScript(source: state, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+            } else {
+                shim(controller)
+            }
+        }
+        for page in Web.pages.allObjects {
+            page.evaluateJavaScript(state, in: nil, in: .page) { _ in }
+        }
+    }
+
+    /// Where the page's state setter lives: a name of this run's own.
+    private static let key = "__searchVpn" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+
+    /// RTCPeerConnection, as pages see it, with the VPN's say in its ICE
+    /// servers: while relaying, the page's own are replaced by the tunnel's
+    /// relay alone and only relayed candidates are used — a page's own TURN
+    /// server, or a direct candidate, would carry the call around the
+    /// tunnel. The prototype and its constructor are the real ones, so
+    /// pages that check, or subclass, see what they expect.
+    private static let shimSource = """
+    (() => {
+      const w = window, Native = w.RTCPeerConnection, KEY = "\(key)";
+      if (!Native || Object.prototype.hasOwnProperty.call(w, KEY)) return;
+      let mode = { relay: false, url: null };
+      const sign = (m) => m.relay ? "relay " + m.url : "direct";
+      // Connections made so far, and the way each was made: one made the
+      // other way is closed when the VPN switches — the page (Discord, say)
+      // makes it again, the new way, rather than a call carrying on around
+      // the tunnel.
+      const made = new Set();
+      const fix = (config) => {
+        if (!mode.relay) return config;
+        const c = Object.assign({}, config || {});
+        c.iceServers = mode.url ? [{ urls: [mode.url], username: "search", credential: "search" }] : [];
+        c.iceTransportPolicy = "relay";
+        return c;
+      };
+      function RTCPeerConnection(config, ...rest) {
+        if (!new.target) throw new TypeError("Failed to construct 'RTCPeerConnection': Please use the 'new' operator");
+        const pc = Reflect.construct(Native, [fix(config), ...rest], new.target);
+        made.add({ ref: new WeakRef(pc), way: sign(mode) });
+        return pc;
+      }
+      RTCPeerConnection.prototype = Native.prototype;
+      if (Native.generateCertificate) {
+        Object.defineProperty(RTCPeerConnection, "generateCertificate", {
+          value: function generateCertificate(...a) { return Native.generateCertificate(...a); }, writable: true, configurable: true });
+      }
+      Object.defineProperty(Native.prototype, "constructor", { value: RTCPeerConnection, writable: true, configurable: true });
+      const set = Native.prototype.setConfiguration;
+      if (set) {
+        Object.defineProperty(Native.prototype, "setConfiguration", {
+          value: function setConfiguration(c) { return set.call(this, fix(c)); }, writable: true, configurable: true });
+      }
+      Object.defineProperty(w, "RTCPeerConnection", { value: RTCPeerConnection, writable: true, configurable: true });
+      if (w.webkitRTCPeerConnection) w.webkitRTCPeerConnection = RTCPeerConnection;
+      const update = (m) => {
+        mode = m;
+        const way = sign(m);
+        for (const entry of made) {
+          const pc = entry.ref.deref();
+          if (!pc || pc.connectionState === "closed") { made.delete(entry); continue; }
+          if (entry.way !== way) { made.delete(entry); try { pc.close(); } catch (e) {} }
+        }
+        // Frames of the same site are told too; the page only reaches them.
+        for (let i = 0; i < w.frames.length; i++) {
+          try { const f = w.frames[i]; if (Object.prototype.hasOwnProperty.call(f, KEY)) f[KEY](m); } catch (e) {}
+        }
+      };
+      Object.defineProperty(w, KEY, { value: update });
+    })();
+    """
 
     // MARK: - measuring
 
@@ -948,6 +1129,160 @@ final class Relay: @unchecked Sendable {
         }
     }
 
+    // MARK: calls (UDP)
+
+    // Pages' TURN traffic: datagrams from WebKit, passed one by one to
+    // Hysteria's forwarded port and back, counted under "Calls". With no
+    // Hysteria to pass them to, they are dropped — TURN tries again.
+
+    private var callsListener: NWListener?
+    private var callsGeneration = 0
+    private var callsUpstream: UInt16?
+    private var flows: [ObjectIdentifier: Flow] = [:]
+    private var sweeping = false
+
+    final class Flow {
+        let inbound: NWConnection
+        var outbound: NWConnection?
+        var last = Date()
+        init(inbound: NWConnection) { self.inbound = inbound }
+        func close() { inbound.cancel(); outbound?.cancel(); outbound = nil }
+    }
+
+    /// Listens for calls at this UDP port, if it isn't already, and waits
+    /// until it is. Called on the main thread.
+    func startCalls(_ port: UInt16) -> Bool {
+        if queue.sync(execute: { callsListener != nil }) { return true }
+        guard let number = NWEndpoint.Port(rawValue: port) else { return false }
+        let parameters = NWParameters.udp
+        parameters.requiredInterfaceType = .loopback
+        parameters.acceptLocalOnly = true
+        parameters.allowLocalEndpointReuse = true
+        guard let listener = try? NWListener(using: parameters, on: number) else { return false }
+        let mine: Int = queue.sync {
+            callsGeneration += 1
+            callsListener = listener
+            return callsGeneration
+        }
+        let ready = DispatchSemaphore(value: 0)
+        var up = false
+        listener.newConnectionHandler = { [weak self] connection in self?.acceptFlow(connection) }
+        listener.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                up = true
+                ready.signal()
+            case .failed:
+                ready.signal()
+                guard let self, self.callsGeneration == mine else { return }
+                self.callsListener?.cancel()
+                self.callsListener = nil
+            default: break
+            }
+        }
+        listener.start(queue: queue)
+        _ = ready.wait(timeout: .now() + 2)
+        let listening = queue.sync { up && callsListener === listener }
+        if !listening {
+            queue.sync {
+                if callsListener === listener { callsListener = nil }
+                callsGeneration += 1
+            }
+            listener.cancel()
+        }
+        if listening { queue.async { self.sweep() } }
+        return listening
+    }
+
+    func stopCalls() {
+        queue.sync {
+            callsGeneration += 1
+            callsListener?.cancel()
+            callsListener = nil
+            callsUpstream = nil
+            for flow in flows.values { flow.close() }
+            flows = [:]
+        }
+    }
+
+    /// Where Hysteria forwards calls now; nil while it isn't up.
+    func calls(to port: UInt16?) {
+        queue.async {
+            guard port != self.callsUpstream else { return }
+            self.callsUpstream = port
+            for flow in self.flows.values {
+                flow.outbound?.cancel()
+                flow.outbound = nil
+            }
+        }
+    }
+
+    private func acceptFlow(_ inbound: NWConnection) {
+        let flow = Flow(inbound: inbound)
+        let key = ObjectIdentifier(flow)
+        flows[key] = flow
+        inbound.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed, .cancelled:
+                self?.flows[key]?.close()
+                self?.flows[key] = nil
+            default: break
+            }
+        }
+        inbound.start(queue: queue)
+        receiveCalls(flow)
+    }
+
+    private func receiveCalls(_ flow: Flow) {
+        flow.inbound.receiveMessage { [weak self, weak flow] data, _, _, error in
+            guard let self, let flow, error == nil else { return }
+            if let data, !data.isEmpty, let port = self.callsUpstream {
+                flow.last = Date()
+                self.up &+= UInt64(data.count)
+                self.sites["Calls", default: 0] &+= UInt64(data.count)
+                self.outbound(flow, port).send(content: data, completion: .idempotent)
+            }
+            self.receiveCalls(flow)
+        }
+    }
+
+    private func outbound(_ flow: Flow, _ port: UInt16) -> NWConnection {
+        if let made = flow.outbound { return made }
+        let made = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .udp)
+        flow.outbound = made
+        made.start(queue: queue)
+        func back() {
+            made.receiveMessage { [weak self, weak flow] data, _, _, error in
+                guard let self, let flow, error == nil, flow.outbound === made else { return }
+                if let data, !data.isEmpty {
+                    flow.last = Date()
+                    self.down &+= UInt64(data.count)
+                    self.sites["Calls", default: 0] &+= UInt64(data.count)
+                    flow.inbound.send(content: data, completion: .idempotent)
+                }
+                back()
+            }
+        }
+        back()
+        return made
+    }
+
+    /// Flows quiet for five minutes — a call long over — are let go.
+    private func sweep() {
+        guard !sweeping else { return }
+        sweeping = true
+        queue.asyncAfter(deadline: .now() + 60) { [weak self] in
+            guard let self else { return }
+            self.sweeping = false
+            let stale = Date().addingTimeInterval(-300)
+            for (key, flow) in self.flows where flow.last < stale {
+                flow.close()
+                self.flows[key] = nil
+            }
+            if self.callsListener != nil { self.sweep() }
+        }
+    }
+
     // MARK: helpers
 
     /// SOCKS5's reply codes for why a connection out failed.
@@ -983,16 +1318,26 @@ final class Relay: @unchecked Sendable {
         return false
     }
 
-    /// A free TCP port on loopback, asked of the system by binding port 0.
-    static func freePort() -> UInt16? {
-        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+    /// Whether a loopback port is free to listen on now.
+    static func isFree(_ port: UInt16, udp: Bool = false) -> Bool {
+        bound(port, udp: udp) == port
+    }
+
+    /// A free TCP (or UDP) port on loopback, asked of the system by binding
+    /// port 0.
+    static func freePort(udp: Bool = false) -> UInt16? {
+        bound(0, udp: udp)
+    }
+
+    private static func bound(_ port: UInt16, udp: Bool) -> UInt16? {
+        let socket = Darwin.socket(AF_INET, udp ? SOCK_DGRAM : SOCK_STREAM, 0)
         guard socket >= 0 else { return nil }
         defer { close(socket) }
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
         address.sin_addr.s_addr = inet_addr("127.0.0.1")
-        address.sin_port = 0
+        address.sin_port = port.bigEndian
         var size = socklen_t(MemoryLayout<sockaddr_in>.size)
         let bound = withUnsafeMutablePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {

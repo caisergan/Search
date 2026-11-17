@@ -1895,7 +1895,7 @@ final class Bench {
                 return ["phase": phase, "configured": vpn.configured, "server": vpn.server.host,
                         "proxies": Vpn.proxies.count, "exit": vpn.exit?.ip ?? "", "latency": vpn.latency ?? -1,
                         "down": vpn.meter.down, "up": vpn.meter.up, "connections": vpn.meter.connections,
-                        "month": vpn.meter.month, "late": vpn.late,
+                        "month": vpn.meter.month, "late": vpn.late, "calls": vpn.callsRelay ?? (vpn.wanted ? "blocked" : "untouched"),
                         // Pages whose store isn't pointed where the rest are: should be none.
                         "uncovered": Web.pages.allObjects.filter { $0.configuration.websiteDataStore.proxyConfigurations.count != Vpn.proxies.count }.count,
                         "pages": Web.pages.allObjects.count,

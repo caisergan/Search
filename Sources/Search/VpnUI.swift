@@ -364,9 +364,14 @@ struct VpnPanel: View {
         .padding(.horizontal, 2)
     }
 
+    private var footnote: String {
+        guard vpn.phase != .off else { return "Search only — the Mac stays direct" }
+        return vpn.server.relaysCalls ? "Search only · calls through the tunnel" : "Search only · calls blocked"
+    }
+
     private var footer: some View {
         HStack(spacing: 6) {
-            Text("Search only — the Mac stays direct")
+            Text(footnote)
                 .font(.system(size: 10.5))
                 .foregroundStyle(Palette.muted)
             Spacer()
@@ -627,6 +632,8 @@ struct VpnSettings: View {
                 Rule()
                 field("Obfuscation password", "Salamander — leave empty for none", text: $draft.obfs, secret: true)
                 Rule()
+                field("Call relay", "TURN on the server, for Discord and other calls. Empty: calls are blocked while it's on", text: $draft.turn)
+                Rule()
                 Line("Bandwidth", "Mbps up and down for Brutal, a little under the line's real rate. Empty for BBR") {
                     HStack(spacing: 6) {
                         small("up", text: $draft.up)
@@ -659,7 +666,7 @@ struct VpnSettings: View {
                     }
                 }
                 Rule()
-                Line("How it works", "Search starts its own Hysteria client and sends only its pages through it, by a proxy on loopback. Other apps, and the rest of the Mac, keep their own connection. While it's on, a page that can't reach the tunnel fails rather than going around it") {
+                Line("How it works", "Search starts its own Hysteria client and sends only its pages through it, by a proxy on loopback. Other apps, and the rest of the Mac, keep their own connection. While it's on, a page that can't reach the tunnel fails rather than going around it. Calls (WebRTC) can't use a proxy, so they go relay-only through the server's TURN relay, reached through the tunnel — or, with no relay, don't connect") {
                     Pill("Log") { vpn.openLog() }
                 }
             }

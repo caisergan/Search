@@ -775,6 +775,10 @@ final class Tab: ObservableObject, Identifiable {
         guard let built else { return }
         let controller = built.configuration.userContentController
         controller.removeAllUserScripts()
+        // Calls (WebRTC), which no proxy carries: through the tunnel's relay
+        // while the VPN is on (see Vpn.swift). First, so it is in place
+        // before any of the page's own scripts.
+        Vpn.shared.rearm(controller)
         controller.addUserScript(
             WKUserScript(source: ScrollRelay.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Web.world)
         )
