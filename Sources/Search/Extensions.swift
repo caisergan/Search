@@ -113,6 +113,9 @@ final class Extensions: NSObject, ObservableObject {
         // extension's pages keep what they store where the browser does —
         // and a test run's apart from the real one's.
         views.websiteDataStore = Store.websites
+        // Extensions' pages and workers go where the tabs do, VPN and all.
+        Vpn.shared.cover(configuration.defaultWebsiteDataStore)
+        Vpn.shared.cover(views.websiteDataStore)
         // The same user agent as the web tabs, to the letter. WebKit gives
         // workers the user agent of the last page that loaded and, when it
         // differs, stops the running workers to apply it — and extension
@@ -733,7 +736,7 @@ final class Extensions: NSObject, ObservableObject {
             URLQueryItem(name: "x", value: "id=\(item.id)&v=\(item.version)&uc"),
         ]
         guard let url = parts.url,
-              let (data, _) = try? await URLSession.shared.data(from: url),
+              let (data, _) = try? await Vpn.session.data(from: url),
               let xml = String(data: data, encoding: .utf8),
               // The answer is the <updatecheck> element alone: status="ok"
               // with a version when there is a newer one, "noupdate" when

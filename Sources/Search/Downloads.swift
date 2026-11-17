@@ -412,6 +412,7 @@ final class Downloads: NSObject, ObservableObject {
         if let web = browser?.tabs.lazy.compactMap(\.built).first { return web }
         if let spare { return spare }
         let web = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        Vpn.shared.cover(web.configuration.websiteDataStore)
         spare = web
         return web
     }

@@ -1895,6 +1895,68 @@ final class Bench {
             default: break
             }
 
+        case "vpn":
+            // The VPN: its state and what has gone through it; on and off on
+            // a test run; the panel from its button drawn to a PNG.
+            let vpn = Vpn.shared
+            func state() -> [String: Any] {
+                let phase: String
+                switch vpn.phase {
+                case .off: phase = "off"
+                case .connecting: phase = "connecting"
+                case .reconnecting: phase = "reconnecting"
+                case .on: phase = "on"
+                case .failed(let why): phase = "failed: " + why
+                }
+                return ["phase": phase, "configured": vpn.configured, "server": vpn.server.host,
+                        "proxies": Vpn.proxies.count, "exit": vpn.exit?.ip ?? "", "latency": vpn.latency ?? -1,
+                        "down": vpn.meter.down, "up": vpn.meter.up, "connections": vpn.meter.connections,
+                        "month": vpn.meter.month, "late": vpn.late, "calls": vpn.callsRelay ?? (vpn.wanted ? "blocked" : "untouched"),
+                        // Pages whose store isn't pointed where the rest are: should be none.
+                        "uncovered": Web.pages.allObjects.filter { $0.configuration.websiteDataStore.proxyConfigurations.count != Vpn.proxies.count }.count,
+                        "pages": Web.pages.allObjects.count,
+                        "sites": vpn.meter.sites.map { ["site": $0.site, "bytes": $0.bytes] }]
+            }
+            switch request["what"] as? String ?? "state" {
+            case "on", "off":
+                guard Store.testing else { answer(["error": "vpn on|off only works on a --test run"]); return }
+                request["what"] as? String == "on" ? vpn.turnOn() : vpn.turnOff()
+                answer(state())
+            case "forget", "import":
+                // What Forget this server, and Import client.yaml… then Save, do.
+                guard Store.testing else { answer(["error": "vpn forget|import only works on a --test run"]); return }
+                if request["what"] as? String == "forget" {
+                    vpn.use(VpnServer())
+                } else {
+                    guard let path = request["path"] as? String, let text = try? String(contentsOfFile: path, encoding: .utf8)
+                    else { answer(["error": "vpn import needs a readable client.yaml"]); return }
+                    vpn.use(VpnServer.reading(yaml: text))
+                }
+                answer(state())
+            case "measure":
+                Task { @MainActor in await vpn.measure(); answer(state()) }
+            case "panel":
+                guard let path = request["path"] as? String else { answer(["error": "vpn panel needs a path"]); return }
+                let host = NSHostingView(rootView: VpnPanel(vpn: vpn, meter: vpn.meter).fixedSize())
+                host.frame = NSRect(origin: .zero, size: host.fittingSize)
+                let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+                window.appearance = NSApp.effectiveAppearance
+                window.contentView = host
+                host.layoutSubtreeIfNeeded()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    host.frame = NSRect(origin: .zero, size: host.fittingSize)
+                    guard let picture = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { answer(["error": "nothing drawn"]); return }
+                    host.cacheDisplay(in: host.bounds, to: picture)
+                    do {
+                        try picture.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                        answer(["saved": path])
+                    } catch { answer(["error": error.localizedDescription]) }
+                    window.contentView = nil
+                }
+            default:
+                answer(state())
+            }
+
         case "strip":
             // The row of tabs across the top, drawn off screen at a width,
             // with what the browser has now — for what the row looks like

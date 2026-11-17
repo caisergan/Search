@@ -128,6 +128,9 @@ enum Web {
         config.websiteDataStore = store ?? (shy ? .nonPersistent() : MainActor.assumeIsolated { Spaces.store(for: space ?? Spaces.current) })
         // Its sites' notifications come to Search to be shown (see Permissions.swift).
         MainActor.assumeIsolated { WebNotifications.shared.watch(config.websiteDataStore) }
+        // Through the VPN while it is on (see Vpn.swift) — every store a
+        // page is given, private ones and Claude's included.
+        MainActor.assumeIsolated { Vpn.shared.cover(config.websiteDataStore) }
         config.processPool = Web.pool
         // Chrome extensions see every page but a private one, unless Settings
         // › Extensions says they may. The controller has to be there when the
@@ -772,6 +775,10 @@ final class Tab: ObservableObject, Identifiable {
         guard let built else { return }
         let controller = built.configuration.userContentController
         controller.removeAllUserScripts()
+        // Calls (WebRTC), which no proxy carries: through the tunnel's relay
+        // while the VPN is on (see Vpn.swift). First, so it is in place
+        // before any of the page's own scripts.
+        Vpn.shared.rearm(controller)
         controller.addUserScript(
             WKUserScript(source: ScrollRelay.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Web.world)
         )

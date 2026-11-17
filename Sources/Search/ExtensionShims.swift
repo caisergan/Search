@@ -3306,6 +3306,7 @@ enum ExtensionShims {
             guard let path = (first as? [String: Any])?["url"] as? String,
                   let configuration = context.webViewConfiguration
             else { throw Unsupported(what: "No page for the offscreen document") }
+            Vpn.shared.cover(configuration.websiteDataStore)
             let page = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
             page.load(URLRequest(url: context.baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))))
             offscreen[id] = page

@@ -141,6 +141,9 @@ final class Favicons {
         let session = URLSession(configuration: {
             let config = URLSessionConfiguration.ephemeral
             config.timeoutIntervalForRequest = 8
+            // A site's icon is fetched the way its pages are: through the
+            // VPN while it is on.
+            config.proxyConfigurations = Vpn.proxies
             return config
         }())
         for candidate in candidates {

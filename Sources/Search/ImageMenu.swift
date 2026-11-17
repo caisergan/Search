@@ -110,7 +110,7 @@ extension Browser {
     /// promise doesn't always give it back on a paste.
     func copyImage(at url: URL) {
         Task {
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
+            guard let (data, _) = try? await Vpn.session.data(from: url),
                   let image = NSImage(data: data)
             else {
                 announce("Couldn't copy that image")

@@ -41,6 +41,7 @@ final class ExtensionPopup: NSObject, WKUIDelegate, WKNavigationDelegate, NSPopo
     func show(_ url: URL, for context: WKWebExtensionContext, from anchor: NSView?) {
         close()
         guard let configuration = context.webViewConfiguration else { return }
+        Vpn.shared.cover(configuration.websiteDataStore)
         // Sized the way Chrome sizes a popup (see preferred), unseen, while
         // the popover already stands at the size this popup had last time;
         // then shown. It has to be in the window meanwhile: WebKit suspends
