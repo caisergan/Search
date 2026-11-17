@@ -1120,11 +1120,18 @@ final class Bench {
             // in the window.
             let middle = web.convert(CGPoint(x: web.bounds.midX, y: web.bounds.midY), to: nil)
             let ground = NSScreen.screens.first?.frame.height ?? 0
-            func send(_ phase: Int64, _ delta: Double) {
-                guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: Int32(delta), wheel3: 0) else { return }
+            // DY: a little up or down along the way, as a hand never swipes
+            // dead level. GLIDE: the momentum events a flick sends after the
+            // fingers lift — they reach whatever page is there by then.
+            let drift = request["dy"] as? Double ?? 0
+            let glide = request["glide"] as? Int ?? 0
+            func send(_ phase: Int64, _ delta: Double, _ vertical: Double = 0, momentum: Int64 = 0) {
+                guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(vertical), wheel2: Int32(delta), wheel3: 0) else { return }
                 cg.location = CGPoint(x: middle.x, y: ground - middle.y)
                 cg.setIntegerValueField(CGEventField(rawValue: 88)!, value: 1) // kCGScrollWheelEventIsContinuous
                 cg.setIntegerValueField(CGEventField(rawValue: 99)!, value: phase) // kCGScrollWheelEventScrollPhase
+                cg.setIntegerValueField(CGEventField(rawValue: 123)!, value: momentum) // kCGScrollWheelEventMomentumPhase
+                cg.setIntegerValueField(CGEventField(rawValue: 96)!, value: Int64(vertical)) // kCGScrollWheelEventPointDeltaAxis1
                 cg.setIntegerValueField(CGEventField(rawValue: 97)!, value: Int64(delta)) // kCGScrollWheelEventPointDeltaAxis2
                 if let event = NSEvent(cgEvent: cg) { web.scrollWheel(with: event) }
             }
@@ -1137,11 +1144,20 @@ final class Bench {
                 send(1, 0)
                 for n in 1...steps {
                     DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000 * Double(n) / Double(steps)) {
-                        send(2, dx / Double(steps))
-                        if n == steps { send(4, 0) }
+                        send(2, dx / Double(steps), drift / Double(steps))
+                        if n == steps {
+                            send(4, 0)
+                            for g in 0..<glide {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.016 * Double(g + 1)) {
+                                    let fade = pow(0.92, Double(g + 1)), last = g == glide - 1
+                                    send(0, last ? 0 : dx / Double(steps) * fade, last ? 0 : drift / Double(steps) * fade,
+                                         momentum: g == 0 ? 1 : (last ? 3 : 2))
+                                }
+                            }
+                        }
                     }
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000 + 1.2) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000 + 0.016 * Double(glide) + 1.2) {
                     answer(["before": before, "after": tab.address?.absoluteString ?? "", "zoom": Double(web.magnification)])
                 }
             }

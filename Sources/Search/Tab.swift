@@ -1781,6 +1781,16 @@ final class PageView: WKWebView {
     private var back = true
     /// The page's word on whether this swipe is its own. Nil until it says.
     private var free: Bool?
+    /// The swipe is the browser's: the page has said nothing of it scrolls
+    /// sideways. From then on the gesture is kept from the page — its moves,
+    /// and the glide after the fingers lift — as Safari keeps its own swipe.
+    /// Handed on, the swipe rubber-banded the page sideways and scrolled it
+    /// by whatever up or down the hand added; going back mid-gesture, the
+    /// glide landed on the page coming back while it was restoring its own
+    /// scroll. The page then sat drawn at one height while WebKit took the
+    /// pointer to be over another: hover, and clicks, rows away from the
+    /// cursor.
+    private var holding = false
     private var asked: Date?
     /// Already went somewhere, or was refused: nothing more this gesture.
     private var spent = false
@@ -1886,9 +1896,13 @@ final class PageView: WKWebView {
 
     override func scrollWheel(with event: NSEvent) {
         onTouch?()
-        // The page gets every event first and scrolls as it always did. The
-        // swipe is only read, never taken.
-        super.scrollWheel(with: event)
+        if event.phase == .mayBegin || event.phase == .began { holding = false }
+        // The page gets every event and scrolls as it always did — until the
+        // swipe turns out to be the browser's (see `holding`). Its end still
+        // goes through, so WebKit lets go of the few points it had already
+        // drawn the page aside before the page answered.
+        let withheld = holding && (event.momentumPhase != [] || event.phase == .changed)
+        if !withheld { super.scrollWheel(with: event) }
         // Only a live trackpad gesture — not its glide afterwards, and not a
         // mouse wheel, which has no beginning or end to speak of.
         guard event.momentumPhase == [] else { return }
@@ -1970,6 +1984,7 @@ final class PageView: WKWebView {
         }
         guard free == nil else { return }
         free = true
+        holding = true
         tell()
     }
 
@@ -1985,6 +2000,7 @@ final class PageView: WKWebView {
             // still has to be leavable by hand. Pinched in, it can't say
             // whether the view has room to pan, so the swipe stays a pan.
             free = true
+            holding = true
         }
         guard free == true else { return }
 
