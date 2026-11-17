@@ -630,9 +630,16 @@ enum ExtensionShims {
               try { port.postMessage(this.#hello); } catch (e) {}
               setTimeout(again, 100 * Math.min(tries, 5));
             };
+            // Only the browser's answer to the opening ends the asking.
+            // Its first word, said as the port opened, proves nothing: when
+            // that one arrives and the opening itself was dropped, a socket
+            // that stopped asking there waited for ever (an extension that
+            // opens one as its worker starts never connected). What the
+            // worker posted itself can come back on a young port too.
             port.onMessage.addListener((m) => {
-              if (!ready) ready = true;
-              if (m && m.ready === true) return;
+              const answer = m && typeof m === "object";
+              if (answer && (m.heard === true || "opened" in m || "failed" in m || "closed" in m)) ready = true;
+              if (!answer || m.ready === true || "open" in m) return;
               this.#take(m);
             });
             port.onDisconnect.addListener(() => {
