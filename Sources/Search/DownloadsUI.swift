@@ -421,12 +421,16 @@ struct DownloadsAndExtensions: View {
     var edge: Edge = .bottom
     var always = false
     var room = Int.max
+    /// The VPN's shield goes first, once there is a server to go through.
+    @ObservedObject private var vpn = Vpn.shared
 
     var body: some View {
         HStack(spacing: 2) {
+            if vpn.configured { VpnButton(edge: edge).transition(.opacity.combined(with: .scale(scale: 0.8))) }
             DownloadsButton(edge: edge)
-            ExtensionSlot(edge: edge, always: always, room: room == .max ? room : max(0, room - 1))
+            ExtensionSlot(edge: edge, always: always, room: room == .max ? room : max(0, room - (vpn.configured ? 2 : 1)))
         }
+        .animation(Motion.settle, value: vpn.configured)
     }
 }
 
