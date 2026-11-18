@@ -83,14 +83,26 @@ enum ExtensionNative {
         stopOrphans()
         let pipe = HostPipe(program: program, origin: "chrome-extension://\(extensionID)/")
         try pipe.start()
-        pipe.onMessage = { message in
-            DispatchQueue.main.async { port.sendMessage(message, completionHandler: nil) }
-        }
-        pipe.onExit = {
-            DispatchQueue.main.async { if !port.isDisconnected { port.disconnect() } }
+        // The port is held weakly by everything it holds itself. Its own
+        // handlers holding it made a cycle, port to handler to port and
+        // pipe, that WebKit never broke: each host that ever ran kept its
+        // two pipe ends open, an extension that retries (Bitwarden, its app
+        // not running) left thousands, and once Search ran out of files the
+        // VPN's relay, which every page goes through, could take no more.
+        pipe.onMessage = { [weak port] message in
+            DispatchQueue.main.async { port?.sendMessage(message, completionHandler: nil) }
         }
         var beating: Timer?
-        port.messageHandler = { message, _ in
+        pipe.onExit = { [weak port] in
+            DispatchQueue.main.async {
+                beating?.invalidate()
+                guard let port else { return }
+                port.messageHandler = nil
+                port.disconnectHandler = nil
+                if !port.isDisconnected { port.disconnect() }
+            }
+        }
+        port.messageHandler = { [weak port] message, _ in
             guard let message else { return }
             // A worker's shim asking whether the port has arrived (see the
             // shim, after its WebSocket): answered here, never passed on.
@@ -98,7 +110,7 @@ enum ExtensionNative {
                 // The shim's answer to "alive" (below) is only the worker
                 // keeping itself: nothing to say back.
                 guard (word as? String) == "here?" else { return }
-                port.sendMessage(["__searchNative": "here"], completionHandler: nil)
+                port?.sendMessage(["__searchNative": "here"], completionHandler: nil)
                 // Asked, it is a worker's port, and WebKit unloads a worker
                 // that hasn't posted on a port for two minutes: iCloud
                 // Passwords then forgets it was paired and asks for a code
@@ -107,8 +119,8 @@ enum ExtensionNative {
                 // shim, has the worker answer on it, which is what WebKit
                 // counts.
                 if beating == nil {
-                    beating = Timer.scheduledTimer(withTimeInterval: 25, repeats: true) { timer in
-                        guard !port.isDisconnected else { timer.invalidate(); return }
+                    beating = Timer.scheduledTimer(withTimeInterval: 25, repeats: true) { [weak port] timer in
+                        guard let port, !port.isDisconnected else { timer.invalidate(); return }
                         port.sendMessage(["__searchNative": "alive"], completionHandler: nil)
                     }
                 }
@@ -154,6 +166,10 @@ final class HostPipe: @unchecked Sendable {
     private let output = Pipe()
     private var buffer = Data()
     private let lock = NSLock()
+    /// Writes and the closing of stdin, apart from `lock`: a write can wait
+    /// on a host that is busy writing back, which `lock` must not.
+    private let writing = NSLock()
+    private var inputClosed = false
     private var waiters: [CheckedContinuation<Any?, Error>] = []
     // The host's end is heard twice — its stdout closing and the process
     // ending, each on a queue of its own — and often at the same moment, as
@@ -193,6 +209,7 @@ final class HostPipe: @unchecked Sendable {
             // worth, for as long as the browser does.
             if chunk.isEmpty {
                 handle.readabilityHandler = nil
+                try? handle.close()
                 self?.finish()
                 return
             }
@@ -202,9 +219,21 @@ final class HostPipe: @unchecked Sendable {
         try process.run()
     }
 
+    /// Ends the host. Its stdout is closed where it is read, at its end —
+    /// closing it here could pull it from under a read in progress — and
+    /// its stdin once it has ended.
     func stop() {
-        output.fileHandleForReading.readabilityHandler = nil
-        if process.isRunning { process.terminate() }
+        if process.isRunning { process.terminate() } else { closeInput() }
+    }
+
+    /// The host's stdin, closed once it has ended: whoever still holds this
+    /// pipe shouldn't hold its files too.
+    private func closeInput() {
+        writing.withLock {
+            guard !inputClosed else { return }
+            inputClosed = true
+            try? input.fileHandleForWriting.close()
+        }
     }
 
     func write(_ message: Any) throws {
@@ -213,12 +242,22 @@ final class HostPipe: @unchecked Sendable {
         var length = UInt32(json.count).littleEndian
         var frame = Data(bytes: &length, count: 4)
         frame.append(json)
-        try input.fileHandleForWriting.write(contentsOf: frame)
+        try writing.withLock {
+            guard !inputClosed else { throw ExtensionNative.Refused(why: "Native host has exited.") }
+            try input.fileHandleForWriting.write(contentsOf: frame)
+        }
     }
 
     func readOne() async throws -> Any? {
         try await withCheckedThrowingContinuation { continuation in
             lock.lock()
+            // Ended before it was asked — a host that quits at once — or
+            // this would wait for ever, holding the pipe.
+            guard !finished else {
+                lock.unlock()
+                continuation.resume(throwing: ExtensionNative.Refused(why: "Native host has exited."))
+                return
+            }
             waiters.append(continuation)
             lock.unlock()
         }
@@ -257,6 +296,7 @@ final class HostPipe: @unchecked Sendable {
         let exit = exitHandler
         exitHandler = nil
         lock.unlock()
+        closeInput()
         pending.forEach { $0.resume(throwing: ExtensionNative.Refused(why: "Native host has exited.")) }
         exit?()
     }
