@@ -542,6 +542,15 @@ final class Preferences: ObservableObject {
     @Published var newWindowFront: Bool {
         didSet { store.set(newWindowFront, forKey: "links.window.front") }
     }
+    /// A link clicked with three fingers on the trackpad opens in a small
+    /// window of its own (see Little.swift). On unless turned off — for
+    /// anyone whose three fingers drag (Accessibility › Pointer Control).
+    @Published var threeFingerWindow: Bool {
+        didSet {
+            store.set(threeFingerWindow, forKey: "links.three.window")
+            MiddleRelay.threeFingers = threeFingerWindow
+        }
+    }
     /// A video playing on a video site comes out into the floating window
     /// when you go to another tab (Browser.leaving). On, as it always was;
     /// the switch is for turning it off.
@@ -645,6 +654,9 @@ final class Preferences: ObservableObject {
         glanceTrigger = store.string(forKey: "glance.trigger").flatMap(GlanceTrigger.init(rawValue:)) ?? .standard
         commandClickFront = store.bool(forKey: "links.command.front")
         newWindowFront = store.object(forKey: "links.window.front") as? Bool ?? true
+        let three = store.object(forKey: "links.three.window") as? Bool ?? true
+        threeFingerWindow = three
+        MiddleRelay.threeFingers = three
         let flicks = store.bool(forKey: "float.flicks")
         floatFlicks = flicks
         Float.flicks = flicks

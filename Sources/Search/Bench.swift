@@ -855,6 +855,41 @@ final class Bench {
                 }
                 return
             }
+            if request["three"] as? Bool == true {
+                // A click with three fingers on the trackpad, at X Y of the
+                // page on screen (from its top left: a hidden probe's page is
+                // in a window of the backstage's, not under the point in
+                // this one). Touches can't be made up, so the page's count of
+                // them is set by hand and the click handed to the page (see
+                // PageView.mouseDown). The small window it opens stays off
+                // screen; `little` lists it.
+                guard Store.testing else { answer(["error": "hit … three only works on a --test run"]); return }
+                guard let page = browser.active?.built, let home = page.window else { answer(["error": "no page on screen"]); return }
+                let at = page.convert(NSPoint(x: x, y: page.isFlipped ? y : page.bounds.height - y), to: nil)
+                let before = LittleWindow.all.count
+                LittleWindow.offscreen = true
+                page.fingers = request["fingers"] as? Int ?? 3
+                func event(_ type: NSEvent.EventType) -> NSEvent? {
+                    NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                       windowNumber: home.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                                       pressure: type == .leftMouseUp ? 0 : 1)
+                }
+                if let down = event(.leftMouseDown) { page.mouseDown(with: down) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    if let up = event(.leftMouseUp) { page.mouseUp(with: up) }
+                    page.fingers = 0
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        LittleWindow.offscreen = false
+                        answer([
+                            "littlesBefore": before,
+                            "littles": LittleWindow.all.map { $0.tab.address?.absoluteString ?? "" },
+                            "private": LittleWindow.all.last?.tab.shy ?? false,
+                            "page": browser.active?.address?.absoluteString ?? "",
+                        ])
+                    }
+                }
+                return
+            }
             if request["double"] as? Bool == true {
                 // A double-click there, handed to the view under it — through
                 // the window it would never arrive, the probe being in the

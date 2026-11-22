@@ -459,6 +459,10 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.newWindowFront)
             }
             Rule()
+            Line("Open a link in a new window with three fingers", "Click a link with three fingers on the trackpad and it opens in a small window of its own. Open in Search there moves it into a tab here.") {
+                Switch(on: $prefs.threeFingerWindow)
+            }
+            Rule()
             Line("Glance", "Hold \(prefs.glanceTrigger.key) and click a link to look at it over the page instead of opening a tab. esc or a click beside it puts it away; the arrow keeps it as a tab.") {
                 Switch(on: $prefs.glances)
             }

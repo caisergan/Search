@@ -24,8 +24,9 @@ final class LittleWindow: NSObject, NSWindowDelegate {
     /// A link from another app, in a small window in front of it.
     /// `front: false` makes it without showing it — for the bench, which
     /// must never put a window on screen.
-    static func show(_ url: URL, for browser: Browser, front: Bool = true) {
-        let tab = Tab()
+    /// `shy`: a private tab, for a link from a private one.
+    static func show(_ url: URL, for browser: Browser, shy: Bool = false, front: Bool = true) {
+        let tab = Tab(shy: shy)
         browser.prepare(tab)
         tab.go(to: url)
         let little = LittleWindow(tab: tab, browser: browser)
@@ -35,6 +36,10 @@ final class LittleWindow: NSObject, NSWindowDelegate {
         little.window.makeKeyAndOrderFront(nil)
         if #available(macOS 14, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
     }
+
+    /// Made without being shown, for the bench, which must never put a
+    /// window on screen (its three-finger click in `hit`).
+    static var offscreen = false
 
     /// The small windows open now, newest last — for the bench.
     static var all: [LittleWindow] { open }
