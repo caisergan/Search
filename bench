@@ -74,9 +74,10 @@
                                        list drawn to a PNG), popover on|off, hand PATH (a file handed
                                        over as the PDF viewer's download button hands it), pdf-save (that
                                        button itself, pressed, on the PDF in the tab on screen)
-    ./bench hit X Y [double|middle]    what a press at X Y (points from the window's top left) lands on,
+    ./bench hit X Y [double|middle|three]  what a press at X Y (points from the window's top left) lands on,
                                        and whether a drag from there would move the window;
                                        double: test run, a double-click there (start the probe hidden)
+                                       three: test run, a three-finger click at X Y of the page on screen (a link → a small window)
     ./bench place ID INDEX             put a tab at another place in the row
     ./bench pin ID essential|line|none|close   a square, a pinned line or neither; close puts it down
     ./bench pin clear                  Clear: every tab that is neither goes
@@ -340,7 +341,7 @@ def main(argv):
         elif args and args[0] == "move" and len(args) == 2: request["action"], request["index"] = "move", int(args[1])
         elif args: sys.exit("usage: bench space [new NAME | go N | delete | swipe DX | hold DX | release | move N]")
     elif verb == "hit":
-        if len(args) not in (2, 3) or (len(args) == 3 and args[2] not in ("double", "middle")): sys.exit("usage: bench hit X Y [double|middle]")
+        if len(args) not in (2, 3) or (len(args) == 3 and args[2] not in ("double", "middle", "three")): sys.exit("usage: bench hit X Y [double|middle|three]")
         request["x"], request["y"] = float(args[0]), float(args[1])
         if len(args) == 3: request[args[2]] = True
     elif verb == "place":

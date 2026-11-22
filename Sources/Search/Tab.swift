@@ -439,6 +439,9 @@ final class Tab: ObservableObject, Identifiable {
     /// The middle button was let go over a link. The browser opens it in a
     /// tab of its own beside this one, without leaving the page you are on.
     var onMiddleClick: ((Tab, URL) -> Void)?
+    /// A link clicked with three fingers on the trackpad. The browser opens
+    /// it in a small window of its own (see Little.swift).
+    var onThreeFingerClick: ((Tab, URL) -> Void)?
     /// Sent where this tab's view can't go: from an extension's page to the
     /// web or another extension, or from the web to an extension's page.
     /// WebKit keeps each kind of view to its own pages, so the tab has to be
@@ -641,6 +644,10 @@ final class Tab: ObservableObject, Identifiable {
         // the window with a picture of the last one behind it; ours is in
         // PageView, and it moves nothing but a disc.
         web.allowsBackForwardNavigationGestures = false
+        // The fingers on the trackpad, counted for a three-finger click on a
+        // link (see PageView.mouseDown). Touches come as well as the scrolls
+        // and swipes, not instead of them.
+        web.allowedTouchTypes = [.indirect]
         Swipe.calm(web)
         web.onPull = { [weak self] pull in self?.pull = pull }
         web.onSwipeClose = { [weak self] in
@@ -1545,8 +1552,17 @@ final class AudioWatch: NSObject {
 /// click a page has called `preventDefault` on is a click it has dealt with,
 /// which is why this listens as the event comes back up rather than on the
 /// way down, where nothing has answered yet.
+///
+/// A click with three fingers on the trackpad is told the same way, and it is
+/// the other way round on both counts that matter: a left click like any
+/// other as far as the page knows, it is taken on the way down, before the
+/// page can follow the link itself, and the link opens in a small window of
+/// its own (see Little.swift) instead of the tab it was in.
 final class MiddleRelay: NSObject, WKScriptMessageHandler {
     static let name = "officeMiddle"
+    /// Whether a three-finger click on a link opens it in a window of its
+    /// own. Set from Settings.
+    @MainActor static var threeFingers = true
 
     weak var tab: Tab?
 
@@ -1554,8 +1570,7 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
     (function () {
       if (window.__officeMiddle) return;
       window.__officeMiddle = true;
-      document.addEventListener('auxclick', function (e) {
-        if (e.button !== 1 || !e.isTrusted || e.defaultPrevented) return;
+      function linkOf(e) {
         // The path, not the parents: a link inside an open shadow root is
         // on it too. An <area> of an image map is a link, and so is an SVG
         // <a>, whose href is an object that holds the address as written.
@@ -1569,12 +1584,37 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
             try { href = href.baseVal ? new URL(href.baseVal, el.baseURI).href : ''; } catch (_) { href = ''; }
           }
           if (!href) continue;
-          window.webkit.messageHandlers.officeMiddle.postMessage({ href: href });
-          return;
+          return href;
         }
+        return '';
+      }
+      document.addEventListener('auxclick', function (e) {
+        if (e.button !== 1 || !e.isTrusted || e.defaultPrevented) return;
+        var href = linkOf(e);
+        if (href) window.webkit.messageHandlers.officeMiddle.postMessage({ href: href });
       });
+      // A click with three fingers on the trackpad. The page can't tell one
+      // from any other click, so PageView says so as the click goes down
+      // (see `arm`), and the click is the one that comes up after it. On the
+      // way down, on the window: first, before a page's own handler can send
+      // the tab there. Anywhere but on a link it is an ordinary click.
+      window.addEventListener('click', function (e) {
+        var armed = window.__officeThree || 0;
+        if (!armed) return;
+        window.__officeThree = 0;
+        if (Date.now() - armed > 2000 || e.button !== 0 || !e.isTrusted) return;
+        var href = linkOf(e);
+        if (!href) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        window.webkit.messageHandlers.officeMiddle.postMessage({ href: href, window: true });
+      }, true);
     })();
     """
+
+    /// Run in Search's world as a three-finger click goes down: the click
+    /// that follows is that one (see the listener above).
+    static let arm = "window.__officeThree = Date.now(); void 0;"
 
     func userContentController(
         _ controller: WKUserContentController,
@@ -1587,9 +1627,10 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https"
         else { return }
+        let window = body["window"] as? Bool == true
         MainActor.assumeIsolated { [weak self] in
             guard let self, let tab else { return }
-            tab.onMiddleClick?(tab, url)
+            if window { tab.onThreeFingerClick?(tab, url) } else { tab.onMiddleClick?(tab, url) }
         }
     }
 }
@@ -1686,7 +1727,42 @@ final class PageView: WKWebView {
 
     override func mouseDown(with event: NSEvent) {
         onTouch?()
+        // Three fingers on the trackpad as it clicks: the page is told before
+        // the click reaches it, and a link under them opens in a window of
+        // its own (see MiddleRelay). The click itself goes on as any other.
+        if fingers == 3, event.clickCount == 1, MiddleRelay.threeFingers {
+            evaluateJavaScript(MiddleRelay.arm, in: nil, in: Web.world)
+        }
         super.mouseDown(with: event)
+    }
+
+    /// Fingers on the trackpad over this page, as it last said. Only the
+    /// trackpad reports them, and only once asked to (see Tab.build); a
+    /// thumb resting at its edge isn't counted.
+    var fingers = 0
+
+    private func count(_ event: NSEvent) {
+        fingers = event.touches(matching: .touching, in: self).count
+    }
+
+    override func touchesBegan(with event: NSEvent) {
+        count(event)
+        super.touchesBegan(with: event)
+    }
+
+    override func touchesMoved(with event: NSEvent) {
+        count(event)
+        super.touchesMoved(with: event)
+    }
+
+    override func touchesEnded(with event: NSEvent) {
+        count(event)
+        super.touchesEnded(with: event)
+    }
+
+    override func touchesCancelled(with event: NSEvent) {
+        fingers = 0
+        super.touchesCancelled(with: event)
     }
 
     /// The side buttons a mouse has for back and forward — button 3 and 4.

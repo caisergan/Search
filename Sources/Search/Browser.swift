@@ -2491,6 +2491,12 @@ final class Browser: NSObject, ObservableObject {
         // it does in every other browser (see MiddleRelay).
         // From a private tab, the new one is private too, as for ⌘-click.
         tab.onMiddleClick = { [weak self] tab, url in self?.openBehind(url, from: tab) }
+        // Three fingers on a link: a small window of its own, in front (see
+        // Little.swift). From a private tab, the window's tab is private too.
+        tab.onThreeFingerClick = { [weak self] tab, url in
+            guard let self else { return }
+            LittleWindow.show(url, for: self, shy: tab.shy, front: !LittleWindow.offscreen)
+        }
         tab.onCross = { [weak self] tab, url in self?.replace(tab, going: url) }
         // A page reached without a load is kept like one reached with it, or
         // the video you went on to from another is nowhere in the history.
